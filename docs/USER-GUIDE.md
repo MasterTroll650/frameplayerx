@@ -100,6 +100,39 @@ MPEG-4, MPEG-2, ProRes. Audio: AAC, AC-3/E-AC-3, Opus, Vorbis, FLAC, MP3,
 DTS, TrueHD, PCM, and spatial (ambisonic) audio that follows your head.
 Subtitles: SRT, ASS/SSA, WebVTT, and embedded text or picture subtitles.
 
+### Videos that stutter: 10-bit HEVC and AV1
+
+The Frame's hardware decoder plays 8-bit H.264 and HEVC (H.265), up to 8K.
+10-bit HEVC and AV1 have no hardware path on the Frame, so they decode on
+the CPU, which can't keep up with VR resolutions: they stutter or stop to
+buffer, and the control bar says so ("No hardware decoding for 10-bit
+HEVC"). Convert them to 8-bit HEVC once on a PC and they play smoothly.
+
+To check a file: `ffprobe -v error -select_streams v:0 -show_entries
+stream=codec_name,profile,pix_fmt video.mp4` (`Main 10` / `yuv420p10le`
+is 10-bit).
+
+With an NVIDIA graphics card (fast):
+
+```
+ffmpeg -hwaccel cuda -i video.mp4 -map 0:v:0 -map 0:a? -c:v hevc_nvenc -preset p5 -profile:v main -pix_fmt yuv420p -rc vbr -cq 20 -b:v 0 -tag:v hvc1 -c:a copy -movflags +faststart video_8bit.mp4
+```
+
+Any PC (slower; `-crf` lower is better quality and bigger):
+
+```
+ffmpeg -i video.mp4 -map 0:v:0 -map 0:a? -c:v libx265 -preset fast -crf 20 -profile:v main -pix_fmt yuv420p -tag:v hvc1 -c:a copy -movflags +faststart video_8bit.mp4
+```
+
+Or in HandBrake: the **H.265** encoder for your graphics card (NVEnc, AMD
+VCE or Intel QSV, not one marked 10-bit), Constant Quality about 20,
+framerate Same as source, audio Passthru, and **Dimensions › Cropping:
+None** (automatic cropping cuts into side-by-side VR pictures).
+
+Keep the format tags in the name (`_180_LR` and so on); conversions drop
+the VR metadata, so a file without tags may need its format set once
+under ⚙ › Format.
+
 ## Controls
 
 Each button does one thing: the right hand runs playback, the left hand the
@@ -116,7 +149,7 @@ picture. Play/pause and seeking are under either thumb.
 | Y / D-pad up | Next video | Show or hide the controls |
 | Menu / View | Library | Recenter |
 | Bumper | Forward 1 minute | Back 1 minute |
-| Grip + thumbstick | (nothing) | Left / right turns the picture, up / down zooms in / out |
+| Grip + thumbstick | Up / down raises or lowers you | Left / right turns the picture, up / down zooms in / out |
 | Hold grip + trigger, move | Drag the picture (the dome follows your hand) | The same |
 | Trigger | Click; on empty space, show or hide the controls | The same |
 
@@ -126,8 +159,9 @@ bar (for example 180° SBS) opens the adjust panel's Format tab.
 
 Every button and thumbstick direction above can be changed in Settings ›
 Controller (tap a row, pick an action; Reset to defaults puts this layout
-back). The trigger, grip + trigger drags, both grips and menu paging are
-fixed.
+back). For example, to zoom with the right thumbstick, set the right controller's
+thumbstick **↑↓ Up / down** (or **Grip + ↑↓**) to Zoom. The trigger,
+grip + trigger drags, both grips and menu paging are fixed.
 
 Drags, turns, tilts and zoom count as adjustments: save them for that video
 under ⚙, or press the left thumbstick to undo them.
