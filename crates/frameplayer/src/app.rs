@@ -429,7 +429,7 @@ impl App {
         });
     }
 
-    fn browse(&mut self, source: String, location: Option<String>) {
+    pub fn browse(&mut self, source: String, location: Option<String>) {
         let Some(src) = self.services.opener.source(&source) else {
             self.ui.toast("That source is not available");
             return;
@@ -447,7 +447,6 @@ impl App {
         let lib = self.services.library.clone();
         self.jobs.spawn("list", move || {
             let result = src.list(location.as_deref()).map(|mut e| {
-                fp_sources::sort_entries(&mut e);
                 // Thumbnails the library already made for these videos.
                 for entry in e.iter_mut().filter(|e| {
                     e.thumbnail_url.is_none() && e.kind == fp_core::source::EntryKind::Video
@@ -639,7 +638,8 @@ impl App {
                     {
                         b.loading = false;
                         match result {
-                            Ok(e) => {
+                            Ok(mut e) => {
+                                fp_sources::sort_entries_by(&mut e, self.settings.browse_sort);
                                 b.entries = e;
                                 b.error = None;
                             }
@@ -1395,6 +1395,14 @@ impl App {
     }
 
     fn open_request(&mut self, req: OpenRequest) {
+        // Close the current video first: it holds a hardware decoder session,
+        // and with Steam holding others the new video could not get one, fell
+        // back to software and stuttered ("Hardware decoder busy").
+        if let Some(p) = self.playback.take() {
+            p.close(&self.services.library);
+            self.services.haptics.clear();
+            self.ui.invalidate();
+        }
         self.open_seq += 1;
         let lib = self.services.library.clone();
         let seq = self.open_seq;
@@ -1574,9 +1582,10 @@ impl App {
             let mut events = Vec::new();
             let mut close = false;
             let shift = &mut self.ui.keyboard_shift;
+            let symbols = &mut self.ui.keyboard_symbols;
             if self.panels[KEYBOARD].needs_paint() {
                 let _ = self.panels[KEYBOARD].paint(renderer, input.time, |ctx| {
-                    let (e, c) = ui::keyboard::keyboard(ctx, shift);
+                    let (e, c) = ui::keyboard::keyboard(ctx, shift, symbols);
                     events = e;
                     close = c;
                 });
