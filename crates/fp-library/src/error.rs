@@ -48,6 +48,10 @@ pub enum Error {
     /// The background worker thread could not be started.
     #[error("could not start worker thread: {0}")]
     Spawn(#[source] std::io::Error),
+    /// The prober gave up on a video for now (it is busy with something
+    /// else, or the app is quitting); the video stays pending.
+    #[error("cancelled")]
+    Cancelled,
 }
 
 impl Error {

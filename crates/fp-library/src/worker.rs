@@ -60,7 +60,9 @@ impl ThumbnailCrop {
 }
 
 /// Reads metadata and frames from media. Implemented by the app on top of
-/// FFmpeg; the library only calls it from the worker thread.
+/// FFmpeg; the library only calls it from the worker thread. Either call
+/// may return [`Error::Cancelled`] to stop the pass and leave the video
+/// pending for the next one.
 pub trait MediaProber: Send + Sync {
     /// Container and stream information for `location` (path or URL).
     fn probe(&self, location: &str) -> Result<ProbeInfo>;
@@ -289,6 +291,7 @@ fn process_one(
         });
     let (thumbnail, thumb_error) = match thumbnail {
         Ok(p) => (Some(p), None),
+        Err(Error::Cancelled) => return Err(Error::Cancelled),
         Err(e) => {
             let msg = format!("thumbnail: {e}");
             warnings.push(msg.clone());
@@ -300,6 +303,7 @@ fn process_one(
         Some(d) if options.strip_frames > 0 && thumbnail.is_some() => {
             match make_strip(prober, options, rec, d, crop) {
                 Ok(s) => Some(s),
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
                 Err(e) => {
                     warnings.push(format!("preview strip: {e}"));
                     None
@@ -328,7 +332,7 @@ fn process_one(
 }
 
 /// Processes every pending video once, on the calling thread, until none is
-/// left or `stop` becomes true. [`MetadataWorker`] runs this in the
+/// left, `stop` becomes true or the prober cancels. [`MetadataWorker`] runs this in the
 /// background; call it directly for synchronous use (tools, tests).
 pub fn process_pending(
     library: &Library,
@@ -354,30 +358,13 @@ pub fn process_pending(
             if stop.load(Ordering::Relaxed) {
                 break 'outer;
             }
-            done += 1;
-            total = total.max(done);
             match process_one(library, prober, options, rec) {
-                Ok((thumbnail, preview_strip, warning)) => {
-                    stats.processed += 1;
-                    on_event(WorkerEvent::Processed {
-                        id: rec.id,
-                        done,
-                        total,
-                        thumbnail,
-                        preview_strip,
-                        warning,
-                    });
-                }
-                Err(e) => {
-                    let error = e.to_string();
-                    library.store_probe_error(rec.id, &error)?;
-                    stats.failed += 1;
-                    on_event(WorkerEvent::Failed {
-                        id: rec.id,
-                        done,
-                        total,
-                        error,
-                    });
+                // Left pending for a later pass.
+                Err(Error::Cancelled) => break 'outer,
+                r => {
+                    done += 1;
+                    total = total.max(done);
+                    report(library, rec, done, total, r, &mut stats, on_event)?;
                 }
             }
         }
@@ -388,6 +375,43 @@ pub fn process_pending(
         failed: stats.failed,
     });
     Ok(stats)
+}
+
+/// Stores a failure and sends the event for one processed video.
+fn report(
+    library: &Library,
+    rec: &MediaRecord,
+    done: usize,
+    total: usize,
+    result: Result<(bool, bool, Option<String>)>,
+    stats: &mut WorkerStats,
+    on_event: &mut dyn FnMut(WorkerEvent),
+) -> Result<()> {
+    match result {
+        Ok((thumbnail, preview_strip, warning)) => {
+            stats.processed += 1;
+            on_event(WorkerEvent::Processed {
+                id: rec.id,
+                done,
+                total,
+                thumbnail,
+                preview_strip,
+                warning,
+            });
+        }
+        Err(e) => {
+            let error = e.to_string();
+            library.store_probe_error(rec.id, &error)?;
+            stats.failed += 1;
+            on_event(WorkerEvent::Failed {
+                id: rec.id,
+                done,
+                total,
+                error,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// A background thread that keeps metadata and thumbnails up to date.
@@ -518,6 +542,8 @@ mod tests {
         infos: HashMap<String, ProbeInfo>,
         broken_thumbnails: HashSet<String>,
         calls: Mutex<Vec<(String, f64, ThumbnailCrop)>>,
+        /// Thumbnail calls from this one on are cancelled.
+        cancel_from_call: Option<usize>,
     }
 
     impl FakeProber {
@@ -562,7 +588,12 @@ mod tests {
             max_h: u32,
             crop: ThumbnailCrop,
         ) -> Result<RgbaImage> {
-            self.calls.lock().unwrap().push((location.into(), at, crop));
+            let mut calls = self.calls.lock().unwrap();
+            if self.cancel_from_call.is_some_and(|n| calls.len() >= n) {
+                return Err(Error::Cancelled);
+            }
+            calls.push((location.into(), at, crop));
+            drop(calls);
             if self.broken_thumbnails.contains(location) {
                 return Err(Error::Probe("decoder error".into()));
             }
@@ -834,6 +865,34 @@ mod tests {
         assert_eq!(r.duration, Some(10.0));
         assert!(r.thumbnail.is_none());
         assert!(r.probe_error.is_some());
+        assert_eq!(lib.pending_metadata_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn cancelled_video_stays_pending_without_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open_in_memory().unwrap();
+        for loc in ["/v/a.mp4", "/v/b.mp4"] {
+            lib.upsert(&MediaUpsert::new(loc, "local")).unwrap();
+        }
+        let mut prober = FakeProber::default()
+            .with("/v/a.mp4", 1920, 1080, 10.0, ContainerHints::default())
+            .with("/v/b.mp4", 1920, 1080, 10.0, ContainerHints::default());
+        // One video takes a thumbnail and 4 strip frames; cancel in the
+        // second one's strip.
+        prober.cancel_from_call = Some(6);
+        let (stats, events) = run(&lib, &prober, &opts(tmp.path()));
+        assert_eq!((stats.processed, stats.failed), (1, 0));
+        assert!(matches!(events.last(), Some(WorkerEvent::Idle { .. })));
+        assert_eq!(lib.pending_metadata_count().unwrap(), 1);
+        let pending = lib.pending_metadata(10).unwrap();
+        assert!(pending[0].probe_error.is_none());
+        assert!(pending[0].thumbnail.is_none());
+
+        // The next pass finishes it.
+        prober.cancel_from_call = None;
+        let (stats, _) = run(&lib, &prober, &opts(tmp.path()));
+        assert_eq!(stats.processed, 1);
         assert_eq!(lib.pending_metadata_count().unwrap(), 0);
     }
 

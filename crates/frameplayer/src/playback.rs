@@ -10,7 +10,9 @@ use fp_core::{PlaybackStatus, playback::now_ms};
 use fp_haptics::{Axis, Heatmap, Script};
 use fp_library::{Library, MediaId, SessionId};
 use fp_media::{Player, PlayerConfig, PlayerState, StreamInfo};
-use std::time::Instant;
+use std::sync::Mutex;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 /// What to open.
 #[derive(Clone, Debug, Default)]
@@ -148,6 +150,11 @@ pub fn open(
         volume: settings.volume,
         ..Default::default()
     };
+    // The previous video's decoder must be released first (see
+    // App::open_request); a close stuck on the network is not waited out.
+    if !wait_closed(CLOSE_WAIT) {
+        log::warn!("previous video still closing; opening anyway");
+    }
     let player = Player::open(src, &name, cfg).map_err(|e| format!("{name}: {e}"))?;
     let info = player.info().clone();
     let (w, h) = info
@@ -447,9 +454,58 @@ impl Playback {
         self.markers.sort_by(|a, b| a.0.total_cmp(&b.0));
     }
 
+    /// Saves where the video was and closes it. The player's threads are
+    /// stopped and joined on a thread of their own: one can be inside a
+    /// network read or a long software decode, and waiting for it here
+    /// froze the headset's frame loop (quitting while a 10-bit file over
+    /// SMB was buffering hung the app).
     pub fn close(mut self, library: &Library) {
         self.save_progress(library, true);
         self.save_key(library, true);
+        let player = self.player;
+        let closing = std::thread::Builder::new()
+            .name("fp-close".into())
+            .spawn(move || {
+                let t = Instant::now();
+                drop(player);
+                log::info!("video closed in {} ms", t.elapsed().as_millis());
+            });
+        match closing {
+            Ok(h) => CLOSING.lock().unwrap_or_else(|e| e.into_inner()).push(h),
+            // The player was dropped (closed) here.
+            Err(e) => log::warn!("cannot start close thread: {e}"),
+        }
+    }
+}
+
+/// Players still closing (see [`Playback::close`]).
+static CLOSING: Mutex<Vec<JoinHandle<()>>> = Mutex::new(Vec::new());
+
+/// How long opening a video waits for the previous one to close.
+const CLOSE_WAIT: Duration = Duration::from_secs(5);
+
+/// Waits up to `limit` for closing players to finish; true when none is
+/// left.
+pub fn wait_closed(limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    let mut closing = CLOSING.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        let (done, open): (Vec<_>, Vec<_>) = std::mem::take(&mut *closing)
+            .into_iter()
+            .partition(|h| h.is_finished());
+        for h in done {
+            let _ = h.join();
+        }
+        *closing = open;
+        if closing.is_empty() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        drop(closing);
+        std::thread::sleep(Duration::from_millis(10));
+        closing = CLOSING.lock().unwrap_or_else(|e| e.into_inner());
     }
 }
 
@@ -496,6 +552,19 @@ mod tests {
         assert_eq!(file_name("/media/x/My.Video_2024.mkv"), "My.Video_2024.mkv");
         assert_eq!(title_from_name("My.Video_2024.mkv"), "My Video 2024");
         assert_eq!(percent_decode("a%2Fb%zz"), "a/b%zz");
+    }
+
+    #[test]
+    fn opening_waits_for_closing_videos_but_not_forever() {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let slow = std::thread::spawn(move || {
+            let _ = rx.recv();
+        });
+        CLOSING.lock().unwrap().push(slow);
+        assert!(!wait_closed(Duration::from_millis(50)), "still closing");
+        drop(tx);
+        assert!(wait_closed(Duration::from_secs(5)));
+        assert!(CLOSING.lock().unwrap().is_empty());
     }
 
     #[test]

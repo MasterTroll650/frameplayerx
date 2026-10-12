@@ -179,7 +179,7 @@ fn info(file: &str) -> Result<(), Error> {
     let src = || -> Result<Arc<dyn fp_core::ByteSource>, Error> {
         Ok(Arc::new(fp_core::source::FileSource::open(path)?))
     };
-    let i = fp_media::thumb::probe(src()?, &name)?;
+    let i = fp_media::thumb::probe(src()?, &name, Default::default())?;
     println!("{name}: {} · {:.1} s", i.container, i.duration);
     for s in &i.streams {
         let lang = s
@@ -271,6 +271,23 @@ fn ray_picture(active: bool) -> Vec<u8> {
         }
     }
     px
+}
+
+/// How long shutdown may take once the session has ended.
+const EXIT_WITHIN: Duration = Duration::from_secs(5);
+
+/// Ends the process if shutdown has not finished within `limit`. Progress
+/// and settings are saved first; what is left (network teardown, threads
+/// in a read) is not worth a process that never exits, which SteamVR shows
+/// as a frozen app until it is killed.
+fn exit_watchdog(limit: Duration) {
+    let _ = std::thread::Builder::new()
+        .name("fp-exit".into())
+        .spawn(move || {
+            std::thread::sleep(limit);
+            log::warn!("shutdown took over {} s; exiting", limit.as_secs());
+            std::process::exit(0);
+        });
 }
 
 fn run_xr(args: &Args) -> Result<(), Error> {
@@ -478,6 +495,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         }
     }
     log::info!("{frames} frames, {} with video", video_frames);
+    exit_watchdog(EXIT_WITHIN);
     renderer.wait_idle();
     app.shutdown();
     drop(renderer);

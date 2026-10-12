@@ -242,7 +242,9 @@ protocol. Both only answer devices on your local network.
 
 ## Troubleshooting
 
-- Log: `~/.local/share/frameplayer/frameplayer.log`
+- Log: `~/.local/share/frameplayer/frameplayer.log`; the run before is kept
+  as `frameplayer.log.old` (the one to send after a freeze or crash, once
+  FramePlayer has been started again)
 - Settings: `~/.config/frameplayer/settings.json` (delete to reset)
 - Network source passwords: `~/.config/frameplayer/sources.json`
   (readable only by you)

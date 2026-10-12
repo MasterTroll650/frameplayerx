@@ -1397,7 +1397,8 @@ impl App {
     fn open_request(&mut self, req: OpenRequest) {
         // Close the current video first: it holds a hardware decoder session,
         // and with Steam holding others the new video could not get one, fell
-        // back to software and stuttered ("Hardware decoder busy").
+        // back to software and stuttered ("Hardware decoder busy"). It
+        // closes on a thread of its own; the open job waits for it.
         if let Some(p) = self.playback.take() {
             p.close(&self.services.library);
             self.services.haptics.clear();
@@ -1415,6 +1416,7 @@ impl App {
                 .unwrap_or_else(|| req.location.rsplit('/').next().unwrap_or("").to_string()),
         );
         self.ui.open_error = None;
+        self.services.set_worker_busy(true);
         self.jobs.spawn("open", move || {
             Job::Opened(seq, Box::new(playback::open(req, &opener, &lib, &settings)))
         });
@@ -1446,6 +1448,8 @@ impl App {
 
     pub fn frame(&mut self, renderer: &mut Renderer, input: FrameInput) -> FrameOutput {
         self.poll_jobs();
+        self.services
+            .set_worker_busy(self.playback.is_some() || self.ui.opening.is_some());
         self.check_mounts();
         self.remote_events();
         self.poll_purchase();
@@ -1732,6 +1736,9 @@ impl App {
     }
 
     pub fn shutdown(mut self) {
+        // Cut short the thumbnail being made, so stopping the worker below
+        // does not wait for it.
+        self.services.set_worker_busy(true);
         if let Some(p) = self.playback.take() {
             p.close(&self.services.library);
         }
