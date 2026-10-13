@@ -38,7 +38,7 @@ pub use backup::{
 pub use error::{Error, Result};
 pub use image::RgbaImage;
 pub use library::{
-    Library, MediaUpsert, PlaybackUpdate, UpsertOutcome, UpsertStatus, WATCHED_FRACTION,
+    Hidden, Library, MediaUpsert, PlaybackUpdate, UpsertOutcome, UpsertStatus, WATCHED_FRACTION,
     default_db_path,
 };
 pub use playlist::Playlist;

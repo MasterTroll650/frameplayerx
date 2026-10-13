@@ -64,14 +64,21 @@ pub fn decode_first_frame(src: Arc<dyn ByteSource>, name: &str) -> Result<crate:
     Err(Error::Unsupported("no frame decoded".into()))
 }
 
-/// Reads stream information without decoding.
-pub fn probe(src: Arc<dyn ByteSource>, name: &str) -> Result<MediaInfo> {
-    let input = Input::open(src, name, Arc::new(AtomicBool::new(false)))?;
+/// Reads stream information without decoding. Setting `interrupt` makes
+/// reads in progress fail, so a probe of a slow network file can be cut
+/// short.
+pub fn probe(
+    src: Arc<dyn ByteSource>,
+    name: &str,
+    interrupt: Arc<AtomicBool>,
+) -> Result<MediaInfo> {
+    let input = Input::open(src, name, interrupt)?;
     Ok(read_info(&input))
 }
 
 /// Decodes the first frame at or after `at` seconds and scales it to fit
 /// within `max_w` x `max_h`, keeping the aspect ratio of the cropped area.
+/// Setting `interrupt` stops it at the next read.
 pub fn grab(
     src: Arc<dyn ByteSource>,
     name: &str,
@@ -79,8 +86,9 @@ pub fn grab(
     max_w: u32,
     max_h: u32,
     crop: Crop,
+    interrupt: Arc<AtomicBool>,
 ) -> Result<Rgba> {
-    let mut input = Input::open(src, name, Arc::new(AtomicBool::new(false)))?;
+    let mut input = Input::open(src, name, interrupt)?;
     let vi = input
         .best_stream(ff::AVMEDIA_TYPE_VIDEO)
         .ok_or(Error::NoStream("video"))?;
@@ -201,6 +209,10 @@ mod tests {
         Arc::new(FileSource::open(&path).unwrap())
     }
 
+    fn no_interrupt() -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
+    }
+
     #[test]
     fn grabs_left_eye_thumbnail() {
         let img = grab(
@@ -210,6 +222,7 @@ mod tests {
             160,
             160,
             Crop::LeftHalf,
+            no_interrupt(),
         )
         .unwrap();
         assert_eq!((img.width, img.height), (160, 160));
@@ -230,9 +243,33 @@ mod tests {
 
     #[test]
     fn grabs_10bit_top_half_and_probes() {
-        let img = grab(src("hevc10_tb.mkv"), "x.mkv", 0.5, 256, 256, Crop::TopHalf).unwrap();
+        let img = grab(
+            src("hevc10_tb.mkv"),
+            "x.mkv",
+            0.5,
+            256,
+            256,
+            Crop::TopHalf,
+            no_interrupt(),
+        )
+        .unwrap();
         assert_eq!((img.width, img.height), (256, 128));
-        let info = probe(src("av1_opus.webm"), "x.webm").unwrap();
+        let info = probe(src("av1_opus.webm"), "x.webm", no_interrupt()).unwrap();
         assert_eq!(info.video_stream().unwrap().codec, "av1");
+    }
+
+    #[test]
+    fn interrupted_grab_fails() {
+        let stop = Arc::new(AtomicBool::new(true));
+        let r = grab(
+            src("h264_aac_180_LR.mp4"),
+            "x.mp4",
+            1.0,
+            160,
+            160,
+            Crop::Full,
+            stop,
+        );
+        assert!(r.is_err());
     }
 }

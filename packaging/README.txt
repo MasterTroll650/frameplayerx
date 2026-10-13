@@ -16,7 +16,7 @@ Your data
   Settings:   ~/.config/frameplayer/settings.json
   Sources:    ~/.config/frameplayer/sources.json (passwords; owner-only)
   Library:    ~/.local/share/frameplayer/
-  Log:        ~/.local/share/frameplayer/frameplayer.log
+  Log:        ~/.local/share/frameplayer/frameplayer.log (last run: .log.old)
 
 Videos in ~/Videos, ~/Downloads and on microSD cards / USB drives are added
 to the library automatically. Haptic scripts (.funscript) next to a video or

@@ -8,7 +8,7 @@ use rusqlite::types::Value;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::library::{Library, get_many, normalize_tags};
+use crate::library::{Hidden, Library, get_many, normalize_tags};
 use crate::record::{MediaId, MediaRecord, ProjectionKind};
 
 /// Sort key for [`Query`].
@@ -133,9 +133,14 @@ struct Candidate {
 }
 
 /// SQL `WHERE` clause (with leading `WHERE`, or empty) and its parameters.
-fn filter_sql(q: &Query) -> (String, Vec<Value>) {
+/// SQL conditions for `q`, leaving out what is `hidden`.
+fn filter_sql(q: &Query, hidden: &Hidden) -> (String, Vec<Value>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<Value> = Vec::new();
+    if let Some((sql, ids)) = crate::library::hidden_sql("m.", hidden) {
+        clauses.push(sql);
+        params.extend(ids);
+    }
     if !q.include_missing {
         clauses.push("m.missing = 0".into());
     }
@@ -371,10 +376,10 @@ fn compare(a: &Candidate, b: &Candidate, q: &Query) -> Ordering {
 }
 
 /// Filtered and sorted candidates (before offset/limit).
-fn ranked(conn: &Connection, q: &Query) -> Result<Vec<Candidate>> {
+fn ranked(conn: &Connection, q: &Query, hidden: &Hidden) -> Result<Vec<Candidate>> {
     let terms = words(&q.text);
     let query_lower = q.text.trim().to_lowercase();
-    let (where_sql, params) = filter_sql(q);
+    let (where_sql, params) = filter_sql(q, hidden);
     let sql = format!(
         "SELECT m.id, m.title, m.location,
                 COALESCE((SELECT group_concat(t.name, ' ') FROM media_tags mt
@@ -413,7 +418,11 @@ fn ranked(conn: &Connection, q: &Query) -> Result<Vec<Candidate>> {
 }
 
 pub(crate) fn search_conn(conn: &Connection, q: &Query) -> Result<Vec<MediaRecord>> {
-    let ids: Vec<MediaId> = ranked(conn, q)?
+    search_hiding(conn, q, &Hidden::default())
+}
+
+fn search_hiding(conn: &Connection, q: &Query, hidden: &Hidden) -> Result<Vec<MediaRecord>> {
+    let ids: Vec<MediaId> = ranked(conn, q, hidden)?
         .into_iter()
         .skip(q.offset)
         .take(q.limit.unwrap_or(usize::MAX))
@@ -423,8 +432,12 @@ pub(crate) fn search_conn(conn: &Connection, q: &Query) -> Result<Vec<MediaRecor
 }
 
 pub(crate) fn count_conn(conn: &Connection, q: &Query) -> Result<usize> {
+    count_hiding(conn, q, &Hidden::default())
+}
+
+fn count_hiding(conn: &Connection, q: &Query, hidden: &Hidden) -> Result<usize> {
     if words(&q.text).is_empty() {
-        let (where_sql, params) = filter_sql(q);
+        let (where_sql, params) = filter_sql(q, hidden);
         let n: i64 = conn.query_row(
             &format!("SELECT COUNT(*) FROM media m {where_sql}"),
             rusqlite::params_from_iter(params),
@@ -432,19 +445,22 @@ pub(crate) fn count_conn(conn: &Connection, q: &Query) -> Result<usize> {
         )?;
         Ok(n.max(0) as usize)
     } else {
-        Ok(ranked(conn, q)?.len())
+        Ok(ranked(conn, q, hidden)?.len())
     }
 }
 
 impl Library {
     /// Runs a query: filters, free-text match, ranking, sorting, paging.
+    /// [Hidden](Library::set_hidden) videos are left out.
     pub fn search(&self, query: &Query) -> Result<Vec<MediaRecord>> {
-        self.with(|c| search_conn(c, query))
+        let hidden = self.hidden();
+        self.with(|c| search_hiding(c, query, &hidden))
     }
 
     /// Number of results `query` has, ignoring `limit` and `offset`.
     pub fn count(&self, query: &Query) -> Result<usize> {
-        self.with(|c| count_conn(c, query))
+        let hidden = self.hidden();
+        self.with(|c| count_hiding(c, query, &hidden))
     }
 }
 

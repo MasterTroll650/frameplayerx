@@ -297,6 +297,8 @@ pub struct Services {
     pub source_configs: Vec<SourceConfig>,
     pub worker: Option<fp_library::MetadataWorker>,
     pub worker_events: Option<std::sync::mpsc::Receiver<fp_library::WorkerEvent>>,
+    /// Holds the metadata worker off (see [`crate::prober::FfmpegProber`]).
+    worker_busy: Arc<std::sync::atomic::AtomicBool>,
     pub haptics: HapticsEngine,
     pub haptic_devices: Vec<(
         HapticDeviceConfig,
@@ -333,11 +335,12 @@ impl RemoteLibrary for WebLibrary {
     }
 
     fn thumbnail_path(&self, id: i64) -> Option<PathBuf> {
-        self.0
-            .get(fp_library::MediaId(id))
-            .ok()
-            .flatten()
-            .and_then(|r| r.thumbnail)
+        let r = self.0.get(fp_library::MediaId(id)).ok().flatten()?;
+        // Not for videos of a source locked with a PIN.
+        if self.0.hidden().hides(&r.source_id, &r.location) {
+            return None;
+        }
+        r.thumbnail
     }
 }
 
@@ -364,6 +367,7 @@ impl Services {
             source_configs,
             worker: None,
             worker_events: None,
+            worker_busy: Default::default(),
             haptics,
             haptic_devices: Vec::new(),
             remote: None,
@@ -377,6 +381,7 @@ impl Services {
     pub fn start_worker(&mut self) {
         let prober = Arc::new(crate::prober::FfmpegProber {
             opener: self.opener.clone(),
+            busy: self.worker_busy.clone(),
         });
         match fp_library::MetadataWorker::spawn(
             self.library.clone(),
@@ -394,6 +399,16 @@ impl Services {
     pub fn wake_worker(&self) {
         if let Some(w) = &self.worker {
             w.wake();
+        }
+    }
+
+    /// Holds the metadata worker off while a video plays (or while
+    /// quitting), cutting short the thumbnail it is making; it picks up
+    /// where it left off once not busy.
+    pub fn set_worker_busy(&self, busy: bool) {
+        use std::sync::atomic::Ordering;
+        if self.worker_busy.swap(busy, Ordering::AcqRel) && !busy {
+            self.wake_worker();
         }
     }
 

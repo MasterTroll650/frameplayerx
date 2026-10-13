@@ -429,7 +429,118 @@ impl App {
         });
     }
 
+    /// Whether source `id` has a PIN and is not unlocked.
+    fn source_locked(&self, id: &str) -> bool {
+        crate::pin::locked(&self.settings.source_pins, &self.ui.unlocked_sources, id)
+    }
+
+    pub(crate) fn source_name(&self, id: &str) -> String {
+        self.services
+            .source_configs
+            .iter()
+            .find(|c| c.id() == id)
+            .map(|c| c.name().to_string())
+            .unwrap_or_else(|| id.to_string())
+    }
+
+    /// Asks for the PIN of a locked source.
+    fn ask_pin(&mut self, source: &str) {
+        self.ui.browse = None;
+        self.ui.screen = ui::Screen::Sources;
+        self.show_browser = true;
+        self.ui_visible = true;
+        self.ui.pin_form = Some(ui::PinForm {
+            source: source.to_string(),
+            name: self.source_name(source),
+            ..Default::default()
+        });
+    }
+
+    /// The locked source whose folder or address `location` is under.
+    fn locked_by(&self, location: &str) -> Option<String> {
+        self.services
+            .source_configs
+            .iter()
+            .filter(|c| self.source_locked(c.id()))
+            .find(|c| crate::pin::source_contains(c, location))
+            .map(|c| c.id().to_string())
+    }
+
+    /// The locked source keeping `source` shut: itself, or a locked source
+    /// its folder or address is inside (the share a locked folder is in
+    /// stays open, a folder inside a locked share does not).
+    fn lock_on(&self, source: &str) -> Option<String> {
+        if self.source_locked(source) {
+            return Some(source.to_string());
+        }
+        let root = self
+            .services
+            .source_configs
+            .iter()
+            .find(|c| c.id() == source)
+            .map(crate::pin::source_root)?;
+        self.locked_by(&root)
+    }
+
+    /// The locked source a video belongs to, if any: the one it was opened
+    /// from, the one its library entry came from, or one whose folder or
+    /// address it is under, whichever source it was opened from.
+    fn locked_source_of(&self, req: &OpenRequest) -> Option<String> {
+        if self.settings.source_pins.is_empty() {
+            return None;
+        }
+        let from_library = self
+            .services
+            .library
+            .get_by_location(&req.location)
+            .ok()
+            .flatten()
+            .map(|r| r.source_id);
+        [req.source_id.clone(), from_library]
+            .into_iter()
+            .flatten()
+            .find(|id| self.source_locked(id))
+            .or_else(|| self.locked_by(&req.location))
+    }
+
+    /// What locked sources hide: their videos, and everything under their
+    /// folders or addresses whichever source lists or added it.
+    fn locked_hidden(&self) -> fp_library::Hidden {
+        let sources = crate::pin::locked_ids(&self.settings.source_pins, &self.ui.unlocked_sources);
+        let locations = self
+            .services
+            .source_configs
+            .iter()
+            .filter(|c| sources.iter().any(|s| s == c.id()))
+            .map(crate::pin::source_root)
+            .filter(|r| !r.is_empty())
+            .collect();
+        fp_library::Hidden { sources, locations }
+    }
+
+    /// Leaves locked sources' videos out of the library's listings (and the
+    /// remotes'); nothing changes while no source has a PIN.
+    fn sync_locks(&mut self) {
+        if self.settings.source_pins.is_empty() && self.services.library.hidden().is_empty() {
+            return;
+        }
+        let hidden = self.locked_hidden();
+        if hidden != self.services.library.hidden() {
+            self.services.library.set_hidden(hidden);
+            self.ui.invalidate();
+            // A folder being browsed may hold what is hidden now.
+            if let Some(b) = self.ui.browse.as_ref() {
+                let (source, location) = (b.source.clone(), b.location.clone());
+                self.browse(source, location);
+            }
+        }
+    }
+
     pub fn browse(&mut self, source: String, location: Option<String>) {
+        if let Some(lock) = self.lock_on(&source) {
+            self.ask_pin(&lock);
+            return;
+        }
         let Some(src) = self.services.opener.source(&source) else {
             self.ui.toast("That source is not available");
             return;
@@ -474,6 +585,10 @@ impl App {
     }
 
     fn import(&mut self, source: String, location: Option<String>) {
+        if let Some(lock) = self.lock_on(&source) {
+            self.ask_pin(&lock);
+            return;
+        }
         let Some(src) = self.services.opener.source(&source) else {
             return;
         };
@@ -639,6 +754,9 @@ impl App {
                         b.loading = false;
                         match result {
                             Ok(mut e) => {
+                                // Folders of locked sources inside this one.
+                                let hidden = self.services.library.hidden();
+                                e.retain(|entry| !hidden.hides(&source, &entry.location));
                                 fp_sources::sort_entries_by(&mut e, self.settings.browse_sort);
                                 b.entries = e;
                                 b.error = None;
@@ -788,7 +906,7 @@ impl App {
 
     // ---- actions -----------------------------------------------------------
 
-    fn apply(&mut self, a: Action) {
+    pub(crate) fn apply(&mut self, a: Action) {
         let lib = self.services.library.clone();
         match a {
             Action::Open(req) => {
@@ -959,6 +1077,12 @@ impl App {
                 }
             }
             Action::RemoveSource(id) => {
+                if self.source_locked(&id) {
+                    self.ask_pin(&id);
+                    return;
+                }
+                self.settings.source_pins.remove(&id);
+                self.ui.unlocked_sources.remove(&id);
                 let list = self
                     .services
                     .source_configs
@@ -967,6 +1091,57 @@ impl App {
                     .cloned()
                     .collect();
                 self.services.set_sources(list);
+            }
+            Action::UnlockSource { source, pin } => {
+                let right = self
+                    .settings
+                    .source_pins
+                    .get(&source)
+                    .is_some_and(|h| crate::pin::verify(h, &pin));
+                if right {
+                    self.ui.unlocked_sources.insert(source.clone());
+                    self.ui.pin_form = None;
+                    self.sync_locks();
+                    self.browse(source, None);
+                } else if let Some(f) = self.ui.pin_form.as_mut() {
+                    f.pin.clear();
+                    f.wrong = true;
+                }
+            }
+            Action::LockSource(id) => {
+                self.ui.unlocked_sources.remove(&id);
+                if self.ui.browse.as_ref().is_some_and(|b| b.source == id) {
+                    self.ui.browse = None;
+                }
+                self.ui.toast(format!("Locked {}", self.source_name(&id)));
+            }
+            Action::SetSourcePin { source, pin } => {
+                // Changing it needs the source open, as the PIN form only
+                // offers it then.
+                if self.source_locked(&source) {
+                    self.ask_pin(&source);
+                    return;
+                }
+                self.ui.pin_form = None;
+                let name = self.source_name(&source);
+                match pin {
+                    Some(pin) if crate::pin::valid(&pin) => {
+                        self.settings
+                            .source_pins
+                            .insert(source.clone(), crate::pin::hash(&pin));
+                        self.ui.unlocked_sources.remove(&source);
+                        if self.ui.browse.as_ref().is_some_and(|b| b.source == source) {
+                            self.ui.browse = None;
+                        }
+                        self.ui.toast(format!("{name} is locked with a PIN"));
+                    }
+                    Some(_) => {}
+                    None => {
+                        self.settings.source_pins.remove(&source);
+                        self.ui.unlocked_sources.remove(&source);
+                        self.ui.toast(format!("Removed the PIN of {name}"));
+                    }
+                }
             }
             Action::Browse { source, location } => self.browse(source, location),
             Action::ImportFolder { source, location } => self.import(source, location),
@@ -1395,9 +1570,16 @@ impl App {
     }
 
     fn open_request(&mut self, req: OpenRequest) {
+        if let Some(source) = self.locked_source_of(&req) {
+            self.ui
+                .toast(format!("{} is locked", self.source_name(&source)));
+            self.ask_pin(&source);
+            return;
+        }
         // Close the current video first: it holds a hardware decoder session,
         // and with Steam holding others the new video could not get one, fell
-        // back to software and stuttered ("Hardware decoder busy").
+        // back to software and stuttered ("Hardware decoder busy"). It
+        // closes on a thread of its own; the open job waits for it.
         if let Some(p) = self.playback.take() {
             p.close(&self.services.library);
             self.services.haptics.clear();
@@ -1415,6 +1597,7 @@ impl App {
                 .unwrap_or_else(|| req.location.rsplit('/').next().unwrap_or("").to_string()),
         );
         self.ui.open_error = None;
+        self.services.set_worker_busy(true);
         self.jobs.spawn("open", move || {
             Job::Opened(seq, Box::new(playback::open(req, &opener, &lib, &settings)))
         });
@@ -1446,6 +1629,9 @@ impl App {
 
     pub fn frame(&mut self, renderer: &mut Renderer, input: FrameInput) -> FrameOutput {
         self.poll_jobs();
+        self.services
+            .set_worker_busy(self.playback.is_some() || self.ui.opening.is_some());
+        self.sync_locks();
         self.check_mounts();
         self.remote_events();
         self.poll_purchase();
@@ -1732,6 +1918,9 @@ impl App {
     }
 
     pub fn shutdown(mut self) {
+        // Cut short the thumbnail being made, so stopping the worker below
+        // does not wait for it.
+        self.services.set_worker_busy(true);
         if let Some(p) = self.playback.take() {
             p.close(&self.services.library);
         }

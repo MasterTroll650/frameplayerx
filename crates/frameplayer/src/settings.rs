@@ -71,6 +71,10 @@ pub struct Settings {
     pub panel_offsets: PanelOffsets,
     /// How folders are ordered when browsing a source.
     pub browse_sort: fp_sources::EntrySort,
+    /// Sources locked with a PIN: source id to the PIN's hash (see
+    /// [`crate::pin`]). Left out of the file when empty.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub source_pins: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -112,6 +116,7 @@ impl Default for Settings {
             unlock: None,
             panel_offsets: PanelOffsets::default(),
             browse_sort: fp_sources::EntrySort::default(),
+            source_pins: Default::default(),
         }
     }
 }
@@ -194,6 +199,15 @@ mod tests {
         s.haptic_devices.push(HapticDeviceConfig::Tcode {
             endpoint: "tcp://10.0.0.2:8000".into(),
         });
+        s.save(&path).unwrap();
+        assert_eq!(Settings::load(&path), s);
+        // Source PINs are only written once one is set.
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("source_pins")
+        );
+        s.source_pins.insert("nas".into(), crate::pin::hash("2468"));
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
         std::fs::write(&path, r#"{"volume": 0.25}"#).unwrap();
