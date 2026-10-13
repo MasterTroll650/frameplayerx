@@ -50,6 +50,9 @@ pub struct Settings {
     pub passthrough: bool,
     /// Resume videos where they were left.
     pub resume: bool,
+    /// The format a video starts in when nothing identifies it (no
+    /// metadata, file name tag or telling shape).
+    pub default_format: fp_core::format::VideoFormat,
     /// Seconds of inactivity before the playback UI hides.
     pub auto_hide_secs: f32,
     /// Thumbstick seek step in seconds.
@@ -104,6 +107,7 @@ impl Default for Settings {
             default_view: ViewSettings::default(),
             passthrough: false,
             resume: true,
+            default_format: fp_core::format::VideoFormat::FALLBACK,
             auto_hide_secs: 4.0,
             seek_step: 10.0,
             remote: RemoteConfig::default(),
@@ -214,6 +218,7 @@ mod tests {
         let p = Settings::load(&path);
         assert_eq!(p.volume, 0.25);
         assert_eq!(p.seek_step, 10.0);
+        assert_eq!(p.default_format, fp_core::format::VideoFormat::FALLBACK);
         // Saved before the global chroma key: the old green default goes.
         std::fs::write(
             &path,

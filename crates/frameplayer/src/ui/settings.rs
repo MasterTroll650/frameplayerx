@@ -201,6 +201,21 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
             0,
         );
     });
+    heading(ui, "Default format");
+    note(
+        ui,
+        "For videos whose file, name and shape say nothing about their format. \
+         16:9, 4:3 and scope movies start flat on their own.",
+    );
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+        for (label, f) in super::player::format_choices() {
+            if widgets::chip(ui, label, s.default_format == f).clicked() {
+                s.default_format = f;
+            }
+        }
+    });
     heading(ui, "Sound");
     widgets::rows(ui, |r| {
         r.slider("Volume", None, &mut s.volume, 0.0..=1.5, 1.0, "", 2);

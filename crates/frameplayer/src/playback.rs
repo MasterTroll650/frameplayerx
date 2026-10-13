@@ -3,7 +3,7 @@
 
 use crate::services::Opener;
 use crate::settings::Settings;
-use fp_core::format::{self, ContainerHints, Evidence, VideoFormat};
+use fp_core::format::{self, ContainerHints, DetectedFormat, Evidence, VideoFormat};
 use fp_core::source::Entry;
 use fp_core::view::{Keyframes, ViewSettings};
 use fp_core::{PlaybackStatus, playback::now_ms};
@@ -34,7 +34,7 @@ pub struct Playback {
     pub format: VideoFormat,
     pub evidence: Evidence,
     /// Format the file would have without the user's override.
-    pub detected: VideoFormat,
+    pub detected: DetectedFormat,
     pub settings: ViewSettings,
     pub keyframes: Keyframes,
     /// Adjustments differ from what is saved for this video.
@@ -175,8 +175,15 @@ pub fn open(
     } else {
         info.hints
     };
-    let resolved = format::resolve(user, hints, &name, w, h);
-    let detected = format::resolve(None, hints, &name, w, h).format;
+    // A video nothing identifies starts in the format chosen in Settings.
+    let unidentified = |mut d: DetectedFormat| {
+        if d.evidence == Evidence::Default {
+            d.format = settings.default_format;
+        }
+        d
+    };
+    let resolved = unidentified(format::resolve(user, hints, &name, w, h));
+    let detected = unidentified(format::resolve(None, hints, &name, w, h));
 
     let settings_v = record
         .as_ref()
@@ -383,11 +390,11 @@ impl Playback {
     }
 
     pub fn set_format(&mut self, library: &Library, format: Option<VideoFormat>) {
-        self.format = format.unwrap_or(self.detected);
+        self.format = format.unwrap_or(self.detected.format);
         self.evidence = if format.is_some() {
             Evidence::User
         } else {
-            Evidence::FileName
+            self.detected.evidence
         };
         if let Some(id) = self.record_id
             && let Err(e) = library.set_user_format(id, format)
