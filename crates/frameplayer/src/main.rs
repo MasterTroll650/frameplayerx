@@ -12,6 +12,7 @@ mod bindings;
 mod controls;
 mod jobs;
 mod logger;
+mod pin;
 mod playback;
 mod preview;
 mod prober;

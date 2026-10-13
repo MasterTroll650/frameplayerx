@@ -54,6 +54,17 @@ FramePlayer then updates itself from the Settings › Updates page.
 | Plex, Jellyfin, Emby, Serviio | Sources › Add source › DLNA › Search the network |
 | A web server folder listing | Sources › Add source › HTTP |
 
+### Locking a source with a PIN
+
+To keep a share or folder private when someone else uses the headset, press
+the padlock next to it under **Sources** and choose a PIN (4 to 8 digits).
+While it is locked it can't be browsed, and its videos are left out of the
+library, continue watching, history, search and the phone remote; opening
+one asks for the PIN. **Unlock** opens it until FramePlayer restarts; the
+padlock then locks it again at once, changes the PIN or removes it.
+Removing the source also removes its PIN. This keeps guests out, it doesn't
+encrypt anything: the files themselves stay as they are.
+
 ### microSD cards and USB drives (VR180 and everything else)
 
 FramePlayer notices when a card or drive is inserted (a "Found drive"

@@ -1,13 +1,14 @@
 //! The [`Library`] handle: opening, reading and changing media rows.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use fp_core::format::{DetectedFormat, Evidence, detect_from_name};
 use fp_core::source::{Entry, EntryKind};
 use fp_core::view::Keyframes;
 use fp_core::{VideoFormat, ViewSettings};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::types::Value;
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 use crate::error::{Error, Result};
 use crate::record::{
@@ -38,6 +39,19 @@ pub const WATCHED_FRACTION: f64 = 0.9;
 #[derive(Clone)]
 pub struct Library {
     conn: Arc<Mutex<Connection>>,
+    /// Source ids whose videos listings leave out (see
+    /// [`Library::set_hidden_sources`]); shared by every clone.
+    hidden: Arc<RwLock<Vec<String>>>,
+}
+
+/// `column NOT IN (?, ...)` with its parameters; `None` when nothing is
+/// hidden, so queries are unchanged then.
+pub(crate) fn hidden_sql(column: &str, hidden: &[String]) -> Option<(String, Vec<Value>)> {
+    if hidden.is_empty() {
+        return None;
+    }
+    let sql = format!("{column} NOT IN ({})", vec!["?"; hidden.len()].join(","));
+    Some((sql, hidden.iter().cloned().map(Value::Text).collect()))
 }
 
 impl std::fmt::Debug for Library {
@@ -585,6 +599,7 @@ impl Library {
         schema::migrate(&mut conn, schema::MIGRATIONS)?;
         Ok(Library {
             conn: Arc::new(Mutex::new(conn)),
+            hidden: Arc::default(),
         })
     }
 
@@ -603,6 +618,22 @@ impl Library {
             tx.commit()?;
             Ok(out)
         })
+    }
+
+    /// Leaves the videos of these sources out of searches, counts, continue
+    /// watching, recently added, history and [`sources`](Self::sources)
+    /// until changed (the app hides sources locked with a PIN). Nothing is
+    /// stored; lookups by id or location still find them.
+    pub fn set_hidden_sources(&self, ids: Vec<String>) {
+        *self.hidden.write().unwrap_or_else(PoisonError::into_inner) = ids;
+    }
+
+    /// The ids passed to [`set_hidden_sources`](Self::set_hidden_sources).
+    pub fn hidden_sources(&self) -> Vec<String> {
+        self.hidden
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Schema version of the open database (`PRAGMA user_version`).
@@ -625,27 +656,45 @@ impl Library {
     /// Partly watched videos, most recently played first: resume position
     /// above zero and before [`WATCHED_FRACTION`] of the duration.
     pub fn continue_watching(&self, limit: usize) -> Result<Vec<MediaRecord>> {
+        let (hide, mut args) = self.hidden_and();
+        args.extend([
+            Value::Real(WATCHED_FRACTION),
+            Value::Integer(limit_i64(limit)),
+        ]);
         self.with(|c| {
             query_records(
                 c,
-                "WHERE m.missing = 0 AND m.resume_position > 0
-                   AND (m.duration IS NULL OR m.duration <= 0
-                        OR m.resume_position < m.duration * ?1)
-                 ORDER BY m.last_played DESC, m.id DESC LIMIT ?2",
-                params![WATCHED_FRACTION, limit_i64(limit)],
+                &format!(
+                    "WHERE {hide} m.missing = 0 AND m.resume_position > 0
+                       AND (m.duration IS NULL OR m.duration <= 0
+                            OR m.resume_position < m.duration * ?)
+                     ORDER BY m.last_played DESC, m.id DESC LIMIT ?"
+                ),
+                params_from_iter(args),
             )
         })
     }
 
     /// Newest videos first, missing ones excluded.
     pub fn recently_added(&self, limit: usize) -> Result<Vec<MediaRecord>> {
+        let (hide, mut args) = self.hidden_and();
+        args.push(Value::Integer(limit_i64(limit)));
         self.with(|c| {
             query_records(
                 c,
-                "WHERE m.missing = 0 ORDER BY m.added_at DESC, m.id DESC LIMIT ?1",
-                [limit_i64(limit)],
+                &format!("WHERE {hide} m.missing = 0 ORDER BY m.added_at DESC, m.id DESC LIMIT ?"),
+                params_from_iter(args),
             )
         })
+    }
+
+    /// The hidden-source condition followed by `AND`, and its parameters;
+    /// empty when nothing is hidden.
+    fn hidden_and(&self) -> (String, Vec<Value>) {
+        match hidden_sql("m.source_id", &self.hidden_sources()) {
+            Some((sql, args)) => (format!("{sql} AND"), args),
+            None => (String::new(), Vec::new()),
+        }
     }
 
     /// Markers of a video ordered by time (source chapters and user
@@ -674,7 +723,8 @@ impl Library {
 
     /// Distinct source ids with their number of (non-missing) videos.
     pub fn sources(&self) -> Result<Vec<(String, usize)>> {
-        self.with(|c| {
+        let hidden = self.hidden_sources();
+        let all: Vec<(String, usize)> = self.with(|c| {
             let mut stmt = c.prepare_cached(
                 "SELECT source_id, SUM(missing = 0) FROM media GROUP BY source_id ORDER BY source_id",
             )?;
@@ -682,17 +732,29 @@ impl Library {
                 Ok((r.get(0)?, r.get::<_, i64>(1)?.max(0) as usize))
             })?;
             Ok(rows.collect::<rusqlite::Result<_>>()?)
-        })
+        })?;
+        Ok(all
+            .into_iter()
+            .filter(|(s, _)| !hidden.contains(s))
+            .collect())
     }
 
     /// Watch history, newest session first.
     pub fn history(&self, limit: usize) -> Result<Vec<HistoryEntry>> {
+        let (hide, mut args) = match hidden_sql("source_id", &self.hidden_sources()) {
+            Some((sql, args)) => (
+                format!("WHERE media_id NOT IN (SELECT id FROM media WHERE NOT ({sql}))"),
+                args,
+            ),
+            None => (String::new(), Vec::new()),
+        };
+        args.push(Value::Integer(limit_i64(limit)));
         self.with(|c| {
-            let mut stmt = c.prepare_cached(
-                "SELECT id, media_id, started_at, updated_at, position, completed FROM history
-                 ORDER BY started_at DESC, id DESC LIMIT ?1",
-            )?;
-            let rows = stmt.query_map([limit_i64(limit)], |r| {
+            let mut stmt = c.prepare_cached(&format!(
+                "SELECT id, media_id, started_at, updated_at, position, completed FROM history {hide}
+                 ORDER BY started_at DESC, id DESC LIMIT ?"
+            ))?;
+            let rows = stmt.query_map(params_from_iter(args), |r| {
                 Ok(HistoryEntry {
                     id: SessionId(r.get(0)?),
                     media_id: MediaId(r.get(1)?),
@@ -1452,6 +1514,47 @@ mod tests {
         assert!(lib.update_playback(SessionId(999), 1.0, false).is_err());
         lib.clear_history().unwrap();
         assert!(lib.history(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn hidden_sources_are_left_out_of_listings() {
+        let lib = lib();
+        let mine = add(&lib, "/mine.mp4");
+        let nas = lib
+            .upsert(&MediaUpsert::new("smb://nas/v/x.mp4", "nas"))
+            .unwrap()
+            .id;
+        for id in [mine, nas] {
+            let s = lib.start_playback(id).unwrap();
+            lib.update_playback(s, 5.0, false).unwrap();
+        }
+        let ids = |r: Vec<MediaRecord>| r.into_iter().map(|r| r.id).collect::<Vec<_>>();
+        let all = crate::Query::default();
+        assert_eq!(lib.count(&all).unwrap(), 2);
+
+        lib.set_hidden_sources(vec!["nas".into()]);
+        assert_eq!(ids(lib.search(&all).unwrap()), vec![mine]);
+        assert_eq!(lib.count(&all).unwrap(), 1);
+        assert_eq!(lib.count(&crate::Query::text("x")).unwrap(), 0);
+        assert_eq!(ids(lib.continue_watching(10).unwrap()), vec![mine]);
+        assert_eq!(ids(lib.recently_added(10).unwrap()), vec![mine]);
+        let history: Vec<MediaId> = lib
+            .history(10)
+            .unwrap()
+            .iter()
+            .map(|h| h.media_id)
+            .collect();
+        assert_eq!(history, vec![mine]);
+        assert!(lib.sources().unwrap().iter().all(|(s, _)| s != "nas"));
+        // Still reachable directly (what is playing keeps saving progress).
+        assert!(lib.get(nas).unwrap().is_some());
+        // Clones share the setting.
+        assert_eq!(lib.clone().count(&all).unwrap(), 1);
+
+        lib.set_hidden_sources(Vec::new());
+        assert_eq!(lib.count(&all).unwrap(), 2);
+        assert_eq!(lib.history(10).unwrap().len(), 2);
+        assert_eq!(lib.continue_watching(10).unwrap().len(), 2);
     }
 
     #[test]

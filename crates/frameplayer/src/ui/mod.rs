@@ -91,6 +91,18 @@ pub enum Action {
     RemoveFolder(usize),
     AddSource(SourceConfig),
     RemoveSource(String),
+    /// Unlock a source with its PIN (the form says when it is wrong).
+    UnlockSource {
+        source: String,
+        pin: String,
+    },
+    /// Lock a source with a PIN again.
+    LockSource(String),
+    /// Give a source a PIN, or take it away (`None`).
+    SetSourcePin {
+        source: String,
+        pin: Option<String>,
+    },
     Browse {
         source: String,
         location: Option<String>,
@@ -160,6 +172,20 @@ pub struct Browse {
     pub entries: Vec<Entry>,
     pub loading: bool,
     pub error: Option<String>,
+}
+
+/// The PIN form of the Sources page.
+#[derive(Default)]
+pub struct PinForm {
+    pub source: String,
+    /// The source's name, for the title.
+    pub name: String,
+    /// Setting a new PIN (entered twice); else unlocking.
+    pub set: bool,
+    pub pin: String,
+    pub confirm: String,
+    /// The last PIN entered was wrong.
+    pub wrong: bool,
 }
 
 /// Add-source form.
@@ -234,6 +260,10 @@ pub struct UiState {
     pub details: Option<MediaId>,
     pub browse: Option<Browse>,
     pub source_form: Option<SourceForm>,
+    /// Entering a source's PIN (to unlock it, or to set one).
+    pub pin_form: Option<PinForm>,
+    /// Sources with a PIN that were unlocked since FramePlayer started.
+    pub unlocked_sources: std::collections::HashSet<String>,
     pub dlna_found: Vec<fp_sources::DlnaDevice>,
     pub dlna_searching: bool,
     pub new_folder: String,
@@ -283,6 +313,8 @@ impl Default for UiState {
             details: None,
             browse: None,
             source_form: None,
+            pin_form: None,
+            unlocked_sources: Default::default(),
             dlna_found: Vec::new(),
             dlna_searching: false,
             new_folder: String::new(),

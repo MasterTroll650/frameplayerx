@@ -25,6 +25,13 @@ touch -d 2026-09-02 "$home/Videos/Garden Party.mp4"
 touch -d 2025-11-20 "$home/Videos/Mountain Lake_360.webm"
 touch -d 2026-06-30 "$home/Videos/City Lights_180_SBS.webm"
 touch -d 2026-01-08 "$home/Videos/Aurora Timelapse_360_TB.mkv"
+# A source to lock with a PIN.
+mkdir -p "$home/Private" "$home/.config/frameplayer"
+cp "$data/camera_clip.mp4" "$home/Private/Rooftop.mp4"
+(umask 077 && cat >"$home/.config/frameplayer/sources.json" <<EOF
+[{"type": "local", "id": "private", "name": "Private videos", "root": "$home/Private"}]
+EOF
+)
 
 script="$home/ui.fps"
 cat >"$script" <<EOF
@@ -43,6 +50,17 @@ panel main browse
 browse-sort newest
 panel main browse-newest
 browse-sort name
+# A source locked with a PIN: its row, the unlock form, its PIN settings.
+lock private 2468
+screen sources
+panel main sources-locked
+pin-form private
+panel main source-unlock
+pin-form private wrong
+panel main source-unlock-wrong
+unlock private 2468
+pin-form private set
+panel main source-pin
 screen settings playback
 panel main settings-playback
 screen settings passthrough

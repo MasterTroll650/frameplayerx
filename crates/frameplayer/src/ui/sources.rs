@@ -2,7 +2,7 @@
 
 use super::theme::{self, Weight};
 use super::widgets::{self, Kind, Tip};
-use super::{Action, SourceForm, View, fmt_date, fmt_size, fmt_time, icons};
+use super::{Action, PinForm, SourceForm, View, fmt_date, fmt_size, fmt_time, icons};
 use crate::playback::OpenRequest;
 use egui::{Align, Align2, Color32, Layout, RichText, Sense, Vec2};
 use fp_core::source::EntryKind;
@@ -58,7 +58,20 @@ fn icon_tile(ui: &mut egui::Ui, icon: &str, size: f32, color: Color32) {
     );
 }
 
+/// A source's PIN state on the Sources page.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lock {
+    /// No PIN (and the built-in sources, which can't have one).
+    None,
+    Locked,
+    Unlocked,
+}
+
 pub fn sources(ui: &mut egui::Ui, v: &mut View) {
+    if v.state.pin_form.is_some() {
+        pin_form(ui, v);
+        return;
+    }
     if v.state.source_form.is_some() {
         add_form(ui, v);
         return;
@@ -78,7 +91,12 @@ pub fn sources(ui: &mut egui::Ui, v: &mut View) {
         },
     );
     egui::ScrollArea::vertical().show(ui, |ui| {
-        let all: Vec<(String, String, String, &'static str, bool)> =
+        let lock = |id: &str| match v.settings.source_pins.contains_key(id) {
+            false => Lock::None,
+            true if v.state.unlocked_sources.contains(id) => Lock::Unlocked,
+            true => Lock::Locked,
+        };
+        let all: Vec<(String, String, String, &'static str, bool, Lock)> =
             crate::services::builtin_sources()
                 .iter()
                 .map(|c| {
@@ -93,22 +111,31 @@ pub fn sources(ui: &mut egui::Ui, v: &mut View) {
                         c.describe(),
                         icon,
                         true,
+                        Lock::None,
                     )
                 })
                 .chain(v.services.source_configs.iter().map(|c| {
+                    let lock = lock(c.id());
+                    // A locked source's address can say what is in it.
+                    let desc = if lock == Lock::Locked {
+                        format!("{} · Locked with a PIN", c.kind().label())
+                    } else {
+                        format!("{} · {}", c.kind().label(), c.describe())
+                    };
                     (
                         c.id().to_string(),
                         c.name().to_string(),
-                        format!("{} · {}", c.kind().label(), c.describe()),
+                        desc,
                         kind_icon(c.kind()),
                         false,
+                        lock,
                     )
                 }))
                 .collect();
         widgets::section_label(ui, "On this device and your network");
         ui.add_space(4.0);
         widgets::card(ui, |ui| {
-            for (i, (id, name, desc, icon, builtin)) in all.into_iter().enumerate() {
+            for (i, (id, name, desc, icon, builtin, lock)) in all.into_iter().enumerate() {
                 if i > 0 {
                     let x = ui.max_rect().x_range();
                     ui.painter().hline(
@@ -138,12 +165,48 @@ pub fn sources(ui: &mut egui::Ui, v: &mut View) {
                                 );
                             });
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if lock == Lock::Locked {
+                                    if widgets::button_sized(
+                                        ui,
+                                        Some(icons::LOCK),
+                                        "Unlock",
+                                        Kind::Secondary,
+                                        44.0,
+                                    )
+                                    .clicked()
+                                    {
+                                        v.state.pin_form = Some(PinForm {
+                                            source: id.clone(),
+                                            name: name.clone(),
+                                            ..Default::default()
+                                        });
+                                    }
+                                    return;
+                                }
                                 if !builtin
                                     && widgets::icon_button(ui, icons::TRASH, 44.0, false)
                                         .tip("Remove")
                                         .clicked()
                                 {
                                     v.actions.push(Action::RemoveSource(id.clone()));
+                                }
+                                if !builtin {
+                                    let (icon, tip) = if lock == Lock::Unlocked {
+                                        (icons::LOCK, "Lock, or change the PIN")
+                                    } else {
+                                        (icons::LOCK_OPEN, "Lock with a PIN")
+                                    };
+                                    if widgets::icon_button(ui, icon, 44.0, false)
+                                        .tip(tip)
+                                        .clicked()
+                                    {
+                                        v.state.pin_form = Some(PinForm {
+                                            source: id.clone(),
+                                            name: name.clone(),
+                                            set: true,
+                                            ..Default::default()
+                                        });
+                                    }
                                 }
                                 if widgets::button_sized(
                                     ui,
@@ -165,6 +228,124 @@ pub fn sources(ui: &mut egui::Ui, v: &mut View) {
             }
         });
     });
+}
+
+/// Unlocks a source, or sets, changes or removes its PIN.
+fn pin_form(ui: &mut egui::Ui, v: &mut View) {
+    let has_pin = v
+        .state
+        .pin_form
+        .as_ref()
+        .is_some_and(|f| v.settings.source_pins.contains_key(&f.source));
+    let Some(f) = v.state.pin_form.as_mut() else {
+        return;
+    };
+    let mut close = false;
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        if widgets::icon_button(ui, icons::ARROW_LEFT, 48.0, false)
+            .tip("Cancel")
+            .clicked()
+        {
+            close = true;
+        }
+        let title = match (f.set, has_pin) {
+            (false, _) => format!("Unlock {}", f.name),
+            (true, false) => format!("Lock {} with a PIN", f.name),
+            (true, true) => format!("PIN of {}", f.name),
+        };
+        ui.label(
+            RichText::new(title)
+                .font(theme::font(Weight::Bold, 30.0))
+                .color(theme::TEXT),
+        );
+    });
+    ui.add_space(8.0);
+    let help = if f.set {
+        "While it is locked, it can't be browsed and its videos are hidden from the \
+         library, history, search and the remotes. The PIN unlocks it until \
+         FramePlayer restarts or you lock it again."
+    } else {
+        "Enter its PIN."
+    };
+    ui.label(RichText::new(help).color(theme::TEXT_2));
+    ui.add_space(12.0);
+    let field = |ui: &mut egui::Ui, value: &mut String| {
+        let r = ui.add(
+            egui::TextEdit::singleline(value)
+                .margin(egui::Margin::symmetric(12, 9))
+                .password(true)
+                .char_limit(*crate::pin::LENGTH.end())
+                .font(theme::font(Weight::Regular, 17.0))
+                .desired_width(220.0),
+        );
+        value.retain(|c| c.is_ascii_digit());
+        r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+    };
+    let mut submit = false;
+    widgets::rows(ui, |r| {
+        let label = if f.set && has_pin { "New PIN" } else { "PIN" };
+        r.row(label, Some("4 to 8 digits."), |ui| {
+            submit |= field(ui, &mut f.pin);
+        });
+        if f.set {
+            r.row("PIN again", None, |ui| {
+                submit |= field(ui, &mut f.confirm);
+            });
+        }
+    });
+    ui.add_space(12.0);
+    let valid = crate::pin::valid(&f.pin);
+    let matches = !f.set || f.pin == f.confirm;
+    ui.horizontal(|ui| {
+        let label = if f.set { "Save PIN" } else { "Unlock" };
+        let icon = if f.set { icons::LOCK } else { icons::LOCK_OPEN };
+        let ok = valid && matches;
+        if ui
+            .add_enabled_ui(ok, |ui| {
+                widgets::button(ui, Some(icon), label, Kind::Primary)
+            })
+            .inner
+            .clicked()
+            || (submit && ok)
+        {
+            v.actions.push(if f.set {
+                Action::SetSourcePin {
+                    source: f.source.clone(),
+                    pin: Some(f.pin.clone()),
+                }
+            } else {
+                Action::UnlockSource {
+                    source: f.source.clone(),
+                    pin: f.pin.clone(),
+                }
+            });
+        }
+        if f.set && has_pin {
+            if widgets::button(ui, Some(icons::LOCK), "Lock now", Kind::Secondary).clicked() {
+                v.actions.push(Action::LockSource(f.source.clone()));
+                close = true;
+            }
+            if widgets::button(ui, Some(icons::TRASH), "Remove PIN", Kind::Danger).clicked() {
+                v.actions.push(Action::SetSourcePin {
+                    source: f.source.clone(),
+                    pin: None,
+                });
+            }
+        }
+        if f.wrong {
+            ui.label(RichText::new("Wrong PIN").color(theme::WARN));
+        } else if f.set && !matches && f.confirm.len() >= f.pin.len() && !f.confirm.is_empty() {
+            ui.label(RichText::new("The PINs don't match").color(theme::WARN));
+        }
+    });
+    if !f.pin.is_empty() {
+        f.wrong = false;
+    }
+    if close {
+        v.state.pin_form = None;
+    }
 }
 
 fn browse(ui: &mut egui::Ui, v: &mut View) {

@@ -403,6 +403,48 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
+            // Adds a source's folder to the library: `import SOURCE [LOCATION]`.
+            Some("import") => {
+                let source = parts.get(1).ok_or("import needs a source")?.to_string();
+                let location = parts.get(2).map(|l| l.to_string());
+                self.app
+                    .apply(crate::ui::Action::ImportFolder { source, location });
+            }
+            // Gives a source a PIN, which locks it: `lock SOURCE PIN`.
+            Some("lock") => {
+                let source = parts.get(1).ok_or("lock needs a source")?.to_string();
+                let pin = parts.get(2).ok_or("lock needs a PIN")?.to_string();
+                self.app.apply(crate::ui::Action::SetSourcePin {
+                    source,
+                    pin: Some(pin),
+                });
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // `unlock SOURCE PIN`, as the PIN form does.
+            Some("unlock") => {
+                let source = parts.get(1).ok_or("unlock needs a source")?.to_string();
+                let pin = parts.get(2).ok_or("unlock needs a PIN")?.to_string();
+                self.app
+                    .apply(crate::ui::Action::UnlockSource { source, pin });
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // The PIN form of a source: `pin-form SOURCE [set] [wrong]`.
+            Some("pin-form") => {
+                let source = parts.get(1).ok_or("pin-form needs a source")?.to_string();
+                let name = self.app.source_name(&source);
+                self.app.ui.screen = crate::ui::Screen::Sources;
+                self.app.ui.pin_form = Some(crate::ui::PinForm {
+                    source,
+                    name,
+                    set: parts.contains(&"set"),
+                    wrong: parts.contains(&"wrong"),
+                    ..Default::default()
+                });
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
             Some("shot") => self.save(parts.get(1).copied().unwrap_or("shot"), false)?,
             Some("sbs") => self.save(parts.get(1).copied().unwrap_or("sbs"), true)?,
             Some(c) => return Err(format!("unknown script command {c:?}").into()),
