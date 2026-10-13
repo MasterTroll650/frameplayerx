@@ -3,6 +3,15 @@ name: ci
 on:
   push:
   pull_request:
+  # Releases without pushing a tag first: run on the branch to release, with
+  # the tag (v + the version in crates/frameplayer/Cargo.toml); the release
+  # step creates the tag on the commit it built.
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Tag to release (v<version in crates/frameplayer/Cargo.toml>)"
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -106,7 +115,7 @@ jobs:
           path: out/
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
     needs: [check, installer]
     runs-on: ubuntu-24.04
     permissions:
@@ -124,6 +133,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: src
+      - name: Check the tag matches the version
+        env:
+          TAG: ${{ inputs.release || github.ref_name }}
+        run: |
+          version="$(grep -m1 '^version' src/crates/frameplayer/Cargo.toml | cut -d'"' -f2)"
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::release $TAG does not match FramePlayer $version"
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
       - name: Sign the update manifest
         env:
@@ -141,5 +159,7 @@ jobs:
           cargo run --manifest-path src/Cargo.toml --release -p fp-updater --bin fp-release -- verify dist/manifest.json
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           files: dist/*
           generate_release_notes: true
