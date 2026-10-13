@@ -1842,6 +1842,9 @@ impl App {
 
         // Quads: panels back to front, then pointers.
         let mut quads = Vec::new();
+        // Subtitles fade in like the panels (a panel that never fades in is
+        // never drawn).
+        self.subs.update_fade(input.dt);
         if self.subs.visible {
             quads.extend(self.subs.quad());
         }
