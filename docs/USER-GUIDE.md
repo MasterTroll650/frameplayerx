@@ -65,6 +65,11 @@ padlock then locks it again at once, changes the PIN or removes it.
 Removing the source also removes its PIN. This keeps guests out, it doesn't
 encrypt anything: the files themselves stay as they are.
 
+To lock one folder of a NAS, add that folder as its own source
+(`smb://nas/videos/private`) and lock it. Everything in it is then hidden
+everywhere, also when browsing a source for the whole share, and from the
+library even if it was added through that source.
+
 ### microSD cards and USB drives (VR180 and everything else)
 
 FramePlayer notices when a card or drive is inserted (a "Found drive"

@@ -26,26 +26,25 @@ pub fn locked_ids(pins: &BTreeMap<String, String>, unlocked: &HashSet<String>) -
         .collect()
 }
 
-/// Whether `location` is a video of source `cfg`: under its folder or
-/// address, or for servers (DLNA, DeoVR, HereSphere) on the same server.
+/// Whether `location` is a video of source `cfg` (see [`source_root`]).
 pub fn source_contains(cfg: &fp_sources::SourceConfig, location: &str) -> bool {
+    fp_library::Hidden {
+        locations: vec![source_root(cfg)],
+        ..Default::default()
+    }
+    .hides("", location)
+}
+
+/// The folder or address a source's videos are under: its folder or
+/// address, or for servers (DLNA, DeoVR, HereSphere) the server.
+pub fn source_root(cfg: &fp_sources::SourceConfig) -> String {
     use fp_sources::SourceConfig as C;
-    let under = |root: &str| {
-        let root = root.trim_end_matches('/');
-        !root.is_empty()
-            && location
-                .get(..root.len())
-                .is_some_and(|p| p.eq_ignore_ascii_case(root))
-            && matches!(location.as_bytes().get(root.len()), None | Some(b'/'))
-    };
     match cfg {
-        C::Local(c) => under(&c.root.to_string_lossy()),
-        C::Http(c) | C::WebDav(c) => under(&c.url),
-        C::Smb(c) => under(&fp_sources::smb::smb_url(
-            &c.host, c.port, &c.share, &c.path,
-        )),
-        C::Dlna(c) => under(origin(&c.location)),
-        C::DeoVr(c) | C::HereSphere(c) => under(origin(&c.url)),
+        C::Local(c) => c.root.to_string_lossy().into_owned(),
+        C::Http(c) | C::WebDav(c) => c.url.clone(),
+        C::Smb(c) => fp_sources::smb::smb_url(&c.host, c.port, &c.share, &c.path),
+        C::Dlna(c) => origin(&c.location).to_string(),
+        C::DeoVr(c) | C::HereSphere(c) => origin(&c.url).to_string(),
     }
 }
 

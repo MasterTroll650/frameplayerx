@@ -337,7 +337,7 @@ impl RemoteLibrary for WebLibrary {
     fn thumbnail_path(&self, id: i64) -> Option<PathBuf> {
         let r = self.0.get(fp_library::MediaId(id)).ok().flatten()?;
         // Not for videos of a source locked with a PIN.
-        if self.0.hidden_sources().contains(&r.source_id) {
+        if self.0.hidden().hides(&r.source_id, &r.location) {
             return None;
         }
         r.thumbnail

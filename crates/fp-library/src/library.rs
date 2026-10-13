@@ -39,19 +39,91 @@ pub const WATCHED_FRACTION: f64 = 0.9;
 #[derive(Clone)]
 pub struct Library {
     conn: Arc<Mutex<Connection>>,
-    /// Source ids whose videos listings leave out (see
-    /// [`Library::set_hidden_sources`]); shared by every clone.
-    hidden: Arc<RwLock<Vec<String>>>,
+    /// Videos listings leave out (see [`Library::set_hidden`]); shared by
+    /// every clone.
+    hidden: Arc<RwLock<Hidden>>,
 }
 
-/// `column NOT IN (?, ...)` with its parameters; `None` when nothing is
-/// hidden, so queries are unchanged then.
-pub(crate) fn hidden_sql(column: &str, hidden: &[String]) -> Option<(String, Vec<Value>)> {
+/// Videos left out of listings: those of some sources, and those under
+/// some folders or addresses whichever source added them (the app hides
+/// sources locked with a PIN, and everything under their addresses).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Hidden {
+    /// Source ids.
+    pub sources: Vec<String>,
+    /// Folders or addresses (`/media/x/Private`, `smb://nas/share/dir`):
+    /// the location itself and everything under it, ignoring ASCII case.
+    pub locations: Vec<String>,
+}
+
+impl Hidden {
+    /// Nothing hidden.
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty() && self.locations.is_empty()
+    }
+
+    /// Whether a video from `source_id` at `location` is hidden; the same
+    /// test as the SQL from [`hidden_sql`].
+    pub fn hides(&self, source_id: &str, location: &str) -> bool {
+        self.sources.iter().any(|s| s == source_id)
+            || self.locations.iter().any(|root| under(root, location))
+    }
+}
+
+/// Whether `location` is `root` or under it (ignoring ASCII case).
+fn under(root: &str, location: &str) -> bool {
+    let root = root.trim_end_matches('/');
+    !root.is_empty()
+        && location
+            .get(..root.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(root))
+        && matches!(location.as_bytes().get(root.len()), None | Some(b'/'))
+}
+
+/// `root` as a LIKE pattern matching only itself.
+fn like_literal(root: &str) -> String {
+    let mut out = String::with_capacity(root.len());
+    for c in root.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The condition keeping only what `hidden` does not hide, for a media
+/// table whose columns are prefixed `prefix` (`"m."` or `""`), with its
+/// parameters; `None` when nothing is hidden, so queries are unchanged then.
+pub(crate) fn hidden_sql(prefix: &str, hidden: &Hidden) -> Option<(String, Vec<Value>)> {
     if hidden.is_empty() {
         return None;
     }
-    let sql = format!("{column} NOT IN ({})", vec!["?"; hidden.len()].join(","));
-    Some((sql, hidden.iter().cloned().map(Value::Text).collect()))
+    let mut clauses = Vec::new();
+    let mut args = Vec::new();
+    if !hidden.sources.is_empty() {
+        clauses.push(format!(
+            "{prefix}source_id NOT IN ({})",
+            vec!["?"; hidden.sources.len()].join(",")
+        ));
+        args.extend(hidden.sources.iter().cloned().map(Value::Text));
+    }
+    for root in &hidden.locations {
+        let root = like_literal(root.trim_end_matches('/'));
+        if root.is_empty() {
+            continue;
+        }
+        // LIKE ignores ASCII case, as SMB and DLNA hosts and SMB paths do.
+        clauses.push(format!(
+            "NOT ({prefix}location LIKE ? ESCAPE '\\' OR {prefix}location LIKE ? ESCAPE '\\')"
+        ));
+        args.push(Value::Text(root.clone()));
+        args.push(Value::Text(format!("{root}/%")));
+    }
+    if clauses.is_empty() {
+        return None;
+    }
+    Some((clauses.join(" AND "), args))
 }
 
 impl std::fmt::Debug for Library {
@@ -620,16 +692,16 @@ impl Library {
         })
     }
 
-    /// Leaves the videos of these sources out of searches, counts, continue
-    /// watching, recently added, history and [`sources`](Self::sources)
-    /// until changed (the app hides sources locked with a PIN). Nothing is
-    /// stored; lookups by id or location still find them.
-    pub fn set_hidden_sources(&self, ids: Vec<String>) {
-        *self.hidden.write().unwrap_or_else(PoisonError::into_inner) = ids;
+    /// Leaves these videos out of searches, counts, continue watching,
+    /// recently added, history and [`sources`](Self::sources) (hidden
+    /// source ids only) until changed. Nothing is stored; lookups by id or
+    /// location still find them.
+    pub fn set_hidden(&self, hidden: Hidden) {
+        *self.hidden.write().unwrap_or_else(PoisonError::into_inner) = hidden;
     }
 
-    /// The ids passed to [`set_hidden_sources`](Self::set_hidden_sources).
-    pub fn hidden_sources(&self) -> Vec<String> {
+    /// What [`set_hidden`](Self::set_hidden) hides.
+    pub fn hidden(&self) -> Hidden {
         self.hidden
             .read()
             .unwrap_or_else(PoisonError::into_inner)
@@ -691,7 +763,7 @@ impl Library {
     /// The hidden-source condition followed by `AND`, and its parameters;
     /// empty when nothing is hidden.
     fn hidden_and(&self) -> (String, Vec<Value>) {
-        match hidden_sql("m.source_id", &self.hidden_sources()) {
+        match hidden_sql("m.", &self.hidden()) {
             Some((sql, args)) => (format!("{sql} AND"), args),
             None => (String::new(), Vec::new()),
         }
@@ -723,7 +795,7 @@ impl Library {
 
     /// Distinct source ids with their number of (non-missing) videos.
     pub fn sources(&self) -> Result<Vec<(String, usize)>> {
-        let hidden = self.hidden_sources();
+        let hidden = self.hidden().sources;
         let all: Vec<(String, usize)> = self.with(|c| {
             let mut stmt = c.prepare_cached(
                 "SELECT source_id, SUM(missing = 0) FROM media GROUP BY source_id ORDER BY source_id",
@@ -741,7 +813,7 @@ impl Library {
 
     /// Watch history, newest session first.
     pub fn history(&self, limit: usize) -> Result<Vec<HistoryEntry>> {
-        let (hide, mut args) = match hidden_sql("source_id", &self.hidden_sources()) {
+        let (hide, mut args) = match hidden_sql("", &self.hidden()) {
             Some((sql, args)) => (
                 format!("WHERE media_id NOT IN (SELECT id FROM media WHERE NOT ({sql}))"),
                 args,
@@ -1532,7 +1604,10 @@ mod tests {
         let all = crate::Query::default();
         assert_eq!(lib.count(&all).unwrap(), 2);
 
-        lib.set_hidden_sources(vec!["nas".into()]);
+        lib.set_hidden(Hidden {
+            sources: vec!["nas".into()],
+            ..Default::default()
+        });
         assert_eq!(ids(lib.search(&all).unwrap()), vec![mine]);
         assert_eq!(lib.count(&all).unwrap(), 1);
         assert_eq!(lib.count(&crate::Query::text("x")).unwrap(), 0);
@@ -1551,10 +1626,49 @@ mod tests {
         // Clones share the setting.
         assert_eq!(lib.clone().count(&all).unwrap(), 1);
 
-        lib.set_hidden_sources(Vec::new());
+        lib.set_hidden(Hidden::default());
         assert_eq!(lib.count(&all).unwrap(), 2);
         assert_eq!(lib.history(10).unwrap().len(), 2);
         assert_eq!(lib.continue_watching(10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn hidden_folders_are_left_out_whichever_source_added_them() {
+        let lib = lib();
+        let up = |loc: &str, source: &str| lib.upsert(&MediaUpsert::new(loc, source)).unwrap().id;
+        // The whole share is a source, and so is its private folder.
+        let public = up("smb://nas/Videos/Public/a.mp4", "share");
+        let private = up("smb://nas/Videos/Private/b.mp4", "share");
+        let deeper = up("smb://NAS/videos/private/trip/c.mp4", "share");
+        let own = up("smb://nas/Videos/Private/d.mp4", "private");
+        let lookalike = up("smb://nas/Videos/PrivateParty/e.mp4", "share");
+        let wild = up("/media/x_y%/f.mp4", "local");
+        let wild_miss = up("/media/xAyB/g.mp4", "local");
+        for id in [public, private, deeper, own, lookalike, wild, wild_miss] {
+            let s = lib.start_playback(id).unwrap();
+            lib.update_playback(s, 5.0, false).unwrap();
+        }
+        lib.set_hidden(Hidden {
+            sources: vec!["private".into()],
+            locations: vec!["smb://nas/Videos/Private/".into(), "/media/x_y%".into()],
+        });
+        let mut ids: Vec<MediaId> = lib
+            .search(&crate::Query::default())
+            .unwrap()
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec![public, lookalike, wild_miss]);
+        assert_eq!(lib.count(&crate::Query::text("trip")).unwrap(), 0);
+        assert_eq!(lib.continue_watching(10).unwrap().len(), 3);
+        assert_eq!(lib.recently_added(10).unwrap().len(), 3);
+        assert_eq!(lib.history(10).unwrap().len(), 3);
+        let h = lib.hidden();
+        assert!(h.hides("share", "smb://nas/Videos/Private/b.mp4"));
+        assert!(h.hides("share", "smb://NAS/videos/private"));
+        assert!(!h.hides("share", "smb://nas/Videos/PrivateParty/e.mp4"));
+        assert!(h.hides("private", "anything"));
     }
 
     #[test]
