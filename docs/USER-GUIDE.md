@@ -169,9 +169,11 @@ picture. Play/pause and seeking are under either thumb.
 | Hold grip + trigger, move | Drag the picture (the dome follows your hand) | The same |
 | Trigger | Click; on empty space, show or hide the controls | The same |
 
-Both grips together also recenter. Point at the library or adjust panel and
-hold grip to move it; it stays where you leave it. The format on the control
-bar (for example 180° SBS) opens the adjust panel's Format tab.
+Both grips together also recenter. Point at the library or adjust panel (or
+the keyboard under it) and hold grip to move it; it stays where you leave
+it. Recentering brings them back in front of you, at the height you left
+them. The format on the control bar (for example 180° SBS) opens the adjust
+panel's Format tab.
 
 Every button and thumbstick direction above can be changed in Settings ›
 Controller (tap a row, pick an action; Reset to defaults puts this layout
@@ -182,8 +184,8 @@ grip + trigger drags, both grips and menu paging are fixed.
 Drags, turns, tilts and zoom count as adjustments: save them for that video
 under ⚙, or press the left thumbstick to undo them.
 
-Text fields bring up a keyboard in front of you; **#+=** switches it to
-symbols (`! # $ % ( ) [ ] { }` and the rest) and **abc** back. You can also
+Text fields bring up a keyboard below the panel you type in; **#+=**
+switches it to symbols (`! # $ % ( ) [ ] { }` and the rest) and **abc** back. You can also
 type on your phone through the web remote.
 
 ## Passthrough videos
