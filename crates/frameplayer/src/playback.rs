@@ -353,7 +353,8 @@ impl Playback {
 
     /// Every few seconds: when software decoding falls behind, says why in
     /// the control bar (the picture stutters with no other explanation).
-    pub fn watch_decoding(&mut self) {
+    /// `hardware_on` is the hardware decoding setting.
+    pub fn watch_decoding(&mut self, hardware_on: bool) {
         if self.decode_check.0.elapsed().as_secs_f64() < DECODE_CHECK_SECS {
             return;
         }
@@ -378,13 +379,27 @@ impl Playback {
         let Some(v) = self.player.info().video_stream() else {
             return;
         };
-        let notice = slow_decode_notice(v);
+        let notice = slow_decode_notice(v, hardware_on, st.hardware_error.as_deref());
         log::info!(
-            "software decoding ({}) behind: {} stalls, {} of {} frames dropped",
+            "software decoding ({}, {} {}x{} {}) behind: {} stalls, {} of {} frames dropped; \
+             hardware: {}",
             st.video_decoder,
+            v.codec,
+            v.width,
+            v.height,
+            if v.pixel_format.is_empty() {
+                "pixel format unknown"
+            } else {
+                &v.pixel_format
+            },
             st.stalls - stalls,
             st.frames_dropped - dropped,
-            st.frames_shown - shown + st.frames_dropped - dropped
+            st.frames_shown - shown + st.frames_dropped - dropped,
+            match (&st.hardware_error, hardware_on) {
+                (Some(e), _) => e.as_str(),
+                (None, false) => "off in Settings",
+                (None, true) => "not tried",
+            }
         );
         self.notice = Some(notice);
     }
@@ -525,7 +540,13 @@ fn falling_behind(stalls: u64, dropped: u64, shown: u64) -> bool {
 }
 
 /// Why a software-decoded video stutters, and what plays smoothly instead.
-pub(crate) fn slow_decode_notice(v: &StreamInfo) -> String {
+/// `hardware_on` is the hardware decoding setting; `hardware_error` why the
+/// hardware decoder, when tried, is not decoding.
+pub(crate) fn slow_decode_notice(
+    v: &StreamInfo,
+    hardware_on: bool,
+    hardware_error: Option<&str>,
+) -> String {
     let codec = match v.codec.as_str() {
         "hevc" => "HEVC".to_string(),
         "h264" => "H.264".to_string(),
@@ -533,16 +554,36 @@ pub(crate) fn slow_decode_notice(v: &StreamInfo) -> String {
         "vp9" => "VP9".to_string(),
         c => c.to_uppercase(),
     };
-    let desc = if v.bit_depth > 8 {
-        format!("{}-bit {codec}", v.bit_depth)
-    } else {
-        codec
+    // The hardware decodes 8-bit 4:2:0 only: say which of the two it isn't.
+    let chroma = v.chroma();
+    let desc = match (v.bit_depth > 8, chroma != "4:2:0") {
+        (true, true) => format!("{}-bit {chroma} {codec}", v.bit_depth),
+        (true, false) => format!("{}-bit {codec}", v.bit_depth),
+        (false, true) => format!("{chroma} {codec}"),
+        (false, false) => codec,
     };
     let hardware_codec = matches!(v.codec.as_str(), "hevc" | "h264" | "vp9");
-    if hardware_codec && v.bit_depth <= 8 {
+    if !hardware_codec || v.bit_depth > 8 || chroma != "4:2:0" {
+        return format!(
+            "No hardware decoding for {desc}, so it stutters. 8-bit 4:2:0 H.265 plays smoothly"
+        );
+    }
+    if !hardware_on {
+        return format!("{desc} in software stutters: turn on hardware decoding in Settings");
+    }
+    // Out of decoder memory or sessions: other apps (Steam's streaming
+    // among them) hold the hardware decoder.
+    let busy = hardware_error.is_none_or(|e| {
+        let e = e.to_ascii_lowercase();
+        e.contains("memory") || e.contains("busy") || e.contains("no free")
+    });
+    if busy {
         format!("Hardware decoder busy: {desc} in software stutters")
     } else {
-        format!("No hardware decoding for {desc}, so it stutters. 8-bit H.265 plays smoothly")
+        format!(
+            "The hardware decoder can't play this {desc} ({}x{}), so it stutters in software",
+            v.width, v.height
+        )
     }
 }
 
@@ -592,20 +633,37 @@ mod tests {
             height: 4096,
             fps: 59.94,
             bit_depth,
+            pixel_format: if bit_depth > 8 {
+                "yuv420p10le".into()
+            } else {
+                "yuv420p".into()
+            },
+            interlaced: false,
             transfer: Default::default(),
             rotation: 0.0,
             sample_rate: 0,
             channels: 0,
             ambisonic: false,
         };
-        let n = slow_decode_notice(&stream("hevc", 10));
+        let n = slow_decode_notice(&stream("hevc", 10), true, None);
         assert!(
-            n.contains("10-bit HEVC") && n.contains("8-bit H.265"),
+            n.contains("10-bit HEVC") && n.contains("8-bit 4:2:0 H.265"),
             "{n}"
         );
-        let n = slow_decode_notice(&stream("av1", 8));
+        let n = slow_decode_notice(&stream("av1", 8), true, None);
         assert!(n.contains("for AV1,"), "{n}");
-        let n = slow_decode_notice(&stream("hevc", 8));
+        let busy = "V4L2 REQBUFS: Cannot allocate memory (os error 12)";
+        let n = slow_decode_notice(&stream("hevc", 8), true, Some(busy));
         assert!(n.contains("busy"), "{n}");
+        // 8-bit, but 4:2:2: the hardware can't, whatever Windows says.
+        let mut s422 = stream("hevc", 8);
+        s422.pixel_format = "yuv422p".into();
+        let n = slow_decode_notice(&s422, true, None);
+        assert!(n.contains("for 4:2:2 HEVC"), "{n}");
+        let n = slow_decode_notice(&stream("hevc", 8), false, None);
+        assert!(n.contains("turn on hardware decoding"), "{n}");
+        let refused = "V4L2: stream size unknown";
+        let n = slow_decode_notice(&stream("hevc", 8), true, Some(refused));
+        assert!(n.contains("can't play this HEVC (8192x4096)"), "{n}");
     }
 }

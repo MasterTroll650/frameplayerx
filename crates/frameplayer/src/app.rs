@@ -1660,7 +1660,7 @@ impl App {
         if let Some(p) = &mut self.playback {
             p.save_progress(&self.services.library, false);
             p.save_key(&self.services.library, false);
-            p.watch_decoding();
+            p.watch_decoding(self.settings.hardware_decoding);
         }
         self.publish_status();
 

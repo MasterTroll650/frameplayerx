@@ -117,21 +117,29 @@ IPD/depth, stereo alignment, picture controls, subtitle depth and
 keyframes (adjustments that change smoothly along the video).
 
 Codecs: H.264, HEVC (8/10-bit, HDR10/HLG tone-mapped), AV1, VP9, VP8,
-MPEG-4, MPEG-2, ProRes. Audio: AAC, AC-3/E-AC-3, Opus, Vorbis, FLAC, MP3,
-DTS, TrueHD, PCM, and spatial (ambisonic) audio that follows your head.
+VC-1, MPEG-4, MPEG-2, ProRes. Audio: AAC, AC-3/E-AC-3, Opus, Vorbis, FLAC,
+MP3, DTS, TrueHD, PCM (Blu-ray and DVD LPCM too), and spatial (ambisonic)
+audio that follows your head.
 Subtitles: SRT, ASS/SSA, WebVTT, and embedded text or picture subtitles.
 
 ### Videos that stutter: 10-bit HEVC and AV1
 
-The Frame's hardware decoder plays 8-bit H.264 and HEVC (H.265), up to 8K.
-10-bit HEVC and AV1 have no hardware path on the Frame, so they decode on
-the CPU, which can't keep up with VR resolutions: they stutter or stop to
-buffer, and the control bar says so ("No hardware decoding for 10-bit
-HEVC"). Convert them to 8-bit HEVC once on a PC and they play smoothly.
+The Frame's hardware decoder plays 8-bit 4:2:0 H.264 and HEVC (H.265), up
+to 8K. 10-bit HEVC, 4:2:2 or 4:4:4 colour and AV1 have no hardware path on
+the Frame, so they decode on the CPU, which can't keep up with VR
+resolutions: they stutter or stop to buffer, and the control bar says why
+("No hardware decoding for 10-bit HEVC", "… for 4:2:2 HEVC"). Convert them
+to 8-bit 4:2:0 HEVC once on a PC and they play smoothly.
+
+"Hardware decoder busy" means the file is fine but the decoder had no room
+for it (Steam's own streaming uses it too). "The hardware decoder can't
+play this HEVC" means it tried and refused the file; frameplayer.log says
+why.
 
 To check a file: `ffprobe -v error -select_streams v:0 -show_entries
 stream=codec_name,profile,pix_fmt video.mp4` (`Main 10` / `yuv420p10le`
-is 10-bit).
+is 10-bit, `yuv422p` is 4:2:2), or MediaInfo's *Bit depth* and *Chroma
+subsampling*. Windows' file properties don't tell these reliably.
 
 With an NVIDIA graphics card (fast):
 

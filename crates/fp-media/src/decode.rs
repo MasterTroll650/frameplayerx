@@ -192,6 +192,9 @@ pub struct Decoder {
     replay: std::collections::VecDeque<Packet>,
     pub name: String,
     pub hardware: bool,
+    /// Why a hardware decoder that was tried is not the one decoding: its
+    /// open failed, or it failed once running.
+    pub hardware_error: Option<String>,
     pub time_base: ff::AVRational,
 }
 
@@ -223,7 +226,9 @@ impl Decoder {
         // SAFETY: par is valid for the call.
         let (codec_id, kind) = unsafe { ((*par).codec_id, (*par).codec_type) };
         let mut last_err = Error::Unsupported(format!("no decoder for codec id {codec_id}"));
+        let mut hardware_error = None;
         for cand in candidates(kind == ff::AVMEDIA_TYPE_VIDEO, codec_id, hw, native) {
+            let hardware = matches!(cand, Candidate::NativeV4l2 | Candidate::Named(_, true));
             let r = match cand {
                 Candidate::NativeV4l2 => Self::open_native(par, time_base, hw),
                 Candidate::Named(name, hardware) => {
@@ -244,9 +249,19 @@ impl Decoder {
                 }
             };
             match r {
-                Ok(d) => return Ok(d),
+                Ok(mut d) => {
+                    if !d.hardware {
+                        d.hardware_error = hardware_error;
+                    }
+                    return Ok(d);
+                }
                 Err(e) => {
                     log::info!("decoder unavailable: {e}");
+                    // The first hardware failure says most (the wrapper
+                    // tried next fails the same way, less clearly).
+                    if hardware && hardware_error.is_none() {
+                        hardware_error = Some(e.to_string());
+                    }
                     last_err = e;
                 }
             }
@@ -282,6 +297,7 @@ impl Decoder {
             replay: Default::default(),
             name,
             hardware: true,
+            hardware_error: None,
             time_base,
         })
     }
@@ -315,6 +331,7 @@ impl Decoder {
                 replay: Default::default(),
                 name,
                 hardware,
+                hardware_error: None,
                 time_base,
             };
             check(
@@ -379,6 +396,7 @@ impl Decoder {
         std::mem::swap(&mut self.ctx, &mut next.ctx);
         self.name = std::mem::take(&mut next.name);
         self.hardware = next.hardware;
+        self.hardware_error = (!next.hardware).then(|| why.to_string());
         self.replay = native.startup.take().unwrap_or_default().into();
         log::info!("now decoding with {}", self.name);
         Ok(())

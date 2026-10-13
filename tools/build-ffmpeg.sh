@@ -101,12 +101,12 @@ INI
     --enable-swscale --enable-swresample \
     --enable-protocol=file \
     --enable-demuxer=mov,matroska,mpegts,avi,flv,ogg,mp3,aac,wav,flac,srt,ass,webvtt,hls,image2,mjpeg \
-    --enable-decoder=h264,hevc,vp8,vp9,av1,libdav1d,mpeg4,mpeg2video,prores,mjpeg,png \
+    --enable-decoder=h264,hevc,vp8,vp9,av1,libdav1d,mpeg4,mpeg2video,vc1,wmv3,prores,mjpeg,png \
     --enable-decoder=h264_v4l2m2m,hevc_v4l2m2m,vp8_v4l2m2m,vp9_v4l2m2m,mpeg4_v4l2m2m \
     --enable-decoder=aac,aac_latm,ac3,eac3,mp3,mp3float,mp2,opus,vorbis,flac,alac,dca,truehd \
-    --enable-decoder=pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_s16be,pcm_s24be \
+    --enable-decoder=pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_s16be,pcm_s24be,pcm_bluray,pcm_dvd \
     --enable-decoder=srt,subrip,ass,ssa,webvtt,mov_text,pgssub,dvdsub,dvbsub \
-    --enable-parser=h264,hevc,vp8,vp9,av1,aac,aac_latm,ac3,mpegaudio,opus,vorbis,flac,mpeg4video,mpegvideo,dca,mjpeg,png \
+    --enable-parser=h264,hevc,vp8,vp9,av1,aac,aac_latm,ac3,mpegaudio,opus,vorbis,flac,mpeg4video,mpegvideo,vc1,dca,mlp,mjpeg,png \
     --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,vp9_superframe_split,extract_extradata,null \
     --extra-ldflags="-Wl,-rpath,\\\$\$ORIGIN" \
     > "$work/configure.log" 2>&1) || { tail -30 "$work/configure.log"; tail -40 "$ff_dir/ffbuild/config.log"; exit 1; }

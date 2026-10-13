@@ -37,6 +37,11 @@ pub struct StreamInfo {
     pub height: u32,
     pub fps: f64,
     pub bit_depth: u32,
+    /// FFmpeg's name for the pixel format (`yuv420p`, `yuv420p10le`), empty
+    /// when unknown.
+    pub pixel_format: String,
+    /// Coded as fields (1080i Blu-ray and TV), as far as FFmpeg can tell.
+    pub interlaced: bool,
     pub transfer: Transfer,
     /// Display rotation in degrees (from a display matrix), 0 when none.
     pub rotation: f64,
@@ -45,6 +50,29 @@ pub struct StreamInfo {
     pub channels: u32,
     /// First-order (or higher) ambisonic audio (AmbiX / ACN-SN3D).
     pub ambisonic: bool,
+}
+
+/// The stream is coded as fields: its field order is known and isn't
+/// progressive.
+pub(crate) fn interlaced(par: &ff::AVCodecParameters) -> bool {
+    !matches!(
+        par.field_order,
+        ff::AV_FIELD_UNKNOWN | ff::AV_FIELD_PROGRESSIVE
+    )
+}
+
+impl StreamInfo {
+    /// Chroma subsampling of a video stream, from its pixel format:
+    /// `"4:2:0"` (also when unknown), `"4:2:2"` or `"4:4:4"`.
+    pub fn chroma(&self) -> &'static str {
+        if self.pixel_format.contains("444") || self.pixel_format.starts_with("gbr") {
+            "4:4:4"
+        } else if self.pixel_format.contains("422") {
+            "4:2:2"
+        } else {
+            "4:2:0"
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -222,6 +250,8 @@ pub fn read_info(input: &Input) -> MediaInfo {
             height: 0,
             fps: 0.0,
             bit_depth: 8,
+            pixel_format: String::new(),
+            interlaced: false,
             transfer: Transfer::Sdr,
             rotation: 0.0,
             sample_rate: 0,
@@ -237,7 +267,12 @@ pub fn read_info(input: &Input) -> MediaInfo {
                 let desc = unsafe { ff::av_pix_fmt_desc_get(par.format) };
                 if !desc.is_null() {
                     s.bit_depth = unsafe { (*desc).comp[0].depth } as u32;
+                    // SAFETY: the descriptor's name is a static C string.
+                    s.pixel_format = unsafe { CStr::from_ptr((*desc).name) }
+                        .to_string_lossy()
+                        .into_owned();
                 }
+                s.interlaced = interlaced(par);
                 s.transfer = match par.color_trc {
                     ff::AVCOL_TRC_SMPTE2084 => Transfer::Pq,
                     ff::AVCOL_TRC_ARIB_STD_B67 => Transfer::Hlg,

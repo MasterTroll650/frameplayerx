@@ -292,7 +292,8 @@ impl Sim {
                     if let Some(mut v) = v {
                         v.codec = "hevc".into();
                         v.bit_depth = 10;
-                        p.notice = Some(crate::playback::slow_decode_notice(&v));
+                        v.pixel_format = "yuv420p10le".into();
+                        p.notice = Some(crate::playback::slow_decode_notice(&v, true, None));
                     }
                 }
                 self.app.repaint_all();

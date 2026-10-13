@@ -191,8 +191,17 @@ fn info(file: &str) -> Result<(), Error> {
         match s.kind {
             fp_media::info::StreamKind::Video => {
                 println!(
-                    "  #{} video {} {}x{} {:.3} fps {}-bit {:?}{lang}",
-                    s.index, s.codec, s.width, s.height, s.fps, s.bit_depth, s.transfer
+                    "  #{} video {} {}x{}{} {:.3} fps {}-bit {} ({}) {:?}{lang}",
+                    s.index,
+                    s.codec,
+                    s.width,
+                    s.height,
+                    if s.interlaced { " interlaced" } else { "" },
+                    s.fps,
+                    s.bit_depth,
+                    s.chroma(),
+                    s.pixel_format,
+                    s.transfer
                 )
             }
             fp_media::info::StreamKind::Audio => println!(
