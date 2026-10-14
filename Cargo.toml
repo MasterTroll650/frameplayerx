@@ -12,3 +12,9 @@ license = "MIT OR Apache-2.0"
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+# smb 0.12.1 with its SMB credit accounting fixed: a read the server answers
+# with STATUS_PENDING lost its credits, and once they ran out every request
+# on the connection waited forever. See vendor/smb/PATCHES.md.
+[patch.crates-io]
+smb = { path = "vendor/smb" }
