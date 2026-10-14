@@ -95,6 +95,21 @@ fn title_from_name(name: &str) -> String {
     stem.replace(['_', '.'], " ").trim().to_string()
 }
 
+/// The format a source declared for a video: on the browse entry, or, when
+/// opened from the library or home (no entry), as saved in its record. A
+/// DeoVR scene's `_LR_ALPHA.json` name alone makes a flat screen of a
+/// fisheye passthrough video: mask in the corners, no height or forward.
+fn declared_format(
+    entry: Option<&Entry>,
+    record: Option<&fp_library::MediaRecord>,
+) -> Option<VideoFormat> {
+    entry.and_then(|e| e.format).or_else(|| {
+        record
+            .filter(|r| r.detected.evidence == Evidence::Metadata)
+            .map(|r| r.detected.format)
+    })
+}
+
 /// Opens media; blocking (network probing), so run it on a job thread.
 pub fn open(
     req: OpenRequest,
@@ -167,7 +182,7 @@ pub fn open(
     let user = record.as_ref().and_then(|r| r.user_format);
     let hints = if info.hints.projection.is_some() || info.hints.stereo.is_some() {
         info.hints
-    } else if let Some(f) = entry.as_ref().and_then(|e| e.format) {
+    } else if let Some(f) = declared_format(entry.as_ref(), record.as_ref()) {
         ContainerHints {
             projection: Some(f.projection),
             stereo: Some(f.stereo),
@@ -600,6 +615,49 @@ mod tests {
         assert_eq!(file_name("/media/x/My.Video_2024.mkv"), "My.Video_2024.mkv");
         assert_eq!(title_from_name("My.Video_2024.mkv"), "My Video 2024");
         assert_eq!(percent_decode("a%2Fb%zz"), "a/b%zz");
+    }
+
+    #[test]
+    fn library_opens_keep_the_format_the_source_declared() {
+        use fp_core::format::{Projection, StereoLayout};
+        use fp_core::source::EntryKind;
+        let lib = Library::open_in_memory().unwrap();
+        let loc = "http://127.0.0.1:1/deovr/scene/7/Room_Scene_7_LR_ALPHA.json";
+        let mut e = Entry::new("Room Scene", loc, EntryKind::Video);
+        e.format = Some(VideoFormat::new(
+            Projection::fisheye(190.0),
+            StereoLayout::SideBySide,
+        ));
+        lib.upsert_entry("feed", &e).unwrap();
+        let record = lib.get_by_location(loc).unwrap();
+        let resolve = |declared: Option<VideoFormat>| {
+            let hints = declared.map_or_else(ContainerHints::default, |f| ContainerHints {
+                projection: Some(f.projection),
+                stereo: Some(f.stereo),
+            });
+            format::resolve(None, hints, &file_name(loc), 2160, 1080).format
+        };
+
+        // From the source's browser and from the library or home (no
+        // entry): a masked fisheye, not a flat screen.
+        for declared in [
+            declared_format(Some(&e), None),
+            declared_format(None, record.as_ref()),
+        ] {
+            let f = resolve(declared);
+            assert_eq!(f.projection, Projection::fisheye(190.0));
+            assert_eq!(f.stereo, StereoLayout::SideBySide);
+            assert!(f.alpha_packed);
+        }
+        // What the name alone gives.
+        assert_eq!(resolve(None).projection, Projection::Flat);
+
+        // A format guessed from the name or shape is not a declaration.
+        let local = "/v/Clip_LR.mp4";
+        lib.upsert(&fp_library::MediaUpsert::new(local, "local"))
+            .unwrap();
+        let r = lib.get_by_location(local).unwrap();
+        assert_eq!(declared_format(None, r.as_ref()), None);
     }
 
     #[test]
