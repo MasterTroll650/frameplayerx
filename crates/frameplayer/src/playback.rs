@@ -199,6 +199,16 @@ pub fn open(
     };
     let resolved = unidentified(format::resolve(user, hints, &name, w, h));
     let detected = unidentified(format::resolve(None, hints, &name, w, h));
+    log::info!(
+        "format {}{} ({}), {w}x{h}",
+        resolved.format.label(),
+        if resolved.format.alpha_packed {
+            " with mask"
+        } else {
+            ""
+        },
+        resolved.evidence.label()
+    );
 
     let settings_v = record
         .as_ref()
