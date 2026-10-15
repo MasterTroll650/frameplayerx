@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -290,6 +292,7 @@ impl Device for TcodeDevice {
     }
 }
 
+#[cfg(unix)]
 fn baud_constant(baud: u32) -> Result<libc::speed_t> {
     Ok(match baud {
         9600 => libc::B9600,
@@ -306,6 +309,7 @@ fn baud_constant(baud: u32) -> Result<libc::speed_t> {
 
 /// Opens a serial port for TCode: raw mode, 8 data bits, no parity, one
 /// stop bit, no flow control, ignore modem lines, non-blocking.
+#[cfg(unix)]
 pub fn open_serial(path: &Path, baud: u32) -> Result<File> {
     let speed = baud_constant(baud)?;
     let file = std::fs::OpenOptions::new()
@@ -337,6 +341,12 @@ pub fn open_serial(path: &Path, baud: u32) -> Result<File> {
         libc::tcflush(fd, libc::TCIOFLUSH);
     }
     Ok(file)
+}
+
+/// Opens a serial port for TCode. Not supported on non-unix platforms.
+#[cfg(not(unix))]
+pub fn open_serial(_path: &Path, _baud: u32) -> Result<File> {
+    Err(Error::Unsupported("serial ports are only supported on unix".into()))
 }
 
 /// A serial port that may have a TCode device on it.
@@ -532,6 +542,7 @@ mod tests {
         assert!(matches!(dev.stop(), Err(Error::NotConnected(_))));
     }
 
+    #[cfg(unix)]
     #[test]
     fn serial_over_pty() {
         // A pseudo-terminal stands in for /dev/ttyACM0.
@@ -589,6 +600,7 @@ mod tests {
         assert_eq!(got, b"L05000I100\n");
     }
 
+    #[cfg(unix)]
     #[test]
     fn enumerates_serial_ports() {
         let root = std::env::temp_dir().join(format!("fp-haptics-dev-{}", std::process::id()));

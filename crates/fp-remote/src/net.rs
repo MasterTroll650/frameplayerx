@@ -29,6 +29,7 @@ fn allowed_v6(ip: Ipv6Addr) -> bool {
 
 /// Non-loopback IPv4 addresses of interfaces that are up, private ranges
 /// first, for building the pairing URL. Empty when none or on error.
+#[cfg(unix)]
 pub fn lan_addresses() -> Vec<Ipv4Addr> {
     let mut out = Vec::new();
     let mut ifap: *mut libc::ifaddrs = std::ptr::null_mut();
@@ -64,6 +65,12 @@ pub fn lan_addresses() -> Vec<Ipv4Addr> {
     // Stable sort: private/link-local (reachable from a phone) first.
     out.sort_by_key(|ip| !allowed_v4(*ip));
     out
+}
+
+/// Non-loopback IPv4 addresses of interfaces that are up. Empty on non-unix.
+#[cfg(not(unix))]
+pub fn lan_addresses() -> Vec<Ipv4Addr> {
+    Vec::new()
 }
 
 #[cfg(test)]

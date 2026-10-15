@@ -222,7 +222,7 @@ mod tests {
     fn default_search_order() {
         let got: Vec<String> = candidate_paths(&env())
             .iter()
-            .map(|p| p.display().to_string())
+            .map(|p| p.display().to_string().replace('\\', "/"))
             .collect();
         assert_eq!(
             got,
@@ -246,7 +246,7 @@ mod tests {
         };
         let got: Vec<String> = candidate_paths(&e)
             .iter()
-            .map(|p| p.display().to_string())
+            .map(|p| p.display().to_string().replace('\\', "/"))
             .collect();
         assert_eq!(got[0], "/cfg/openxr/1/active_runtime.aarch64.json");
         assert_eq!(got[2], "/a/openxr/1/active_runtime.aarch64.json");
@@ -254,6 +254,7 @@ mod tests {
         assert_eq!(got.len(), 8);
     }
 
+    #[cfg(unix)]
     #[test]
     fn parses_steamvr_manifest_with_relative_library() {
         let dir = std::env::temp_dir().join(format!("fp-xr-{}", std::process::id()));
