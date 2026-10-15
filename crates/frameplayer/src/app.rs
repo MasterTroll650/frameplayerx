@@ -821,6 +821,7 @@ impl App {
                                 f.qc_error = Some(e);
                             }
                         }
+                        self.panels[MAIN].request_repaint();
                     }
                 }
                 Job::QuickConnectPolled(r) => {
@@ -833,11 +834,13 @@ impl App {
                                 f.qc_secret = None;
                                 f.qc_error = None;
                                 self.ui.toast("Quick Connect authorized!");
+                                self.panels[MAIN].request_repaint();
                             }
                             Ok(None) => {}
                             Err(e) => {
                                 log::warn!("Quick Connect poll error: {e}");
                                 f.qc_error = Some(e);
+                                self.panels[MAIN].request_repaint();
                             }
                         }
                     }

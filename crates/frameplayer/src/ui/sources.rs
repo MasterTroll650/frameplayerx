@@ -824,6 +824,28 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
                     .desired_width(460.0),
             );
         };
+
+        if is_mb
+            && f.use_quick_connect
+            && let Some(secret) = f.qc_secret.clone()
+        {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(500));
+            let now = std::time::Instant::now();
+            let should_poll = match f.qc_last_poll {
+                Some(t) => now.duration_since(t).as_secs_f32() >= 2.0,
+                None => true,
+            };
+            if should_poll {
+                f.qc_last_poll = Some(now);
+                v.actions.push(Action::QuickConnectPoll {
+                    address: f.address.clone(),
+                    secret,
+                    insecure_tls: f.insecure_tls,
+                });
+            }
+        }
+
         widgets::rows(ui, |r| {
             r.row(
                 "Name",
@@ -833,21 +855,111 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
             r.row(if local { "Folder" } else { "Address" }, None, |ui| {
                 field(ui, &mut f.address, address_hint(f.kind), false)
             });
+            if is_mb {
+                r.row(
+                    "Sign in with",
+                    Some("Quick Connect pairs using a 6-digit code on another device."),
+                    |ui| {
+                        if widgets::chip(ui, "Password", !f.use_quick_connect).clicked() {
+                            f.use_quick_connect = false;
+                        }
+                        if widgets::chip(ui, "Quick Connect", f.use_quick_connect).clicked() {
+                            f.use_quick_connect = true;
+                        }
+                    },
+                );
+            }
             if !local {
-                r.row(
-                    "User name",
-                    Some(if is_mb {
-                        "Jellyfin / Emby username (or use Quick Connect below)."
+                if is_mb && f.use_quick_connect {
+                    if f.qc_token.is_some() {
+                        r.row("Quick Connect", Some("Authorized with server."), |ui| {
+                            if widgets::button_sized(ui, None, "Clear", Kind::Secondary, 36.0)
+                                .clicked()
+                            {
+                                f.qc_token = None;
+                                f.qc_user_id = None;
+                                f.qc_code = None;
+                                f.qc_secret = None;
+                                f.qc_error = None;
+                            }
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} Quick Connect authorized",
+                                    icons::CHECK_CIRCLE
+                                ))
+                                .font(theme::font(Weight::SemiBold, 17.0))
+                                .color(theme::OK),
+                            );
+                        });
+                    } else if let Some(code) = f.qc_code.clone() {
+                        r.row(
+                            "Pairing code",
+                            Some(
+                                "Enter this code in your Jellyfin or Emby app under Quick Connect:",
+                            ),
+                            |ui| {
+                                if widgets::button_sized(ui, None, "Cancel", Kind::Secondary, 36.0)
+                                    .clicked()
+                                {
+                                    f.qc_code = None;
+                                    f.qc_secret = None;
+                                    f.qc_error = None;
+                                }
+                                ui.label(
+                                    RichText::new("Waiting for approval…").color(theme::TEXT_3),
+                                );
+                                ui.spinner();
+                                let spaced: String = code
+                                    .chars()
+                                    .map(|c| c.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                ui.label(
+                                    RichText::new(spaced)
+                                        .font(theme::font(Weight::Bold, 26.0))
+                                        .color(theme::ACCENT),
+                                );
+                            },
+                        );
                     } else {
-                        "If the server asks for one."
-                    }),
-                    |ui| field(ui, &mut f.username, "", false),
-                );
-                r.row(
-                    "Password",
-                    is_mb.then_some("Leave blank if using Quick Connect."),
-                    |ui| field(ui, &mut f.password, "", true),
-                );
+                        let desc = if let Some(err) = &f.qc_error {
+                            format!("Error: {err}")
+                        } else {
+                            "Pair without typing your password.".to_string()
+                        };
+                        r.row("Quick Connect", Some(&desc), |ui| {
+                            let can_initiate = !f.address.trim().is_empty() && !f.qc_loading;
+                            if ui
+                                .add_enabled_ui(can_initiate, |ui| {
+                                    widgets::button(
+                                        ui,
+                                        Some(icons::KEY_RETURN),
+                                        "Get pairing code",
+                                        Kind::Secondary,
+                                    )
+                                })
+                                .inner
+                                .clicked()
+                            {
+                                f.qc_loading = true;
+                                f.qc_error = None;
+                                v.actions.push(Action::QuickConnectInitiate {
+                                    address: f.address.clone(),
+                                    insecure_tls: f.insecure_tls,
+                                });
+                            }
+                            if f.qc_loading {
+                                ui.label(RichText::new("Connecting…").color(theme::TEXT_3));
+                                ui.spinner();
+                            }
+                        });
+                    }
+                } else {
+                    r.row("User name", Some("If the server asks for one."), |ui| {
+                        field(ui, &mut f.username, "", false)
+                    });
+                    r.row("Password", None, |ui| field(ui, &mut f.password, "", true));
+                }
                 if !smb {
                     r.switch(
                         "Accept self-signed certificates",
@@ -857,111 +969,6 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
                 }
             }
         });
-        if is_mb {
-            ui.add_space(14.0);
-            widgets::section_label(ui, "Quick Connect");
-            ui.add_space(6.0);
-            let qc_code = f.qc_code.clone();
-            let qc_secret = f.qc_secret.clone();
-            if f.qc_token.is_some() {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 12.0;
-                    ui.label(
-                        RichText::new(format!("{} Quick Connect authorized", icons::CHECK_CIRCLE))
-                            .font(theme::font(Weight::SemiBold, 17.0))
-                            .color(theme::OK),
-                    );
-                    if widgets::button_sized(ui, None, "Clear", Kind::Secondary, 36.0).clicked() {
-                        f.qc_token = None;
-                        f.qc_user_id = None;
-                        f.qc_code = None;
-                        f.qc_secret = None;
-                        f.qc_error = None;
-                    }
-                });
-            } else if let Some(code) = qc_code {
-                ui.label(
-                    RichText::new(
-                        "Enter this code in your Jellyfin or Emby app under Quick Connect:",
-                    )
-                    .font(theme::font(Weight::Regular, 15.0))
-                    .color(theme::TEXT_2),
-                );
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 14.0;
-                    let spaced: String = code
-                        .chars()
-                        .map(|c| c.to_string())
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    ui.label(
-                        RichText::new(spaced)
-                            .font(theme::font(Weight::Bold, 28.0))
-                            .color(theme::ACCENT),
-                    );
-                    ui.spinner();
-                    ui.label(RichText::new("Waiting for approval...").color(theme::TEXT_3));
-                    if widgets::button_sized(ui, None, "Cancel", Kind::Secondary, 36.0).clicked() {
-                        f.qc_code = None;
-                        f.qc_secret = None;
-                        f.qc_error = None;
-                    }
-                });
-
-                if let Some(secret) = qc_secret {
-                    let now = std::time::Instant::now();
-                    let should_poll = match f.qc_last_poll {
-                        Some(t) => now.duration_since(t).as_secs_f32() >= 2.5,
-                        None => true,
-                    };
-                    if should_poll {
-                        f.qc_last_poll = Some(now);
-                        v.actions.push(Action::QuickConnectPoll {
-                            address: f.address.clone(),
-                            secret,
-                            insecure_tls: f.insecure_tls,
-                        });
-                    }
-                }
-            } else {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 10.0;
-                    let can_initiate = !f.address.trim().is_empty() && !f.qc_loading;
-                    if ui
-                        .add_enabled_ui(can_initiate, |ui| {
-                            widgets::button(
-                                ui,
-                                Some(icons::KEY_RETURN),
-                                "Log in with Quick Connect",
-                                Kind::Secondary,
-                            )
-                        })
-                        .inner
-                        .clicked()
-                    {
-                        f.qc_loading = true;
-                        f.qc_error = None;
-                        v.actions.push(Action::QuickConnectInitiate {
-                            address: f.address.clone(),
-                            insecure_tls: f.insecure_tls,
-                        });
-                    }
-                    if f.qc_loading {
-                        ui.spinner();
-                        ui.label(RichText::new("Connecting to server...").color(theme::TEXT_3));
-                    }
-                });
-            }
-            if let Some(err) = &f.qc_error {
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(format!("Quick Connect: {err}"))
-                        .font(theme::font(Weight::Regular, 15.0))
-                        .color(theme::WARN),
-                );
-            }
-        }
         ui.add_space(12.0);
         ui.horizontal(|ui| match build_config(f, id) {
             Ok(cfg) => {
@@ -978,12 +985,16 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
                 }
             }
         });
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new("Passwords are stored on this device only, in a file only you can read.")
+        if !is_mb || !f.use_quick_connect {
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(
+                    "Passwords are stored on this device only, in a file only you can read.",
+                )
                 .font(theme::font(Weight::Regular, 15.0))
                 .color(theme::TEXT_3),
-        );
+            );
+        }
     }
     if let Some(cfg) = save {
         v.actions.push(Action::AddSource(cfg));
@@ -1092,18 +1103,38 @@ pub fn build_config(f: &SourceForm, id: String) -> Result<SourceConfig, String> 
             })
         }
         SourceKind::MediaBrowser => {
-            if f.qc_token.is_none() && credentials.is_none() {
-                return Err("Enter username/password or use Quick Connect".into());
+            if f.use_quick_connect {
+                if f.qc_token.is_none() {
+                    if f.qc_code.is_some() {
+                        return Err("Approve the code in your Jellyfin/Emby app".into());
+                    } else {
+                        return Err("Click 'Get pairing code' to sign in".into());
+                    }
+                }
+            } else if credentials.is_none() {
+                return Err("Enter username and password".into());
             }
             SourceConfig::MediaBrowser(fp_sources::MediaBrowserConfig {
                 id,
                 name,
                 url: http_url(&address)?,
-                credentials,
+                credentials: if f.use_quick_connect {
+                    None
+                } else {
+                    credentials
+                },
                 insecure_tls: f.insecure_tls,
                 max_height: None,
-                access_token: f.qc_token.clone(),
-                user_id: f.qc_user_id.clone(),
+                access_token: if f.use_quick_connect {
+                    f.qc_token.clone()
+                } else {
+                    None
+                },
+                user_id: if f.use_quick_connect {
+                    f.qc_user_id.clone()
+                } else {
+                    None
+                },
             })
         }
         SourceKind::Dlna => return Err("Pick a server found on the network".into()),
@@ -1164,6 +1195,21 @@ mod tests {
                 assert_eq!(c.access_token.as_deref(), Some("tok_abc"));
                 assert_eq!(c.user_id.as_deref(), Some("user_123"));
                 assert!(c.credentials.is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // MediaBrowser with username/password
+        f.use_quick_connect = false;
+        f.qc_token = None;
+        assert!(build_config(&f, "mb-2".into()).is_err());
+        f.username = "alice".into();
+        f.password = "hunter2".into();
+        match build_config(&f, "mb-2".into()).unwrap() {
+            SourceConfig::MediaBrowser(c) => {
+                assert_eq!(c.url, "http://192.168.1.10:8096");
+                assert!(c.credentials.is_some());
+                assert!(c.access_token.is_none());
             }
             other => panic!("{other:?}"),
         }

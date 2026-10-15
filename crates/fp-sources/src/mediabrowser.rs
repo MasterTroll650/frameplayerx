@@ -622,13 +622,13 @@ impl MediaBrowserSource {
         if !authenticated {
             return Ok(None);
         }
-        if let Some(token) = token_opt {
-            let authed_header = mediabrowser_header(Some(&token));
-            let authed_client = HttpClient::new_with_header(opts, &authed_header);
 
-            let user_id = if let Some(uid) = user_id_opt {
+        let (token, user_id) = if let Some(token) = token_opt {
+            let uid = if let Some(uid) = user_id_opt {
                 uid
             } else {
+                let authed_header = mediabrowser_header(Some(&token));
+                let authed_client = HttpClient::new_with_header(opts.clone(), &authed_header);
                 let me_url = format!("{}/Users/Me", self.base_url);
                 authed_client
                     .request(
@@ -647,36 +647,62 @@ impl MediaBrowserSource {
                     .and_then(|me| text(&me, "Id"))
                     .unwrap_or_default()
             };
-
-            let info_url = format!("{}/System/Info/Public", self.base_url);
-            let server_name = client
+            (token, uid)
+        } else {
+            let qc_auth_url = format!("{}/Users/AuthenticateWithQuickConnect", self.base_url);
+            let body = serde_json::to_vec(&serde_json::json!({
+                "Secret": secret,
+            }))
+            .map_err(|e| Error::invalid(&qc_auth_url, e.to_string()))?;
+            let reply = client
                 .request(
-                    "GET",
-                    &info_url,
+                    "POST",
+                    &qc_auth_url,
                     &[
                         ("Authorization", &auth_header),
                         ("X-Emby-Authorization", &auth_header),
                         ("Accept", "application/json"),
+                        ("Content-Type", "application/json"),
                     ],
-                    None,
+                    Some(&body),
                     JSON_LIMIT,
-                )
-                .ok()
-                .and_then(|r| serde_json::from_slice::<Value>(&r.body).ok())
-                .and_then(|info| text(&info, "ProductName"))
-                .unwrap_or_else(|| "MediaBrowser Server".to_string());
+                )?
+                .error_for_status(&qc_auth_url)?;
+            let auth_v: Value = serde_json::from_slice(&reply.body)
+                .map_err(|e| Error::invalid(&qc_auth_url, format!("invalid JSON: {e}")))?;
+            parse_auth_response(&auth_v, &qc_auth_url)?
+        };
 
-            let mut auth = lock(&self.auth);
-            *auth = Some(AuthState {
-                user_id: user_id.clone(),
-                access_token: token.clone(),
-                server_name,
-                client: authed_client,
-            });
+        let authed_header = mediabrowser_header(Some(&token));
+        let authed_client = HttpClient::new_with_header(opts, &authed_header);
 
-            return Ok(Some((token, user_id)));
-        }
-        Ok(None)
+        let info_url = format!("{}/System/Info/Public", self.base_url);
+        let server_name = client
+            .request(
+                "GET",
+                &info_url,
+                &[
+                    ("Authorization", &auth_header),
+                    ("X-Emby-Authorization", &auth_header),
+                    ("Accept", "application/json"),
+                ],
+                None,
+                JSON_LIMIT,
+            )
+            .ok()
+            .and_then(|r| serde_json::from_slice::<Value>(&r.body).ok())
+            .and_then(|info| text(&info, "ProductName"))
+            .unwrap_or_else(|| "MediaBrowser Server".to_string());
+
+        let mut auth = lock(&self.auth);
+        *auth = Some(AuthState {
+            user_id: user_id.clone(),
+            access_token: token.clone(),
+            server_name,
+            client: authed_client,
+        });
+
+        Ok(Some((token, user_id)))
     }
 
     /// Polls for Quick Connect authorization. Returns `true` when authorized.

@@ -183,7 +183,7 @@ fn mediabrowser_quick_connect_flow() {
             if req.url.contains("sec_xyz123") {
                 resp(
                     200,
-                    r#"{"Authenticated":true,"Code":"849201","Secret":"sec_xyz123","AuthenticationResult":{"AccessToken":"qc_token_99","User":{"Id":"usr_bob"}}}"#,
+                    r#"{"Authenticated":true,"Code":"849201","Secret":"sec_xyz123"}"#,
                     &[("Content-Type", "application/json")],
                 )
             } else {
@@ -193,6 +193,14 @@ fn mediabrowser_quick_connect_flow() {
                     &[("Content-Type", "application/json")],
                 )
             }
+        }
+        "/Users/AuthenticateWithQuickConnect" => {
+            assert!(req.body.contains("sec_xyz123"));
+            resp(
+                200,
+                r#"{"AccessToken":"qc_token_99","User":{"Id":"usr_bob"}}"#,
+                &[("Content-Type", "application/json")],
+            )
         }
         _ => resp(404, "", &[]),
     });
