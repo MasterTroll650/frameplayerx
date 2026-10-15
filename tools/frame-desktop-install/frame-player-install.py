@@ -5,10 +5,10 @@ and adds it to the Steam library. No Developer Mode, PC or SSH needed.
 Runs on the headset as the normal user, with the Python 3 that SteamOS ships
 (standard library only):
 
-  python3 frame-apps-install.py                     # latest release
-  python3 frame-apps-install.py --zip ~/Downloads/frameplayer-0.2.0-alpha.1-aarch64.zip
-  python3 frame-apps-install.py --dir ~/Apps --name-suffix " (test)"
-  python3 frame-apps-install.py --remove
+  python3 frame-player-install.py                     # latest release
+  python3 frame-player-install.py --zip ~/Downloads/frameplayer-0.2.0-alpha.1-aarch64.zip
+  python3 frame-player-install.py --dir ~/Apps --name-suffix " (test)"
+  python3 frame-player-install.py --remove
 
 Steps: find the newest GitHub release, download its zip and check the
 SHA-256 GitHub recorded for it, uninstall every other copy of the app (library

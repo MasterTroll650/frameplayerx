@@ -1,4 +1,4 @@
-"""Tests for frame-apps-install.py: python3 -m unittest (in this folder)."""
+"""Tests for frame-player-install.py: python3 -m unittest (in this folder)."""
 
 import importlib.util
 import os
@@ -11,7 +11,7 @@ import zipfile
 import zlib
 
 spec = importlib.util.spec_from_file_location(
-    'fai', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'frame-apps-install.py'))
+    'fai', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'frame-player-install.py'))
 fai = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fai)
 

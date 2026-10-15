@@ -1,6 +1,6 @@
 # Installing from Desktop Mode
 
-`frame-apps-install.py` installs FramePlayer on a Steam Frame
+`frame-player-install.py` installs FramePlayer on a Steam Frame
 from Desktop Mode, with no Developer Mode, PC or SSH, and adds it to the
 Steam library. The Frame's desktop Steam has no "Add a Non-Steam Game" menu,
 so the installer adds the library entry itself:
@@ -15,16 +15,16 @@ so the installer adds the library entry itself:
 and artwork names match `crates/frameplayer-install/src/shortcut.rs`.
 
 ```sh
-python3 frame-apps-install.py                          # latest release
-python3 frame-apps-install.py --dir ~/Apps --name-suffix " (test)"
-python3 frame-apps-install.py --remove
+python3 frame-player-install.py                          # latest release
+python3 frame-player-install.py --dir ~/Apps --name-suffix " (test)"
+python3 frame-player-install.py --remove
 ```
 
 To run it without a terminal, put a `.desktop` launcher next to it, e.g.
-`Exec=konsole --hold -e python3 /home/steamos/Apps/frame-apps-install.py`;
+`Exec=konsole --hold -e python3 /home/steamos/Apps/frame-player-install.py`;
 Desktop Mode asks once whether to trust it.
 
-`test_frame_apps_install.py` covers the binary VDF round trip, the shortcut
+`test_frame_player_install.py` covers the binary VDF round trip, the shortcut
 entry and the zip unpacking (`python3 -m unittest` in this folder).
 
 Open questions, to settle on a headset with Developer Mode off:
