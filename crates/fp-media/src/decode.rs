@@ -238,7 +238,7 @@ impl Decoder {
             unsafe { ((*par).codec_id, (*par).codec_type, (*par).format) };
         let mut last_err = Error::Unsupported(format!("no decoder for codec id {codec_id}"));
         let mut hardware_error = None;
-        for cand in candidates(kind == ff::AVMEDIA_TYPE_VIDEO, codec_id, hw, native) {
+        for cand in candidates(kind == ff::AVMEDIA_TYPE_VIDEO, codec_id, format, hw, native) {
             let hardware = matches!(cand, Candidate::NativeV4l2 | Candidate::Named(_, true));
             let r = match cand {
                 Candidate::NativeV4l2 => Self::open_native(par, time_base, hw),
