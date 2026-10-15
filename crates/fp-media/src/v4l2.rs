@@ -516,6 +516,19 @@ mod sys {
     pub const VIDIOC_G_SELECTION: u64 = iowr::<Selection>(94);
     pub const VIDIOC_DECODER_CMD: u64 = iowr::<DecoderCmd>(96);
 
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct ExportBuffer {
+        pub type_: u32,
+        pub index: u32,
+        pub plane: u32,
+        pub flags: u32,
+        pub fd: i32,
+        pub reserved: [u32; 11],
+    }
+
+    pub const VIDIOC_EXPBUF: u64 = iowr::<ExportBuffer>(16);
+
     // The kernel's sizes; the ioctl numbers encode them.
     const _: () = assert!(std::mem::size_of::<Capability>() == 104);
     const _: () = assert!(std::mem::size_of::<FmtDesc>() == 64);
@@ -528,6 +541,7 @@ mod sys {
     const _: () = assert!(std::mem::size_of::<DecoderCmd>() == 72);
     const _: () = assert!(std::mem::size_of::<Control>() == 8);
     const _: () = assert!(std::mem::size_of::<Selection>() == 64);
+    const _: () = assert!(std::mem::size_of::<ExportBuffer>() == 64);
 
     // Known values from videodev2.h, as a check on the encoding.
     const _: () = assert!(VIDIOC_QUERYCAP == 0x8068_5600);
@@ -552,6 +566,9 @@ mod linux {
     use std::time::{Duration, Instant};
 
     const NV12: u32 = fourcc(b"NV12");
+    const Q10C: u32 = fourcc(b"Q10C");
+    const QC08: u32 = fourcc(b"QC08");
+    const P010: u32 = fourcc(b"P010");
     /// Give up when the device makes no progress for this long.
     const STALL: Duration = Duration::from_secs(5);
 
@@ -627,9 +644,11 @@ mod linux {
 
     struct Capture {
         bufs: Vec<Mapping>,
+        export_fds: Vec<OwnedFd>,
         /// Coded size (CAPTURE format) the buffers were allocated for.
         allocated_for: (u32, u32),
         layout: Nv12Layout,
+        pixelformat: u32,
         /// Buffer we hold after a LAST flag until decoding resumes.
         held: Option<u32>,
     }
@@ -650,6 +669,8 @@ mod linux {
         pub device: String,
         codec: Codec,
         stream_size: (u32, u32),
+        ten_bit: bool,
+        last_drm: Option<crate::frame::DrmBufferDesc>,
         /// The primer trick is active (declared OUTPUT size was lowered).
         primed: bool,
         bsf: *mut ff::AVBSFContext,
@@ -744,20 +765,42 @@ mod linux {
         Ok(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 
-    /// Whether `fd` is a multi-planar M2M decoder for `codec` with NV12 out.
-    fn suitable(fd: &OwnedFd, codec: Codec) -> bool {
+    fn export_buf(fd: &OwnedFd, index: u32, plane: u32) -> std::io::Result<OwnedFd> {
+        let mut exp = ExportBuffer {
+            type_: BUF_TYPE_CAPTURE_MPLANE,
+            index,
+            plane,
+            flags: libc::O_CLOEXEC as u32 | libc::O_RDONLY as u32,
+            ..Default::default()
+        };
+        ioctl(fd, VIDIOC_EXPBUF, &mut exp)?;
+        if exp.fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: exp.fd is a newly created file descriptor returned by the kernel.
+        Ok(unsafe { OwnedFd::from_raw_fd(exp.fd) })
+    }
+
+    /// Whether `fd` is a multi-planar M2M decoder for `codec` with NV12/Q10C out.
+    fn suitable(fd: &OwnedFd, codec: Codec, ten_bit: bool) -> bool {
         let Some(caps) = query_caps(fd) else {
             return false;
+        };
+        let cap_fmts = formats(fd, BUF_TYPE_CAPTURE_MPLANE);
+        let cap_ok = if ten_bit {
+            cap_fmts.contains(&Q10C) || cap_fmts.contains(&P010)
+        } else {
+            cap_fmts.contains(&NV12) || cap_fmts.contains(&QC08)
         };
         caps & CAP_VIDEO_M2M_MPLANE != 0
             && caps & CAP_STREAMING != 0
             && formats(fd, BUF_TYPE_OUTPUT_MPLANE).contains(&codec.fourcc())
-            && formats(fd, BUF_TYPE_CAPTURE_MPLANE).contains(&NV12)
+            && cap_ok
     }
 
     /// `/dev/video-dec0` (the Frame's decoder), else the first `/dev/video*`
     /// M2M device decoding `codec`. `FRAMEPLAYER_V4L2_DEVICE` overrides.
-    fn find_device(codec: Codec) -> Result<(String, OwnedFd)> {
+    fn find_device(codec: Codec, ten_bit: bool) -> Result<(String, OwnedFd)> {
         let mut paths: Vec<String> = Vec::new();
         if let Ok(p) = std::env::var("FRAMEPLAYER_V4L2_DEVICE") {
             paths.push(p);
@@ -779,13 +822,18 @@ mod linux {
         }
         for p in paths {
             if let Ok(fd) = open_node(&p)
-                && suitable(&fd, codec)
+                && suitable(&fd, codec, ten_bit)
             {
                 return Ok((p, fd));
             }
         }
         Err(Error::Unsupported(format!(
-            "no V4L2 decoder for {codec:?} with NV12 output"
+            "no V4L2 decoder for {codec:?} with {} output",
+            if ten_bit {
+                "10-bit (Q10C/P010)"
+            } else {
+                "8-bit (NV12/QC08)"
+            }
         )))
     }
 
@@ -805,9 +853,11 @@ mod linux {
                 ff::AV_PIX_FMT_YUV420P,
                 ff::AV_PIX_FMT_YUVJ420P,
             ];
-            if !eight_bit_420.contains(&p.format) {
+            let ten_bit_420 = [ff::AV_PIX_FMT_YUV420P10LE, ff::AV_PIX_FMT_YUV420P10BE];
+            let ten_bit = ten_bit_420.contains(&p.format);
+            if !eight_bit_420.contains(&p.format) && !ten_bit {
                 return Err(Error::Unsupported(format!(
-                    "V4L2 path takes 8-bit 4:2:0 only (pixel format {})",
+                    "V4L2 path takes 8-bit or 10-bit 4:2:0 only (pixel format {})",
                     p.format
                 )));
             }
@@ -824,7 +874,7 @@ mod linux {
                 ));
             }
             let stream_size = (p.width as u32, p.height as u32);
-            let (device, fd) = find_device(codec)?;
+            let (device, fd) = find_device(codec, ten_bit)?;
             let mut dec = V4l2Decoder {
                 out_bufs: Vec::new(),
                 cap: None,
@@ -832,6 +882,8 @@ mod linux {
                 device,
                 codec,
                 stream_size,
+                ten_bit,
+                last_drm: None,
                 primed: false,
                 bsf: std::ptr::null_mut(),
                 out_free: Vec::new(),
@@ -1160,7 +1212,9 @@ mod linux {
 
         /// The CAPTURE layout for format `f` (visible size from COMPOSE).
         fn layout(&self, f: &Format) -> Result<Nv12Layout> {
-            if f.pixelformat() != NV12 || f.num_planes() != 1 {
+            let pixfmt = f.pixelformat();
+            let valid = pixfmt == NV12 || pixfmt == QC08 || pixfmt == Q10C || pixfmt == P010;
+            if !valid || f.num_planes() != 1 {
                 return Err(Error::Unsupported(format!(
                     "V4L2 capture format {} with {} planes",
                     fourcc_str(f.pixelformat()),
@@ -1176,28 +1230,37 @@ mod linux {
                 Ok(()) if s.width > 0 && s.height > 0 => (s.width, s.height),
                 _ => (f.width(), f.height()),
             };
-            Nv12Layout::new(
-                f.bytesperline(0) as usize,
-                f.height(),
-                visible,
-                f.sizeimage(0) as usize,
-            )
-            .ok_or_else(|| {
+            let stride = if f.bytesperline(0) > 0 {
+                f.bytesperline(0) as usize
+            } else if pixfmt == Q10C || pixfmt == P010 {
+                (f.width() * 2) as usize
+            } else {
+                f.width() as usize
+            };
+            Nv12Layout::new(stride, f.height(), visible, f.sizeimage(0) as usize).ok_or_else(|| {
                 Error::Unsupported(format!(
                     "V4L2 capture layout {}x{} stride {} size {}",
                     visible.0,
                     visible.1,
-                    f.bytesperline(0),
+                    stride,
                     f.sizeimage(0)
                 ))
             })
         }
 
-        /// First source change: choose NV12, allocate, map and queue CAPTURE.
+        /// First source change: choose format, allocate, map and queue CAPTURE.
         fn setup_capture(&mut self) -> Result<()> {
             let mut f = self.g_fmt_capture()?;
-            if f.pixelformat() != NV12 {
-                f.set_pixelformat(NV12);
+            let cap_fmts = formats(&self.fd, BUF_TYPE_CAPTURE_MPLANE);
+            let target_fmt = if self.ten_bit {
+                if cap_fmts.contains(&Q10C) { Q10C } else { P010 }
+            } else if cap_fmts.contains(&QC08) {
+                QC08
+            } else {
+                NV12
+            };
+            if f.pixelformat() != target_fmt {
+                f.set_pixelformat(target_fmt);
                 ioctl(&self.fd, VIDIOC_S_FMT, &mut f).map_err(|e| err("S_FMT capture", e))?;
                 f = self.g_fmt_capture()?;
             }
@@ -1211,6 +1274,7 @@ mod linux {
             };
             ioctl(&self.fd, VIDIOC_REQBUFS, &mut r).map_err(|e| err("REQBUFS capture", e))?;
             let mut bufs = Vec::new();
+            let mut export_fds = Vec::new();
             for i in 0..r.count {
                 let mut planes = [Plane::default(); 1];
                 let mut b = Buffer::new(BUF_TYPE_CAPTURE_MPLANE, i, &mut planes);
@@ -1224,11 +1288,20 @@ mod linux {
                     )
                     .map_err(|e| err("mmap capture", e))?,
                 );
+                match export_buf(&self.fd, i, 0) {
+                    Ok(exp_fd) => export_fds.push(exp_fd),
+                    Err(e) => {
+                        log::warn!("VIDIOC_EXPBUF capture buffer {i}: {e}");
+                    }
+                }
             }
+            let pixelformat = f.pixelformat();
             self.cap = Some(Capture {
                 bufs,
+                export_fds,
                 allocated_for: (f.width(), f.height()),
                 layout,
+                pixelformat,
                 held: None,
             });
             for i in 0..r.count {
@@ -1237,14 +1310,15 @@ mod linux {
             let mut t = BUF_TYPE_CAPTURE_MPLANE as i32;
             ioctl(&self.fd, VIDIOC_STREAMON, &mut t).map_err(|e| err("STREAMON capture", e))?;
             log::info!(
-                "V4L2 capture {}x{} (visible {}x{}, stride {}) x{} buffers of {} bytes",
+                "V4L2 capture {}x{} (visible {}x{}, stride {}) x{} buffers of {} bytes (pixfmt {})",
                 f.width(),
                 f.height(),
                 layout.width,
                 layout.height,
                 layout.stride,
                 r.count,
-                f.sizeimage(0)
+                f.sizeimage(0),
+                fourcc_str(pixelformat)
             );
             Ok(())
         }
@@ -1313,7 +1387,8 @@ mod linux {
                 .unwrap_or(((0, 0), 0, 0));
             let need = f.sizeimage(0) as usize;
             let new_format = (f.width(), f.height());
-            if f.pixelformat() == NV12
+            let current_fmt = self.cap.as_ref().map(|c| c.pixelformat).unwrap_or(0);
+            if f.pixelformat() == current_fmt
                 && can_reuse_capture(allocated_for, count, smallest, new_format, min, need)
             {
                 let layout = self.layout(&f)?;
@@ -1350,7 +1425,7 @@ mod linux {
             self.setup_capture()
         }
 
-        /// Copies a decoded picture into a pooled NV12 `AVFrame`.
+        /// Copies a decoded picture into a pooled NV12 `AVFrame` or exports DMA-BUF.
         fn export(
             &mut self,
             index: u32,
@@ -1362,6 +1437,56 @@ mod linux {
                 return Err(Error::Unsupported("V4L2: no capture buffers".into()));
             };
             let l = cap.layout;
+            if let Some(exp_fd) = cap.export_fds.get(index as usize) {
+                // SAFETY: dup creates a new file descriptor pointing to the same open file.
+                let dup_fd = unsafe { libc::dup(exp_fd.as_raw_fd()) };
+                if dup_fd < 0 {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+                let (modifier, drm_fourcc) = match cap.pixelformat {
+                    Q10C => (
+                        crate::frame::DRM_FORMAT_MOD_QCOM_COMPRESSED,
+                        crate::frame::DRM_FORMAT_Q10C,
+                    ),
+                    QC08 => (
+                        crate::frame::DRM_FORMAT_MOD_QCOM_COMPRESSED,
+                        crate::frame::DRM_FORMAT_QC08,
+                    ),
+                    P010 => (
+                        crate::frame::DRM_FORMAT_MOD_LINEAR,
+                        crate::frame::DRM_FORMAT_P010,
+                    ),
+                    _ => (
+                        crate::frame::DRM_FORMAT_MOD_LINEAR,
+                        crate::frame::DRM_FORMAT_NV12,
+                    ),
+                };
+                let planes = vec![
+                    crate::frame::DrmPlaneDesc::new(dup_fd, 0, l.stride as u32),
+                    crate::frame::DrmPlaneDesc::new(dup_fd, l.uv_offset as u64, l.stride as u32),
+                ];
+                let desc = crate::frame::DrmBufferDesc {
+                    modifier,
+                    drm_fourcc,
+                    planes,
+                    size: cap.bufs[index as usize].len as u64,
+                };
+                self.last_drm = Some(desc);
+                // SAFETY: frame is a valid empty AVFrame we fill with DRM_PRIME metadata.
+                unsafe {
+                    ff::av_frame_unref(frame);
+                    let f = &mut *frame;
+                    f.format = ff::AV_PIX_FMT_DRM_PRIME;
+                    f.width = l.width as i32;
+                    f.height = l.height as i32;
+                    f.pts = pts;
+                    f.best_effort_timestamp = pts;
+                    f.duration = duration;
+                    (f.color_range, f.colorspace, f.color_trc, f.color_primaries) = self.color;
+                }
+                return Ok(());
+            }
+
             let src = &cap.bufs[index as usize];
             let size = l.copy_size();
             if l.end() > src.len {
@@ -1549,6 +1674,10 @@ mod linux {
             self.eos_input = false;
             self.stop_sent = false;
             self.finished = false;
+        }
+
+        pub(crate) fn last_drm_desc(&mut self) -> Option<crate::frame::DrmBufferDesc> {
+            self.last_drm.take()
         }
     }
 }

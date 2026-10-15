@@ -26,7 +26,11 @@ pub mod thumb;
 pub(crate) mod v4l2;
 
 pub use decode::{HwDecode, hardware_sessions};
-pub use frame::{ColorInfo, PixelLayout, VideoFrame};
+pub use frame::{
+    ColorInfo, DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_QCOM_COMPRESSED, DRM_FORMAT_NV12,
+    DRM_FORMAT_P010, DRM_FORMAT_Q10C, DRM_FORMAT_QC08, DrmBufferDesc, DrmPlaneDesc, Matrix,
+    PixelLayout, VideoFrame,
+};
 pub use info::{MediaInfo, StreamInfo, StreamKind};
 pub use player::{Player, PlayerConfig, PlayerState, Stats};
 pub use subtitle::Cue;

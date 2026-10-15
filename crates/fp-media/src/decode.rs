@@ -138,11 +138,15 @@ fn candidates(
         format,
         ff::AV_PIX_FMT_NONE | ff::AV_PIX_FMT_YUV420P | ff::AV_PIX_FMT_YUVJ420P
     );
-    if video && hw == HwDecode::Auto && eight_bit {
+    let ten_bit = matches!(
+        format,
+        ff::AV_PIX_FMT_YUV420P10LE | ff::AV_PIX_FMT_YUV420P10BE
+    );
+    if video && hw == HwDecode::Auto && (eight_bit || ten_bit) {
         if native && crate::v4l2::Codec::from_ffmpeg(codec).is_some() {
             c.push(Candidate::NativeV4l2);
         }
-        if let Some(n) = v4l2_name(codec) {
+        if eight_bit && let Some(n) = v4l2_name(codec) {
             c.push(Candidate::Named(n, true));
         }
     }
@@ -571,6 +575,15 @@ impl Decoder {
             copy_out(frame)?;
         }
         Ok(Some(true))
+    }
+
+    /// Returns the DRM buffer descriptor of the last frame decoded by the native V4L2 decoder.
+    pub fn last_drm_desc(&mut self) -> Option<crate::frame::DrmBufferDesc> {
+        #[cfg(target_os = "linux")]
+        if let Some(n) = self.native.as_mut() {
+            return n.dec.last_drm_desc();
+        }
+        None
     }
 
     /// A flag that, once set, cuts the native decoder's waits for the

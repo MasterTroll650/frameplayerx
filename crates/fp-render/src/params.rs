@@ -68,21 +68,17 @@ pub(crate) struct FrameDesc {
     pub height: u32,
     pub layout: PixelLayout,
     pub color: ColorInfo,
+    pub bits: u32,
 }
 
 /// YUV → RGB matrix with range expansion folded in, plus offsets.
-pub(crate) fn yuv_matrix(color: &ColorInfo, layout: PixelLayout) -> ([Vec4; 3], Vec4) {
+pub(crate) fn yuv_matrix(color: &ColorInfo, layout: PixelLayout, bits: u32) -> ([Vec4; 3], Vec4) {
     let (kr, kb) = match color.matrix {
         Matrix::Bt601 => (0.299, 0.114),
         Matrix::Bt709 => (0.2126, 0.0722),
         Matrix::Bt2020 => (0.2627, 0.0593),
     };
     let kg = 1.0 - kr - kb;
-    let bits = match layout {
-        PixelLayout::I420 { bits } => bits,
-        PixelLayout::Nv12 => 8,
-        PixelLayout::P010 | PixelLayout::DrmPrime => 10,
-    };
     let max = ((1u32 << bits) - 1) as f32;
     // Sample scale: values are normalised by the texture format's range.
     let scale = match layout {
@@ -140,7 +136,7 @@ pub(crate) fn build(
     let swap = (video.format.eyes_swapped ^ s.swap_eyes) as u32;
     let (rows, offset, layout_code, tex) = match frame {
         Some(f) => {
-            let (rows, off) = yuv_matrix(&f.color, f.layout);
+            let (rows, off) = yuv_matrix(&f.color, f.layout, f.bits);
             let lc = match f.layout {
                 PixelLayout::I420 { .. } => 0u32,
                 _ => 1,
@@ -249,7 +245,7 @@ mod tests {
             transfer: Transfer::Sdr,
             wide_gamut: false,
         };
-        let (rows, off) = yuv_matrix(&c, PixelLayout::I420 { bits: 8 });
+        let (rows, off) = yuv_matrix(&c, PixelLayout::I420 { bits: 8 }, 8);
         let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01);
         assert!(near(
             apply(&rows, off, [16.0 / 255.0, 0.5019, 0.5019]),
@@ -274,7 +270,7 @@ mod tests {
             transfer: Transfer::Pq,
             wide_gamut: true,
         };
-        let (rows, off) = yuv_matrix(&c, PixelLayout::I420 { bits: 10 });
+        let (rows, off) = yuv_matrix(&c, PixelLayout::I420 { bits: 10 }, 10);
         // 10-bit white (940) stored in the low bits of a 16-bit texel.
         let s = 1.0 / 65535.0;
         let out = apply(&rows, off, [940.0 * s, 512.0 * s, 512.0 * s]);
@@ -299,6 +295,7 @@ mod tests {
                 transfer: Transfer::Sdr,
                 wide_gamut: false,
             },
+            bits: 8,
         };
         let sp_fsbs = build(
             &make_video(StereoLayout::SideBySide),

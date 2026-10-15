@@ -833,17 +833,24 @@ fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
                         let dur = Some(dec.frame_duration(&frame))
                             .filter(|d| *d > 0.0)
                             .unwrap_or(default_duration);
+                        let drm_desc = dec.last_drm_desc();
                         let floor = *sh.seek_floor.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some((fs, target)) = floor
                             && fs == serial
                             && pts + dur * 0.5 < target
                         {
+                            drop(drm_desc);
                             // SAFETY: valid frame; drop its reference.
                             unsafe { ff::av_frame_unref(frame.as_ptr()) };
                             continue;
                         }
                         let vf = match conv.convert(frame.take_raw(), pts, dur, serial) {
-                            Ok(v) => Arc::new(v),
+                            Ok(mut v) => {
+                                if v.layout == crate::PixelLayout::DrmPrime {
+                                    v.drm_desc = drm_desc;
+                                }
+                                Arc::new(v)
+                            }
                             Err(e) => {
                                 log::warn!("frame conversion: {e}");
                                 continue;

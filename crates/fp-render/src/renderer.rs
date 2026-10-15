@@ -1028,7 +1028,12 @@ impl Renderer {
         let dummy = self.dummy.views[0];
         let views: Vec<vk::ImageView> = match self.slot_video(self.current) {
             Some(v) => {
-                let mut vs: Vec<vk::ImageView> = v.images.iter().map(|i| i.views[0]).collect();
+                let mut vs: Vec<vk::ImageView> = Vec::new();
+                for img in &v.images {
+                    for &view in &img.views {
+                        vs.push(view);
+                    }
+                }
                 vs.resize(3, dummy);
                 vs
             }

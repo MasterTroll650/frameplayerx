@@ -18,6 +18,53 @@ pub enum PixelLayout {
     DrmPrime,
 }
 
+pub const DRM_FORMAT_MOD_VENDOR_QCOM: u64 = 0x05;
+pub const DRM_FORMAT_MOD_QCOM_COMPRESSED: u64 = (DRM_FORMAT_MOD_VENDOR_QCOM << 56) | 1;
+pub const DRM_FORMAT_MOD_LINEAR: u64 = 0;
+
+pub const DRM_FORMAT_NV12: u32 = fourcc(b"NV12");
+pub const DRM_FORMAT_P010: u32 = fourcc(b"P010");
+pub const DRM_FORMAT_Q10C: u32 = fourcc(b"Q10C");
+pub const DRM_FORMAT_QC08: u32 = fourcc(b"QC08");
+
+pub const fn fourcc(c: &[u8; 4]) -> u32 {
+    (c[0] as u32) | ((c[1] as u32) << 8) | ((c[2] as u32) << 16) | ((c[3] as u32) << 24)
+}
+
+/// Single plane description for a DRM buffer.
+#[derive(Debug)]
+pub struct DrmPlaneDesc {
+    /// File descriptor of the dma-buf.
+    pub fd: std::sync::atomic::AtomicI32,
+    /// Offset in bytes from buffer start.
+    pub offset: u64,
+    /// Row stride in bytes.
+    pub stride: u32,
+}
+
+impl DrmPlaneDesc {
+    pub fn new(fd: i32, offset: u64, stride: u32) -> Self {
+        Self {
+            fd: std::sync::atomic::AtomicI32::new(fd),
+            offset,
+            stride,
+        }
+    }
+}
+
+/// Description of exported DMA-BUF memory for zero-copy GPU import.
+#[derive(Debug)]
+pub struct DrmBufferDesc {
+    /// DRM format modifier (e.g. DRM_FORMAT_MOD_QCOM_COMPRESSED or DRM_FORMAT_MOD_LINEAR).
+    pub modifier: u64,
+    /// DRM pixel format FourCC code (e.g. DRM_FORMAT_NV12 or DRM_FORMAT_Q10C).
+    pub drm_fourcc: u32,
+    /// Planes (e.g. Y and UV planes for bi-planar formats).
+    pub planes: Vec<DrmPlaneDesc>,
+    /// Total buffer size in bytes.
+    pub size: u64,
+}
+
 impl PixelLayout {
     pub fn bytes_per_sample(&self) -> u32 {
         match self {
@@ -71,6 +118,8 @@ pub struct VideoFrame {
     /// Unique per decoded frame in this process, for upload caching.
     pub id: u64,
     frame: *mut ff::AVFrame,
+    /// DMA-BUF descriptors for zero-copy GPU import.
+    pub drm_desc: Option<DrmBufferDesc>,
 }
 
 static NEXT_FRAME_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -86,8 +135,22 @@ unsafe impl Sync for VideoFrame {}
 
 impl Drop for VideoFrame {
     fn drop(&mut self) {
-        // SAFETY: we own this reference.
-        unsafe { ff::av_frame_free(&mut self.frame) };
+        if !self.frame.is_null() {
+            // SAFETY: we own this reference.
+            unsafe { ff::av_frame_free(&mut self.frame) };
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(desc) = &self.drm_desc {
+            let mut closed = Vec::new();
+            for plane in &desc.planes {
+                let fd = plane.fd.swap(-1, std::sync::atomic::Ordering::SeqCst);
+                if fd >= 0 && !closed.contains(&fd) {
+                    closed.push(fd);
+                    // SAFETY: valid unimported descriptor owned by this frame.
+                    unsafe { libc::close(fd) };
+                }
+            }
+        }
     }
 }
 
@@ -226,13 +289,38 @@ impl VideoFrame {
                 serial: 0,
                 id: next_id(),
                 frame: dst,
+                drm_desc: None,
             })
+        }
+    }
+
+    /// Creates a zero-copy frame backed by DRM DMA-BUFs.
+    pub fn from_drm(
+        width: u32,
+        height: u32,
+        color: ColorInfo,
+        pts: f64,
+        duration: f64,
+        serial: u64,
+        drm_desc: DrmBufferDesc,
+    ) -> VideoFrame {
+        VideoFrame {
+            pts,
+            duration,
+            width,
+            height,
+            layout: PixelLayout::DrmPrime,
+            color,
+            serial,
+            id: next_id(),
+            frame: std::ptr::null_mut(),
+            drm_desc: Some(drm_desc),
         }
     }
 
     /// DMA-BUF description for zero-copy import, when the layout is DrmPrime.
     pub fn drm_descriptor(&self) -> Option<&ff::AVDRMFrameDescriptor> {
-        if self.layout != PixelLayout::DrmPrime {
+        if self.layout != PixelLayout::DrmPrime || self.frame.is_null() {
             return None;
         }
         // SAFETY: for DRM_PRIME frames data[0] points at the descriptor.
@@ -328,12 +416,12 @@ impl FrameConverter {
             return Err(Error::Unsupported("invalid frame dimensions".into()));
         }
 
-        // If the frame is in hardware or DRM_PRIME format, transfer to system memory
+        // If the frame is in hardware format (other than DRM_PRIME), transfer to system memory.
         unsafe {
             let desc = ff::av_pix_fmt_desc_get(f.format);
-            let is_hw = f.format == ff::AV_PIX_FMT_DRM_PRIME
-                || (!desc.is_null() && ((*desc).flags & ff::AV_PIX_FMT_FLAG_HWACCEL as u64 != 0))
-                || !f.hw_frames_ctx.is_null();
+            let is_hw = f.format != ff::AV_PIX_FMT_DRM_PRIME
+                && ((!desc.is_null() && ((*desc).flags & ff::AV_PIX_FMT_FLAG_HWACCEL as u64 != 0))
+                    || !f.hw_frames_ctx.is_null());
             if is_hw {
                 let mut sw = ff::av_frame_alloc();
                 if !sw.is_null() && ff::av_hwframe_transfer_data(sw, src, 0) >= 0 {
@@ -352,6 +440,7 @@ impl FrameConverter {
             ff::AV_PIX_FMT_YUV420P10LE => Some(PixelLayout::I420 { bits: 10 }),
             ff::AV_PIX_FMT_NV12 => Some(PixelLayout::Nv12),
             ff::AV_PIX_FMT_P010LE => Some(PixelLayout::P010),
+            ff::AV_PIX_FMT_DRM_PRIME => Some(PixelLayout::DrmPrime),
             _ => None,
         };
         let color = color_info(f);
@@ -367,6 +456,7 @@ impl FrameConverter {
                 serial,
                 id: next_id(),
                 frame: src,
+                drm_desc: None,
             });
         }
         // Anything else: convert to 8- or 10-bit I420.
@@ -448,6 +538,7 @@ impl FrameConverter {
                 serial,
                 id: next_id(),
                 frame: dst,
+                drm_desc: None,
             })
         }
     }
