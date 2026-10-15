@@ -249,16 +249,6 @@ device is still open.
 | Scope creep toward "media centre" | Never ships | §2.3 non-goals enforced in reviews |
 | Adult-content association affects Store certification | Tier 3 blocked | Player is content-neutral, ships with no content, no built-in feeds; same stance HereSphere takes on Steam |
 
----
-
-## 7b. Side track: WebXR on the Frame
-
-A sandboxed WebXR browser is the fallback path for web-hosted VR video and a
-useful reference for how SteamVR behaves inside a seccomp sandbox. Chromium's
-immersive sessions currently work on the Frame only with the seccomp filter
-disabled. The root cause and three Chromium patches are in
-[docs/webxr/README.md](webxr/README.md); on-device confirmation is pending.
-
 ## 8. Open questions for the owner
 1. ~~Licence~~ Decided: MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE). FFmpeg stays an LGPL build; its decoders need nothing GPL.
 2. Project name final? (`FramePlayer` vs something trademark-safer given "Frame" is Valve's.)

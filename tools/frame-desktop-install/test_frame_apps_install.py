@@ -4,6 +4,7 @@ import importlib.util
 import os
 import stat
 import struct
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -102,9 +103,9 @@ class Shortcut(unittest.TestCase):
 
 
 class OldVersions(unittest.TestCase):
-    app = fai.APPS['chromium-xr']
+    app = fai.APPS['frameplayer']
 
-    def copy(self, path, launcher='chromium-xr.sh'):
+    def copy(self, path, launcher='frameplayer.sh'):
         os.makedirs(path, exist_ok=True)
         with open(os.path.join(path, launcher), 'w') as f:
             f.write('#!/bin/sh\n')
@@ -112,23 +113,23 @@ class OldVersions(unittest.TestCase):
 
     def test_finds_every_other_copy(self):
         with tempfile.TemporaryDirectory() as home:
-            dest = self.copy(os.path.join(home, 'chromium-xr-frame'))
+            dest = self.copy(os.path.join(home, 'frameplayer'))
             build3 = self.copy(dest + '.release-build3')
             old = self.copy(dest + '.old')
             keep = self.copy(dest + '.keep')
-            devkit = self.copy(os.path.join(home, 'devkit-game', 'ChromiumXR'), 'chromium-xr-sandboxed.sh')
-            test = self.copy(os.path.join(home, 'Apps', 'chromium-xr-frame'))
-            notes = os.path.join(home, 'chromium-xr-frame.notes')  # not a leftover name
+            devkit = self.copy(os.path.join(home, 'devkit-game', 'FramePlayer'), 'frameplayer.sh')
+            test = self.copy(os.path.join(home, 'Apps', 'frameplayer'))
+            notes = os.path.join(home, 'frameplayer.notes')  # not a leftover name
             self.copy(notes)
             entries = [
-                (1, 'Chromium XR', os.path.join(dest, 'chromium-xr.sh')),  # this one: kept
-                (2, 'Chromium XR Sandboxed', os.path.join(dest, 'chromium-xr-sandboxed.sh')),
-                (3, 'ChromiumXR', os.path.join(devkit, 'chromium-xr-sandboxed.sh')),  # by launcher
-                (4, 'Chromium XR (test)', os.path.join(test, 'chromium-xr.sh')),
-                (5, 'FramePlayer', os.path.join(home, 'frameplayer', 'frameplayer.sh')),
-                (6, 'Chromium XR', '/usr/bin/elsewhere.sh'),  # by name, folder not ours
-                (7, 'Chromium XR', ''),  # launcher unknown (Steam's live list): this one
-                (8, 'Chromium XR Sandboxed', ''),  # launcher unknown, another name
+                (1, 'FramePlayer', os.path.join(dest, 'frameplayer.sh')),  # this one: kept
+                (2, 'FramePlayer (old)', os.path.join(build3, 'frameplayer.sh')),
+                (3, 'FramePlayer', os.path.join(devkit, 'frameplayer.sh')),  # by launcher
+                (4, 'FramePlayer (test)', os.path.join(test, 'frameplayer.sh')),
+                (5, 'OtherApp', os.path.join(home, 'other', 'other.sh')),
+                (6, 'FramePlayer', '/usr/bin/elsewhere.sh'),  # by name, folder not ours
+                (7, 'FramePlayer', ''),  # launcher unknown (Steam's live list): this one
+                (8, 'FramePlayer Beta', ''),  # launcher unknown, another name
             ]
             entries_old, folders = fai.old_versions(self.app, dest, entries, home)
             self.assertEqual(sorted(a for a, _, _ in entries_old), [2, 3, 4, 6, 8])
@@ -138,10 +139,10 @@ class OldVersions(unittest.TestCase):
 
     def test_ignores_folders_without_the_app_or_outside_home(self):
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as other:
-            dest = os.path.join(home, 'chromium-xr-frame')
+            dest = os.path.join(home, 'frameplayer')
             os.makedirs(dest + '.old')  # empty: not a copy
-            outside = self.copy(os.path.join(other, 'cx'))
-            _, folders = fai.old_versions(self.app, dest, [(9, 'Chromium XR', os.path.join(outside, 'chromium-xr.sh'))], home)
+            outside = self.copy(os.path.join(other, 'fp'))
+            _, folders = fai.old_versions(self.app, dest, [(9, 'FramePlayer', os.path.join(outside, 'frameplayer.sh'))], home)
             self.assertEqual(folders, [])
 
     def test_remove_appids(self):
@@ -162,6 +163,7 @@ class Unzip(unittest.TestCase):
                 info.external_attr = (mode << 16) | (0x10 if name.endswith('/') else 0)
                 z.writestr(info, data)
 
+    @unittest.skipIf(sys.platform == 'win32', 'POSIX permissions not supported on Windows')
     def test_keeps_exec_bits_and_strips_single_top_folder(self):
         with tempfile.TemporaryDirectory() as d:
             zp = os.path.join(d, 'a.zip')
@@ -176,11 +178,11 @@ class Unzip(unittest.TestCase):
     def test_flat_zip_is_not_stripped(self):
         with tempfile.TemporaryDirectory() as d:
             zp = os.path.join(d, 'c.zip')
-            self.make_zip(zp, [('chromium-xr.sh', 0o100755, b'x'), ('chromium/chrome', 0o100755, b'y')])
+            self.make_zip(zp, [('custom.sh', 0o100755, b'x'), ('bin/prog', 0o100755, b'y')])
             dest = os.path.join(d, 'out')
             fai.extract(zp, dest)
-            self.assertTrue(os.path.isfile(os.path.join(dest, 'chromium-xr.sh')))
-            self.assertTrue(os.path.isfile(os.path.join(dest, 'chromium/chrome')))
+            self.assertTrue(os.path.isfile(os.path.join(dest, 'custom.sh')))
+            self.assertTrue(os.path.isfile(os.path.join(dest, 'bin/prog')))
 
     def test_rejects_paths_outside(self):
         with tempfile.TemporaryDirectory() as d:
@@ -212,26 +214,24 @@ class ReleaseDiscovery(unittest.TestCase):
         from unittest.mock import patch
 
         app = {
-            'name': 'Chromium XR',
+            'name': 'FramePlayer',
             'repos': ['fork/frameplayer', 'upstream/frameplayer'],
-            'tag': fai.re.compile(r'^chromium-xr-frame-'),
-            'asset': fai.re.compile(r'^ChromiumXR-Frame-arm64\.zip$'),
+            'tag': fai.re.compile(r'^v?\d'),
+            'asset': fai.re.compile(r'^frameplayer-.*-aarch64\.zip$'),
         }
 
-        # First call (fork): only FramePlayer releases
-        fork_releases = [
-            {'tag_name': 'v0.4.0', 'published_at': '2026-10-15T00:00:00Z', 'draft': False, 'assets': []}
-        ]
-        # Second call (upstream): has Chromium XR release
+        # First call (fork): no releases
+        fork_releases = []
+        # Second call (upstream): has FramePlayer release
         upstream_releases = [
             {
-                'tag_name': 'chromium-xr-frame-157.0.8085.0-11',
+                'tag_name': 'v0.3.0',
                 'published_at': '2026-10-10T00:00:00Z',
                 'draft': False,
                 'assets': [
                     {
-                        'name': 'ChromiumXR-Frame-arm64.zip',
-                        'browser_download_url': 'https://github.com/upstream/releases/ChromiumXR-Frame-arm64.zip',
+                        'name': 'frameplayer-0.3.0-aarch64.zip',
+                        'browser_download_url': 'https://github.com/upstream/releases/frameplayer-0.3.0-aarch64.zip',
                         'size': 123456,
                         'digest': 'sha256:abcd',
                     }
@@ -252,8 +252,8 @@ class ReleaseDiscovery(unittest.TestCase):
 
         with patch('urllib.request.urlopen', side_effect=mock_urlopen):
             tag, asset, url, size, digest = fai.latest_release(app)
-            self.assertEqual(tag, 'chromium-xr-frame-157.0.8085.0-11')
-            self.assertEqual(asset, 'ChromiumXR-Frame-arm64.zip')
+            self.assertEqual(tag, 'v0.3.0')
+            self.assertEqual(asset, 'frameplayer-0.3.0-aarch64.zip')
             self.assertEqual(size, 123456)
             self.assertEqual(digest, 'abcd')
             self.assertEqual(len(calls), 2)
@@ -266,10 +266,10 @@ class ReleaseDiscovery(unittest.TestCase):
         from unittest.mock import patch
 
         app = {
-            'name': 'Chromium XR',
+            'name': 'FramePlayer',
             'repos': ['fork/frameplayer'],
-            'tag': fai.re.compile(r'^chromium-xr-frame-'),
-            'asset': fai.re.compile(r'^ChromiumXR-Frame-arm64\.zip$'),
+            'tag': fai.re.compile(r'^v?\d'),
+            'asset': fai.re.compile(r'^frameplayer-.*-aarch64\.zip$'),
         }
 
         with patch('urllib.request.urlopen', return_value=io.BytesIO(b'[]')):

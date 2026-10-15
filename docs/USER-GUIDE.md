@@ -232,22 +232,6 @@ open the adjust panel's **Passthrough** tab while it plays: changing anything
 there gives that video its own settings (save them like any other
 adjustment), and turning **Own settings for this video** off makes it follow
 Settings again.
-
-## Web XR games and experiences
-
-WebXR pages run in **Chromium XR for Steam Frame**, a separate app from this
-repository's releases (`ChromiumXR-Frame-arm64.zip`, unpacked into
-`~/chromium-xr-frame` with its Steam library entry; see
-[docs/webxr](webxr/README.md)). Start it from your library: it runs at 90 Hz,
-both eyes render, and the Frame controllers work like Quest Touch controllers
-in Quest-made games. Its address bar goes anywhere; to change the page it
-starts on, put an address in `~/.config/chromium-xr-frame/home-url`.
-
-Notes: Chromium XR currently runs with part of Chromium's sandbox switched
-off (its `--disable-seccomp-filter-sandbox` flag), because SteamVR refuses
-the sandboxed browser otherwise. Use it for VR pages you trust.
-[docs/webxr](webxr/README.md) has the patches that fix this properly.
-
 ## Haptics
 
 Scripts (`.funscript`, including multi-axis `video.surge.funscript` etc.)

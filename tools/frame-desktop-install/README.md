@@ -1,7 +1,7 @@
 # Installing from Desktop Mode
 
-`frame-apps-install.py` installs FramePlayer and Chromium XR on a Steam Frame
-from Desktop Mode, with no Developer Mode, PC or SSH, and adds them to the
+`frame-apps-install.py` installs FramePlayer on a Steam Frame
+from Desktop Mode, with no Developer Mode, PC or SSH, and adds it to the
 Steam library. The Frame's desktop Steam has no "Add a Non-Steam Game" menu,
 so the installer adds the library entry itself:
 
@@ -15,10 +15,9 @@ so the installer adds the library entry itself:
 and artwork names match `crates/frameplayer-install/src/shortcut.rs`.
 
 ```sh
-python3 frame-apps-install.py                          # both apps, latest releases
-python3 frame-apps-install.py --app frameplayer
+python3 frame-apps-install.py                          # latest release
 python3 frame-apps-install.py --dir ~/Apps --name-suffix " (test)"
-python3 frame-apps-install.py --remove --app chromium-xr --dir ~/Apps --name-suffix " (test)"
+python3 frame-apps-install.py --remove
 ```
 
 To run it without a terminal, put a `.desktop` launcher next to it, e.g.

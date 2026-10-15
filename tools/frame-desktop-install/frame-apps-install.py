@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
-"""Installs FramePlayer and/or Chromium XR on a Steam Frame from Desktop Mode
-and adds them to the Steam library. No Developer Mode, PC or SSH needed.
+"""Installs FramePlayer on a Steam Frame from Desktop Mode
+and adds it to the Steam library. No Developer Mode, PC or SSH needed.
 
 Runs on the headset as the normal user, with the Python 3 that SteamOS ships
 (standard library only):
 
-  python3 frame-apps-install.py                     # both apps, latest releases
-  python3 frame-apps-install.py --app frameplayer
+  python3 frame-apps-install.py                     # latest release
   python3 frame-apps-install.py --zip ~/Downloads/frameplayer-0.2.0-alpha.1-aarch64.zip
   python3 frame-apps-install.py --dir ~/Apps --name-suffix " (test)"
-  python3 frame-apps-install.py --remove --app chromium-xr
+  python3 frame-apps-install.py --remove
 
-Steps, per app: find the newest GitHub release, download its zip and check the
+Steps: find the newest GitHub release, download its zip and check the
 SHA-256 GitHub recorded for it, uninstall every other copy of the app (library
-entries made by other installers, e.g. Frame Control titles, "Chromium XR
-Sandboxed" or "(test)" copies, the folders they start from, and leftovers
-such as <dir>.old or <dir>.release-build3; folders ending in .keep are left
-alone, and settings, profiles and videos live elsewhere), unpack the new one
-next to the install directory and swap it in, then add or update the Steam
-library entry with its artwork. With --name-suffix (a test copy) other copies
-are left alone.
+entries made by other installers, e.g. Frame Control titles, "(test)" copies,
+the folders they start from, and leftovers such as <dir>.old or
+<dir>.release-build3; folders ending in .keep are left alone, and settings,
+profiles and videos live elsewhere), unpack the new one next to the install
+directory and swap it in, then add or update the Steam library entry with its
+artwork. With --name-suffix (a test copy) other copies are left alone.
 
 The library entry is added one of two ways (--steam):
   live  through the Steam client's local DevTools port (127.0.0.1:8080), the
@@ -74,22 +72,6 @@ APPS = {
         'icons': ['assets/steam/icon.png'],
         'art': 'assets/steam',
         'process': 'frameplayer/frameplayer',
-    },
-    'chromium-xr': {
-        'name': 'Chromium XR',
-        # Check fork first, then upstream where Chromium XR builds are hosted.
-        'repos': [REPO, UPSTREAM_REPO] if REPO != UPSTREAM_REPO else [REPO],
-        'tag': re.compile(r'^chromium-xr-frame-'),
-        'asset': re.compile(r'^ChromiumXR-Frame-arm64\.zip$'),
-        'dir': 'chromium-xr-frame',
-        'exe': 'chromium-xr.sh',
-        'family': re.compile(r'^Chromium XR\b'),
-        'exes': ('chromium-xr.sh', 'chromium-xr-sandboxed.sh'),
-        'icons': ['assets/steam/icon.png', 'chromium/product_logo_256.png'],
-        'art': 'assets/steam',
-        # Builds before test build 5 ship no Steam artwork: fetch it.
-        'art_url': 'https://yellkell.com/frameapps/art/chromium-xr/',
-        'process': 'chromium/chrome --user',
     },
 }
 
@@ -756,11 +738,10 @@ def main():
 
     keys = list(APPS) if args.app == 'all' else [args.app]
     if args.zip:
-        if len(keys) != 1:
-            match = [k for k in APPS if APPS[k]['asset'].match(os.path.basename(args.zip))]
-            if len(match) != 1:
-                raise Fail('With --zip, also say which app it is: --app frameplayer or --app chromium-xr.')
-            keys = match
+        match = [k for k in APPS if APPS[k]['asset'].match(os.path.basename(args.zip))]
+        if not match:
+            raise Fail(f'The zip filename does not match FramePlayer release assets ({APPS["frameplayer"]["asset"].pattern}).')
+        keys = match
     parent = os.path.abspath(os.path.expanduser(args.dir))
     cache = os.path.join(HOME, '.cache/frame-apps')
     os.makedirs(cache, exist_ok=True)
