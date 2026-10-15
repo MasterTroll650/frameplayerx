@@ -205,5 +205,78 @@ class Unzip(unittest.TestCase):
             self.assertFalse(os.path.exists(dest + '.new'))
 
 
+class ReleaseDiscovery(unittest.TestCase):
+    def test_fallback_to_upstream_when_first_repo_has_no_matches(self):
+        import io
+        import json
+        from unittest.mock import patch
+
+        app = {
+            'name': 'Chromium XR',
+            'repos': ['fork/frameplayer', 'upstream/frameplayer'],
+            'tag': fai.re.compile(r'^chromium-xr-frame-'),
+            'asset': fai.re.compile(r'^ChromiumXR-Frame-arm64\.zip$'),
+        }
+
+        # First call (fork): only FramePlayer releases
+        fork_releases = [
+            {'tag_name': 'v0.4.0', 'published_at': '2026-10-15T00:00:00Z', 'draft': False, 'assets': []}
+        ]
+        # Second call (upstream): has Chromium XR release
+        upstream_releases = [
+            {
+                'tag_name': 'chromium-xr-frame-157.0.8085.0-11',
+                'published_at': '2026-10-10T00:00:00Z',
+                'draft': False,
+                'assets': [
+                    {
+                        'name': 'ChromiumXR-Frame-arm64.zip',
+                        'browser_download_url': 'https://github.com/upstream/releases/ChromiumXR-Frame-arm64.zip',
+                        'size': 123456,
+                        'digest': 'sha256:abcd',
+                    }
+                ],
+            }
+        ]
+
+        calls = []
+
+        def mock_urlopen(req, timeout=30):
+            url = req.full_url if hasattr(req, 'full_url') else str(req)
+            calls.append(url)
+            if 'fork/frameplayer' in url:
+                data = json.dumps(fork_releases).encode('utf-8')
+            else:
+                data = json.dumps(upstream_releases).encode('utf-8')
+            return io.BytesIO(data)
+
+        with patch('urllib.request.urlopen', side_effect=mock_urlopen):
+            tag, asset, url, size, digest = fai.latest_release(app)
+            self.assertEqual(tag, 'chromium-xr-frame-157.0.8085.0-11')
+            self.assertEqual(asset, 'ChromiumXR-Frame-arm64.zip')
+            self.assertEqual(size, 123456)
+            self.assertEqual(digest, 'abcd')
+            self.assertEqual(len(calls), 2)
+            self.assertIn('fork/frameplayer', calls[0])
+            self.assertIn('upstream/frameplayer', calls[1])
+
+    def test_fails_when_no_repo_has_matching_releases(self):
+        import io
+        import json
+        from unittest.mock import patch
+
+        app = {
+            'name': 'Chromium XR',
+            'repos': ['fork/frameplayer'],
+            'tag': fai.re.compile(r'^chromium-xr-frame-'),
+            'asset': fai.re.compile(r'^ChromiumXR-Frame-arm64\.zip$'),
+        }
+
+        with patch('urllib.request.urlopen', return_value=io.BytesIO(b'[]')):
+            with self.assertRaises(fai.Fail):
+                fai.latest_release(app)
+
+
 if __name__ == '__main__':
     unittest.main()
+

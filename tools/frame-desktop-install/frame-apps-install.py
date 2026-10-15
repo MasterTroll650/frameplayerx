@@ -53,7 +53,8 @@ import zipfile
 import zlib
 
 REPO = 'remotesojourner/frameplayer'
-API = f'https://api.github.com/repos/{REPO}/releases?per_page=30'
+UPSTREAM_REPO = 'yellkell/frameplayer'
+API = f'https://api.github.com/repos/{REPO}/releases?per_page=100'
 DEVTOOLS = 'http://127.0.0.1:8080/json'
 HOME = os.path.expanduser('~')
 STEAM_ROOTS = [os.path.join(HOME, '.local/share/Steam'), os.path.join(HOME, '.steam/steam')]
@@ -62,6 +63,7 @@ STEAM_ROOTS = [os.path.join(HOME, '.local/share/Steam'), os.path.join(HOME, '.st
 APPS = {
     'frameplayer': {
         'name': 'FramePlayer',
+        'repos': [REPO, UPSTREAM_REPO] if REPO != UPSTREAM_REPO else [REPO],
         'tag': re.compile(r'^v?\d'),
         'asset': re.compile(r'^frameplayer-.*-aarch64\.zip$'),
         'dir': 'frameplayer',
@@ -75,13 +77,15 @@ APPS = {
     },
     'chromium-xr': {
         'name': 'Chromium XR',
+        # Check fork first, then upstream where Chromium XR builds are hosted.
+        'repos': [REPO, UPSTREAM_REPO] if REPO != UPSTREAM_REPO else [REPO],
         'tag': re.compile(r'^chromium-xr-frame-'),
         'asset': re.compile(r'^ChromiumXR-Frame-arm64\.zip$'),
         'dir': 'chromium-xr-frame',
         'exe': 'chromium-xr.sh',
         'family': re.compile(r'^Chromium XR\b'),
         'exes': ('chromium-xr.sh', 'chromium-xr-sandboxed.sh'),
-        'icons':['assets/steam/icon.png', 'chromium/product_logo_256.png'],
+        'icons': ['assets/steam/icon.png', 'chromium/product_logo_256.png'],
         'art': 'assets/steam',
         # Builds before test build 5 ship no Steam artwork: fetch it.
         'art_url': 'https://yellkell.com/frameapps/art/chromium-xr/',
@@ -126,18 +130,25 @@ def ask(question):
 # ---------------------------------------------------------------- releases
 
 def latest_release(app):
-    with urllib.request.urlopen(urllib.request.Request(
-            API, headers={'Accept': 'application/vnd.github+json'}), timeout=30) as r:
-        releases = json.load(r)
-    ours = [x for x in releases if not x.get('draft') and app['tag'].match(x['tag_name'])]
-    if not ours:
-        raise Fail(f"No {app['name']} release found on GitHub.")
-    rel = max(ours, key=lambda x: x['published_at'])
-    asset = next((a for a in rel['assets'] if app['asset'].match(a['name'])), None)
-    if not asset:
-        raise Fail(f"{app['name']} {rel['tag_name']} has no download for the Frame.")
-    digest = (asset.get('digest') or '').removeprefix('sha256:') or None
-    return rel['tag_name'], asset['name'], asset['browser_download_url'], asset['size'], digest
+    repos = app.get('repos') or [REPO]
+    for repo in repos:
+        url = f'https://api.github.com/repos/{repo}/releases?per_page=100'
+        try:
+            req = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json'})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                releases = json.load(r)
+            ours = [x for x in releases if not x.get('draft') and app['tag'].match(x['tag_name'])]
+            if not ours:
+                continue
+            rel = max(ours, key=lambda x: x['published_at'])
+            asset = next((a for a in rel['assets'] if app['asset'].match(a['name'])), None)
+            if not asset:
+                continue
+            digest = (asset.get('digest') or '').removeprefix('sha256:') or None
+            return rel['tag_name'], asset['name'], asset['browser_download_url'], asset['size'], digest
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+            continue
+    raise Fail(f"No {app['name']} release found on GitHub.")
 
 
 def download(url, dest, size):
@@ -732,11 +743,16 @@ def main():
     ap.add_argument('--dir', default=HOME, help='folder to install into (default: your home folder)')
     ap.add_argument('--name-suffix', default='', help='added to the library name, e.g. " (test)"')
     ap.add_argument('--steam', choices=['auto', 'live', 'file', 'none'], default='auto')
+    ap.add_argument('--repo', help='GitHub repository to check for releases (default: %(default)s)', default=REPO)
     ap.add_argument('--remove', action='store_true', help='remove the app and its library entry')
     args = ap.parse_args()
 
     if os.uname().machine != 'aarch64' and not os.environ.get('FRAME_APPS_ANY_ARCH'):
         raise Fail(f'This installer is for the Steam Frame; this machine is {os.uname().machine}.')
+
+    if args.repo and args.repo != REPO:
+        for app in APPS.values():
+            app['repos'] = [args.repo, *[r for r in app.get('repos', []) if r != args.repo]]
 
     keys = list(APPS) if args.app == 'all' else [args.app]
     if args.zip:
