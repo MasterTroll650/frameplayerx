@@ -695,9 +695,14 @@ mod tests {
             candidates(true, hevc, yuv420, HwDecode::Auto, true),
             vec![NativeV4l2, Named(c"hevc_v4l2m2m", true), Default]
         );
-        // 10-bit bypasses 8-bit-only hardware decoders.
+        // 10-bit uses native V4L2 (Q10C/P010), bypassing 8-bit-only FFmpeg wrappers.
         assert_eq!(
             candidates(true, hevc, yuv420p10, HwDecode::Auto, true),
+            vec![NativeV4l2, Default]
+        );
+        // After the native decoder fails (or with it disabled), 10-bit bypasses 8-bit-only wrappers.
+        assert_eq!(
+            candidates(true, hevc, yuv420p10, HwDecode::Auto, false),
             vec![Default]
         );
         // After the native decoder fails (or with it disabled).
