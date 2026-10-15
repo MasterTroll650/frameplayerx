@@ -134,7 +134,7 @@ fn side_data(par: &ff::AVCodecParameters, kind: ff::AVPacketSideDataType) -> Opt
     all.iter()
         .find(|sd| sd.type_ == kind && !sd.data.is_null() && sd.size > 0)
         // SAFETY: data is valid for size bytes while the stream lives.
-        .map(|sd| unsafe { std::slice::from_raw_parts(sd.data, sd.size as usize) })
+        .map(|sd| unsafe { std::slice::from_raw_parts(sd.data, sd.size) })
 }
 
 /// Maps FFmpeg spherical side data to a projection.
