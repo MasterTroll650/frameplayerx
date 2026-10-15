@@ -394,7 +394,7 @@ impl Library {
         // 3. Compare with the database and write changes.
         let prefix = format!(
             "{}{}",
-            path_string(&root).trim_end_matches(|c| c == '/' || c == '\\'),
+            path_string(&root).trim_end_matches(['/', '\\']),
             std::path::MAIN_SEPARATOR
         );
         let known: HashMap<String, Known> = self.with(|c| {
@@ -592,10 +592,20 @@ mod tests {
         touch(&root.join("scene_180_lr.en.srt"), b"1");
         touch(&root.join("Scene_180_LR_es.vtt"), b"1");
         touch(&root.join("notes.txt"), b"x");
-        touch(&root.join("sub").join("deeper").join("Trip_360.MKV"), b"video2");
+        touch(
+            &root.join("sub").join("deeper").join("Trip_360.MKV"),
+            b"video2",
+        );
         touch(&root.join("sub").join("Other.mp4"), b"video3");
         touch(&root.join(".hidden").join("secret.mp4"), b"no");
-        touch(&root.join("steamapps").join("common").join("Game").join("intro.mp4"), b"no");
+        touch(
+            &root
+                .join("steamapps")
+                .join("common")
+                .join("Game")
+                .join("intro.mp4"),
+            b"no",
+        );
         touch(&root.join("._Scene_180_LR.mp4"), b"appledouble");
         let interactive = tmp.path().join("Interactive");
         touch(&interactive.join("Other.funscript"), b"{}");
@@ -680,7 +690,10 @@ mod tests {
         assert_eq!(r1.added, 3);
 
         let loc = |p: &Path| p.to_str().unwrap().to_string();
-        let b = lib.get_by_location(&loc(&root.join("b.mp4"))).unwrap().unwrap();
+        let b = lib
+            .get_by_location(&loc(&root.join("b.mp4")))
+            .unwrap()
+            .unwrap();
         lib.set_rating(b.id, 4).unwrap();
         lib.set_tags(b.id, &["keep"]).unwrap();
 
@@ -701,9 +714,15 @@ mod tests {
             (r3.added, r3.updated, r3.unchanged, r3.missing),
             (1, 2, 0, 1)
         );
-        let a = lib.get_by_location(&loc(&root.join("a.mp4"))).unwrap().unwrap();
+        let a = lib
+            .get_by_location(&loc(&root.join("a.mp4")))
+            .unwrap()
+            .unwrap();
         assert_eq!(a.size, Some(8));
-        let c = lib.get_by_location(&loc(&root.join("dir").join("c.mp4"))).unwrap().unwrap();
+        let c = lib
+            .get_by_location(&loc(&root.join("dir").join("c.mp4")))
+            .unwrap()
+            .unwrap();
         assert_eq!(c.scripts.len(), 1);
         let b2 = lib.get(b.id).unwrap().unwrap();
         assert!(b2.missing);

@@ -346,7 +346,9 @@ pub fn open_serial(path: &Path, baud: u32) -> Result<File> {
 /// Opens a serial port for TCode. Not supported on non-unix platforms.
 #[cfg(not(unix))]
 pub fn open_serial(_path: &Path, _baud: u32) -> Result<File> {
-    Err(Error::Unsupported("serial ports are only supported on unix".into()))
+    Err(Error::Unsupported(
+        "serial ports are only supported on unix".into(),
+    ))
 }
 
 /// A serial port that may have a TCode device on it.
@@ -403,7 +405,7 @@ fn list_serial_ports_in(dev: &Path) -> Vec<SerialPortInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Read};
+    use std::io::{BufRead, BufReader};
     use std::net::TcpListener;
 
     fn m(axis: Axis, pos: f32, duration_ms: u32) -> AxisMove {
@@ -545,6 +547,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn serial_over_pty() {
+        use std::io::Read as _;
+
         // A pseudo-terminal stands in for /dev/ttyACM0.
         // SAFETY: plain libc calls on a descriptor we own; ptsname_r writes
         // into a buffer we provide with its length.
