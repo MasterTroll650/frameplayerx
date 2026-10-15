@@ -105,10 +105,7 @@ fn mediabrowser_full_lifecycle_browse_stream_and_progress() {
         }
     });
 
-    let config = mediabrowser_config(
-        server.url(""),
-        Some(Credentials::new("alice", "secret123")),
-    );
+    let config = mediabrowser_config(server.url(""), Some(Credentials::new("alice", "secret123")));
     let src = build(&SourceConfig::MediaBrowser(config)).unwrap();
     assert_eq!(src.kind(), SourceKind::MediaBrowser);
 
@@ -140,7 +137,9 @@ fn mediabrowser_full_lifecycle_browse_stream_and_progress() {
     assert_eq!(detailed.markers[0], (0.0, "Intro".to_string()));
     assert_eq!(detailed.markers[1], (30.0, "Drop".to_string()));
     assert_eq!(detailed.subtitles.len(), 1);
-    assert!(detailed.subtitles[0].contains("/Videos/item_rollercoaster/ms_1/Subtitles/2/Stream.srt"));
+    assert!(
+        detailed.subtitles[0].contains("/Videos/item_rollercoaster/ms_1/Subtitles/2/Stream.srt")
+    );
 
     // 4. Sidecars
     let sidecars = src.sidecars(&vr_items[1]).unwrap();
@@ -158,10 +157,17 @@ fn mediabrowser_full_lifecycle_browse_stream_and_progress() {
     let mb = fp_sources::MediaBrowserSource::new(&mediabrowser_config(
         server.url(""),
         Some(Credentials::new("alice", "secret123")),
-    )).unwrap();
+    ))
+    .unwrap();
     assert!(mb.report_playback_start("item_rollercoaster").is_ok());
-    assert!(mb.report_playback_progress("item_rollercoaster", 15.0, false).is_ok());
-    assert!(mb.report_playback_stopped("item_rollercoaster", 60.0).is_ok());
+    assert!(
+        mb.report_playback_progress("item_rollercoaster", 15.0, false)
+            .is_ok()
+    );
+    assert!(
+        mb.report_playback_stopped("item_rollercoaster", 60.0)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -181,7 +187,11 @@ fn mediabrowser_quick_connect_flow() {
                     &[("Content-Type", "application/json")],
                 )
             } else {
-                resp(200, r#"{"Authenticated":false}"#, &[("Content-Type", "application/json")])
+                resp(
+                    200,
+                    r#"{"Authenticated":false}"#,
+                    &[("Content-Type", "application/json")],
+                )
             }
         }
         _ => resp(404, "", &[]),

@@ -8,6 +8,7 @@
 //! Video details (subtitles and chapter markers) are resolved in [`Source::details`].
 //! Playback progress can be reported back to the server using the session API.
 
+use crate::Source;
 use crate::cache::lock;
 use crate::config::{Credentials, MediaBrowserConfig, SourceKind};
 use crate::dir_entry;
@@ -15,7 +16,6 @@ use crate::error::{Error, Result};
 use crate::http::{HttpClient, HttpOptions, HttpReply};
 use crate::sidecar::Sidecars;
 use crate::urlutil::redact;
-use crate::Source;
 use fp_core::format::detect_from_name;
 use fp_core::source::{ByteSource, Entry, EntryKind};
 use serde_json::Value;
@@ -191,17 +191,15 @@ pub(crate) fn parse_auth_response(v: &Value, url: &str) -> Result<(String, Strin
 
 /// Parses the code and secret from a `/QuickConnect/Initiate` response.
 pub(crate) fn parse_quick_connect_initiate(v: &Value, url: &str) -> Result<QuickConnectState> {
-    let code = text(v, "Code")
-        .ok_or_else(|| Error::invalid(url, "missing Code in initiate response"))?;
+    let code =
+        text(v, "Code").ok_or_else(|| Error::invalid(url, "missing Code in initiate response"))?;
     let secret = text(v, "Secret")
         .ok_or_else(|| Error::invalid(url, "missing Secret in initiate response"))?;
     Ok(QuickConnectState { code, secret })
 }
 
 /// Parses authentication status and credentials from a `/QuickConnect/Connect` response.
-pub(crate) fn parse_quick_connect_connect(
-    v: &Value,
-) -> (bool, Option<String>, Option<String>) {
+pub(crate) fn parse_quick_connect_connect(v: &Value) -> (bool, Option<String>, Option<String>) {
     let authenticated = boolean(v, "Authenticated").unwrap_or(false);
     let auth_res = get(v, "AuthenticationResult");
     let token = auth_res
@@ -311,9 +309,7 @@ pub(crate) fn apply_item_details(
         }
     }
 
-    let path = ms
-        .and_then(|m| text(m, "Path"))
-        .or_else(|| text(v, "Path"));
+    let path = ms.and_then(|m| text(m, "Path")).or_else(|| text(v, "Path"));
     if let Some(p) = path
         && let Some(fmt) = detect_from_name(&p)
     {
@@ -507,8 +503,8 @@ impl MediaBrowserSource {
 
     /// Sends an authenticated POST request with a JSON body.
     fn api_post_json(&self, path: &str, body: &Value) -> Result<()> {
-        let json_bytes = serde_json::to_vec(body)
-            .map_err(|e| Error::invalid(path, e.to_string()))?;
+        let json_bytes =
+            serde_json::to_vec(body).map_err(|e| Error::invalid(path, e.to_string()))?;
         self.api_request("POST", path, Some(&json_bytes))?;
         Ok(())
     }
@@ -564,7 +560,10 @@ impl MediaBrowserSource {
         };
         let client = HttpClient::new(opts.clone(), None);
         let encoded_secret = crate::urlutil::encode_form_value(secret);
-        let url = format!("{}/QuickConnect/Connect?secret={encoded_secret}", self.base_url);
+        let url = format!(
+            "{}/QuickConnect/Connect?secret={encoded_secret}",
+            self.base_url
+        );
         let reply = client.request("GET", &url, &[], None, JSON_LIMIT)?;
         let reply = reply.error_for_status(&url)?;
         let v: Value = serde_json::from_slice(&reply.body)
@@ -610,7 +609,9 @@ impl MediaBrowserSource {
 
     /// Reports that playback of an item has started.
     pub fn report_playback_start(&self, item_id: &str) -> Result<()> {
-        let id = decode_location(item_id).map(|(_, id)| id).unwrap_or(item_id);
+        let id = decode_location(item_id)
+            .map(|(_, id)| id)
+            .unwrap_or(item_id);
         let body = serde_json::json!({
             "ItemId": id,
             "PlayMethod": "DirectPlay",
@@ -629,7 +630,9 @@ impl MediaBrowserSource {
         position_secs: f64,
         is_paused: bool,
     ) -> Result<()> {
-        let id = decode_location(item_id).map(|(_, id)| id).unwrap_or(item_id);
+        let id = decode_location(item_id)
+            .map(|(_, id)| id)
+            .unwrap_or(item_id);
         let body = serde_json::json!({
             "ItemId": id,
             "PositionTicks": seconds_to_ticks(position_secs),
@@ -644,12 +647,10 @@ impl MediaBrowserSource {
     }
 
     /// Reports that playback has stopped.
-    pub fn report_playback_stopped(
-        &self,
-        item_id: &str,
-        position_secs: f64,
-    ) -> Result<()> {
-        let id = decode_location(item_id).map(|(_, id)| id).unwrap_or(item_id);
+    pub fn report_playback_stopped(&self, item_id: &str, position_secs: f64) -> Result<()> {
+        let id = decode_location(item_id)
+            .map(|(_, id)| id)
+            .unwrap_or(item_id);
         let body = serde_json::json!({
             "ItemId": id,
             "PositionTicks": seconds_to_ticks(position_secs),
@@ -663,7 +664,8 @@ impl MediaBrowserSource {
     /// Returns the current access token and user ID if authenticated.
     pub fn auth_credentials(&self) -> Option<(String, String)> {
         let auth = lock(&self.auth);
-        auth.as_ref().map(|a| (a.access_token.clone(), a.user_id.clone()))
+        auth.as_ref()
+            .map(|a| (a.access_token.clone(), a.user_id.clone()))
     }
 }
 
@@ -710,9 +712,7 @@ impl Source for MediaBrowserSource {
                     let count = items.len();
                     all_entries.extend(items);
 
-                    let total = num(&v, "TotalRecordCount")
-                        .map(|n| n as usize)
-                        .unwrap_or(0);
+                    let total = num(&v, "TotalRecordCount").map(|n| n as usize).unwrap_or(0);
                     start_index += PAGE_SIZE;
                     if count == 0 || start_index >= total {
                         break;
@@ -809,12 +809,16 @@ mod tests {
     #[test]
     fn test_mediabrowser_header() {
         let unauthed = mediabrowser_header(None);
-        assert!(unauthed.starts_with("MediaBrowser Client=\"FramePlayer\", Device=\"SteamFrame\", DeviceId=\""));
+        assert!(unauthed.starts_with(
+            "MediaBrowser Client=\"FramePlayer\", Device=\"SteamFrame\", DeviceId=\""
+        ));
         assert!(unauthed.contains(&format!("Version=\"{}\"", env!("CARGO_PKG_VERSION"))));
         assert!(!unauthed.contains("Token="));
 
         let authed = mediabrowser_header(Some("test_access_token"));
-        assert!(authed.starts_with("MediaBrowser Client=\"FramePlayer\", Device=\"SteamFrame\", DeviceId=\""));
+        assert!(authed.starts_with(
+            "MediaBrowser Client=\"FramePlayer\", Device=\"SteamFrame\", DeviceId=\""
+        ));
         assert!(authed.contains(&format!("Version=\"{}\"", env!("CARGO_PKG_VERSION"))));
         assert!(authed.contains("Token=\"test_access_token\""));
     }
@@ -992,7 +996,11 @@ mod tests {
             ]
         });
 
-        let mut entry = Entry::new("Demo VR Scene", "mb:http://server:8096#item=item100", EntryKind::Video);
+        let mut entry = Entry::new(
+            "Demo VR Scene",
+            "mb:http://server:8096#item=item100",
+            EntryKind::Video,
+        );
         apply_item_details(&mut entry, &v, "http://server:8096", "item100", None);
 
         assert_eq!(entry.duration, Some(600.0));

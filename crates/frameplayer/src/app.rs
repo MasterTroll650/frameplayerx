@@ -345,7 +345,6 @@ impl App {
         }
     }
 
-
     /// Repaints every panel next frame (the preview changed the UI state).
     pub fn repaint_all(&mut self) {
         for p in self.panels.iter_mut() {

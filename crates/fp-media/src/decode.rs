@@ -234,7 +234,8 @@ impl Decoder {
         native: bool,
     ) -> Result<Decoder> {
         // SAFETY: par is valid for the call.
-        let (codec_id, kind, format) = unsafe { ((*par).codec_id, (*par).codec_type, (*par).format) };
+        let (codec_id, kind, format) =
+            unsafe { ((*par).codec_id, (*par).codec_type, (*par).format) };
         let mut last_err = Error::Unsupported(format!("no decoder for codec id {codec_id}"));
         let mut hardware_error = None;
         for cand in candidates(kind == ff::AVMEDIA_TYPE_VIDEO, codec_id, hw, native) {
@@ -609,7 +610,10 @@ mod tests {
             candidates(true, ff::AV_CODEC_ID_H264, yuv420, HwDecode::Auto, true)[0],
             NativeV4l2
         );
-        assert_eq!(candidates(true, hevc, yuv420, HwDecode::Off, true), vec![Default]);
+        assert_eq!(
+            candidates(true, hevc, yuv420, HwDecode::Off, true),
+            vec![Default]
+        );
         // Codecs the native decoder does not handle go to FFmpeg directly.
         assert_eq!(
             candidates(true, ff::AV_CODEC_ID_VP9, yuv420, HwDecode::Auto, true),
@@ -620,7 +624,13 @@ mod tests {
             vec![Named(c"libdav1d", false), Default]
         );
         assert_eq!(
-            candidates(false, ff::AV_CODEC_ID_AAC, ff::AV_PIX_FMT_NONE, HwDecode::Auto, true),
+            candidates(
+                false,
+                ff::AV_CODEC_ID_AAC,
+                ff::AV_PIX_FMT_NONE,
+                HwDecode::Auto,
+                true
+            ),
             vec![Default]
         );
     }

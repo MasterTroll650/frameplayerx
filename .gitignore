@@ -3,3 +3,5 @@
 /third_party/
 /.claude/
 /dist/
+*.key
+*.pub

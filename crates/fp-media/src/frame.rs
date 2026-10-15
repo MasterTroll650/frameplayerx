@@ -377,7 +377,10 @@ impl FrameConverter {
             if desc.is_null() || ((*desc).flags & ff::AV_PIX_FMT_FLAG_HWACCEL as u64 != 0) {
                 let mut s = src;
                 ff::av_frame_free(&mut s);
-                return Err(Error::Unsupported(format!("unsupported pixel format {}", f.format)));
+                return Err(Error::Unsupported(format!(
+                    "unsupported pixel format {}",
+                    f.format
+                )));
             }
             let deep = (*desc).comp[0].depth > 8;
             let (dst_fmt, bits) = if deep {

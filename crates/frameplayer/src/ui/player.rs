@@ -836,7 +836,6 @@ fn chroma_tab(
     }
 }
 
-
 /// "Remove the background" and its colour and fine-tune controls, for one
 /// video or the global default. True when anything changed.
 pub(super) fn chroma_controls(
