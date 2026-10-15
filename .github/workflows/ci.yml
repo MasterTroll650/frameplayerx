@@ -134,14 +134,17 @@ jobs:
         with:
           path: src
       - name: Check the tag matches the version
+        id: check-tag
         env:
           TAG: ${{ inputs.release || github.ref_name }}
         run: |
           version="$(grep -m1 '^version' src/crates/frameplayer/Cargo.toml | cut -d'"' -f2)"
-          if [ "$TAG" != "v$version" ]; then
+          tag_version="${TAG#v}"
+          if [ "$tag_version" != "$version" ]; then
             echo "::error::release $TAG does not match FramePlayer $version"
             exit 1
           fi
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@stable
       - name: Sign the update manifest
         env:
@@ -159,7 +162,7 @@ jobs:
           cargo run --manifest-path src/Cargo.toml --release -p fp-updater --bin fp-release -- verify dist/manifest.json
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release || github.ref_name }}
+          tag_name: ${{ steps.check-tag.outputs.tag }}
           target_commitish: ${{ github.sha }}
           files: dist/*
           generate_release_notes: true
