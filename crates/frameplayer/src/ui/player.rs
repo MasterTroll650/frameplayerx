@@ -512,7 +512,7 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
         }
         ui.add_space(10.0);
         // Save and reset stay at the bottom while the page scrolls.
-        let footer = v.state.adjust_tab <= 3 || (v.state.adjust_tab == 4 && v.unlocked);
+        let footer = v.state.adjust_tab <= 4;
         let footer_h = if footer { 64.0 } else { 0.0 };
         let page = ui.available_height() - footer_h;
         egui::ScrollArea::vertical()
@@ -707,14 +707,13 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                             r.slider("Sharpen", None, &mut s.sharpen, 0.0..=1.0, 0.0, "", 2);
                         });
                     }
-                    4 if !v.unlocked => unlock_card(ui, v.purchase, v.actions, true),
                     4 => {
-                        unlocked_header(
-                            ui,
-                            "This video's settings, saved with its adjustments.",
-                            true,
-                            v.state,
+                        widgets::section_label(ui, "Passthrough videos");
+                        ui.label(
+                            RichText::new("This video's settings, saved with its adjustments.")
+                                .color(theme::MUTED),
                         );
+                        ui.add_space(6.0);
                         chroma_tab(
                             ui,
                             s,
@@ -837,111 +836,6 @@ fn chroma_tab(
     }
 }
 
-/// Passthrough videos are a one-time purchase (crate::unlock). Until then
-/// this stands in for their controls: the pitch and a gradient unlock
-/// button, then the code to enter at yellkell.com/unlock while FramePlayer
-/// waits for the payment. `compact` for the adjust panel.
-pub(super) fn unlock_card(
-    ui: &mut egui::Ui,
-    purchase: Option<&crate::unlock::Status>,
-    actions: &mut Vec<Action>,
-    compact: bool,
-) {
-    use crate::unlock::{PRICE, Status};
-    let text = |s: &str, size: f32, color| {
-        RichText::new(s)
-            .font(theme::font(Weight::Regular, size))
-            .color(color)
-    };
-    ui.spacing_mut().item_spacing.y = 12.0;
-    let pitch = "Remove green and blue screen backgrounds, and play passthrough videos with their own masks, so your room shows around the people in them.";
-    premium::header(ui, "Passthrough videos", PRICE, pitch, compact, None);
-    match purchase {
-        Some(Status::Waiting { code, page, price }) => {
-            widgets::card(ui, |ui| {
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::same(22))
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 10.0;
-                        ui.label(text("On your phone or computer, go to", 17.0, theme::TEXT_2));
-                        ui.label(
-                            RichText::new(page.as_str())
-                                .font(theme::font(Weight::Bold, 26.0))
-                                .color(premium::BLUE),
-                        );
-                        ui.label(text("and enter this code:", 17.0, theme::TEXT_2));
-                        ui.label(
-                            RichText::new(code.as_str())
-                                .font(theme::font(Weight::Bold, 56.0))
-                                .extra_letter_spacing(12.0)
-                                .color(theme::TEXT),
-                        );
-                        let after = format!("Pay {price} there and FramePlayer unlocks by itself a few seconds later. Bought it before? Restore it there with your email.");
-                        ui.label(text(&after, 16.0, theme::TEXT_2));
-                        ui.horizontal(|ui| {
-                            ui.add(egui::Spinner::new().size(18.0).color(premium::VIOLET));
-                            ui.label(text("Waiting for payment", 16.0, theme::TEXT_3));
-                        });
-                        if widgets::button(ui, None, "Cancel", Kind::Ghost).clicked() {
-                            actions.push(Action::CancelUnlock);
-                        }
-                    });
-            });
-        }
-        Some(Status::Starting) => {
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().size(18.0).color(premium::VIOLET));
-                ui.label(text("Getting a code", 16.0, theme::TEXT_2));
-            });
-        }
-        _ => {
-            if let Some(Status::Failed(msg)) = purchase
-                && msg != "Cancelled"
-            {
-                ui.label(text(msg, 16.0, theme::ERROR));
-            }
-            ui.add_space(4.0);
-            if premium::button(ui, &format!("Unlock for {PRICE}")).clicked() {
-                actions.push(Action::StartUnlock);
-            }
-            ui.label(text(
-                "One-time purchase at yellkell.com/unlock, paid on your phone or computer.",
-                14.0,
-                theme::TEXT_3,
-            ));
-        }
-    }
-}
-
-/// The header over unlocked passthrough controls; it celebrates for a few
-/// seconds after the purchase.
-pub(super) fn unlocked_header(
-    ui: &mut egui::Ui,
-    subtitle: &str,
-    compact: bool,
-    state: &super::UiState,
-) {
-    let celebrate = state
-        .unlocked_at
-        .map(|t| t.elapsed().as_secs_f32())
-        .filter(|t| *t < premium::CELEBRATE_SECS);
-    let thanks;
-    let subtitle = if celebrate.is_some() {
-        thanks = format!("Thank you for supporting FramePlayer! {subtitle}");
-        thanks.as_str()
-    } else {
-        subtitle
-    };
-    premium::header(
-        ui,
-        "Passthrough videos",
-        "Unlocked",
-        subtitle,
-        compact,
-        celebrate,
-    );
-    ui.add_space(6.0);
-}
 
 /// "Remove the background" and its colour and fine-tune controls, for one
 /// video or the global default. True when anything changed.

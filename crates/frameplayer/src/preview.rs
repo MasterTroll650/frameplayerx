@@ -273,9 +273,8 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
-            // Passthrough videos as if bought (crate::unlock).
+            // Passthrough videos are fully unlocked.
             Some("unlocked") => {
-                self.app.unlocked = true;
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }

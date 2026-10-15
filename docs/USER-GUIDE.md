@@ -193,13 +193,6 @@ bar, then the glasses tab) makes part of a video see-through so your room
 shows behind it. The glasses button on the bar itself only turns passthrough
 on and off.
 
-Passthrough videos are a one-time $4.99 unlock. Press **Unlock** in either
-Passthrough tab, then on your phone or computer go to yellkell.com/unlock and
-enter the code FramePlayer shows. It unlocks a few seconds after you pay. To
-unlock again on another headset or after a reinstall, enter the new code and
-restore with the email you paid with. Showing your room around flat videos and
-the menus is free.
-
 ### Videos with their own mask (`_alpha`)
 
 Many passthrough videos carry a see-through mask inside the
@@ -230,11 +223,10 @@ Settings again.
 WebXR pages run in **Chromium XR for Steam Frame**, a separate app from this
 repository's releases (`ChromiumXR-Frame-arm64.zip`, unpacked into
 `~/chromium-xr-frame` with its Steam library entry; see
-[docs/webxr](webxr/README.md)). Start it from your library: it opens Fish &
-Chips (`https://yellkell.com/fac`) at 90 Hz, both eyes render, and the Frame
-controllers work like Quest Touch controllers in Quest-made games. Its
-address bar goes anywhere else; to change the page it starts on, put an
-address in `~/.config/chromium-xr-frame/home-url`.
+[docs/webxr](webxr/README.md)). Start it from your library: it runs at 90 Hz,
+both eyes render, and the Frame controllers work like Quest Touch controllers
+in Quest-made games. Its address bar goes anywhere; to change the page it
+starts on, put an address in `~/.config/chromium-xr-frame/home-url`.
 
 Notes: Chromium XR currently runs with part of Chromium's sandbox switched
 off (its `--disable-seccomp-filter-sandbox` flag), because SteamVR refuses

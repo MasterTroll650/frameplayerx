@@ -1,8 +1,8 @@
 #!/bin/bash
 # Starts Chromium XR from the Frame Control / Steam devkit title. The title's
-# top-level chromium-xr.sh and chromium-xr-sandboxed.sh call this with
-# CHROMIUM_XR_SANDBOXED=0 or 1. Steam passes no arguments, so it opens the
-# page in ~/.config/chromium-xr-frame/home-url, else Fish & Chips.
+# Top-level chromium-xr.sh and chromium-xr-sandboxed.sh call this with
+# CHROMIUM_XR_SANDBOXED=0 or 1. If a URL is set in ~/.config/chromium-xr-frame/home-url,
+# it opens that; otherwise Chromium opens its default start page.
 # Arguments, if any, go to Chromium: `chromium-xr.sh URL`.
 #
 # Based on saphid/chromium-webxr-steam-frame frame/chromium-xr (BSD-3).
@@ -41,14 +41,12 @@ if [[ -n "${LD_PRELOAD:-}" ]]; then
 fi
 
 # The page to open when started without one (from the Steam library or by
-# FramePlayer through Steam). A running browser opens it in a new tab.
-home_url=https://yellkell.com/fac
+# FramePlayer through Steam).
 home_file=$conf/home-url
-if [[ -s $home_file ]]; then
+if (( ! $# )) && [[ -s $home_file ]]; then
   read -r saved <"$home_file" || true
-  [[ $saved == http://* || $saved == https://* ]] && home_url=$saved
+  [[ $saved == http://* || $saved == https://* ]] && set -- "$saved"
 fi
-(( $# )) || set -- "$home_url"
 
 # SteamVR runs each app at its own per-app video settings and overrides what
 # the app asks for through OpenXR, so set this Steam app's defaults unless

@@ -119,9 +119,6 @@ pub enum Action {
     RegenerateToken,
     CheckUpdates,
     InstallUpdate,
-    /// Start or stop buying the passthrough videos unlock.
-    StartUnlock,
-    CancelUnlock,
     Recenter,
     TogglePassthrough,
     /// Show the library/browser panel (during playback).
@@ -243,8 +240,6 @@ pub enum RemapSlot {
 pub struct UiState {
     pub screen: Screen,
     pub settings_tab: SettingsTab,
-    /// When passthrough videos were unlocked this session (the header celebrates).
-    pub unlocked_at: Option<std::time::Instant>,
     /// The controller input whose choices are open in Settings > Controller.
     pub remap_open: Option<RemapSlot>,
     pub search: String,
@@ -299,7 +294,6 @@ impl Default for UiState {
         UiState {
             screen: Screen::Home,
             settings_tab: SettingsTab::Playback,
-            unlocked_at: None,
             remap_open: None,
             search: String::new(),
             sort: fp_library::Sort::Added,
@@ -383,9 +377,6 @@ pub struct View<'a> {
     pub actions: &'a mut Vec<Action>,
     pub passthrough_available: bool,
     pub devices: &'a [fp_haptics::DeviceStatus],
-    /// Passthrough videos are unlocked; else the purchase in progress.
-    pub unlocked: bool,
-    pub purchase: Option<&'a crate::unlock::Status>,
 }
 
 #[cfg(test)]
