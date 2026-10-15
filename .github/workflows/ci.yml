@@ -2,25 +2,64 @@ name: ci
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
-  # Releases without pushing a tag first: run on the branch to release, with
-  # the tag (v + the version in crates/frameplayer/Cargo.toml); the release
-  # step creates the tag on the commit it built.
   workflow_dispatch:
     inputs:
       release:
-        description: "Tag to release (v<version in crates/frameplayer/Cargo.toml>)"
-        required: true
+        description: "Release tag override, e.g. v0.5.0 (leave empty for git-cliff auto-calculation)"
+        required: false
         type: string
+        default: ""
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.calc.outputs.version }}
+      tag: ${{ steps.calc.outputs.tag }}
+      is_release: ${{ steps.calc.outputs.is_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+      - name: Calculate version
+        id: calc
+        run: |
+          if [ -n "${{ inputs.release }}" ]; then
+            raw="${{ inputs.release }}"
+            ver="${raw#v}"
+          elif [ "${{ startsWith(github.ref, 'refs/tags/v') }}" = "true" ]; then
+            ver="${GITHUB_REF_NAME#v}"
+          else
+            ver=$(git cliff --bumped-version)
+          fi
+          ver="${ver#v}"
+          echo "Calculated version: $ver"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=v$ver" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ startsWith(github.ref, 'refs/tags/v') }}" = "true" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
+    needs: [version]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Stamp version
+        run: |
+          sed -i 's/^version = .*/version = "${{ needs.version.outputs.version }}"/' crates/frameplayer/Cargo.toml
       # Pinned so a new stable release's lints cannot break CI unannounced;
       # bump deliberately (and fix what its clippy reports).
       - uses: dtolnay/rust-toolchain@master
@@ -115,8 +154,8 @@ jobs:
           path: out/
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
-    needs: [check, installer]
+    if: needs.version.outputs.is_release == 'true'
+    needs: [version, check, installer]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -133,18 +172,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: src
-      - name: Check the tag matches the version
-        id: check-tag
-        env:
-          TAG: ${{ inputs.release || github.ref_name }}
+          fetch-depth: 0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+      - name: Generate release notes
         run: |
-          version="$(grep -m1 '^version' src/crates/frameplayer/Cargo.toml | cut -d'"' -f2)"
-          tag_version="${TAG#v}"
-          if [ "$tag_version" != "$version" ]; then
-            echo "::error::release $TAG does not match FramePlayer $version"
-            exit 1
+          cd src
+          git cliff --bump --unreleased --strip header --output ../dist/RELEASE_NOTES.md || true
+          if [ ! -s ../dist/RELEASE_NOTES.md ]; then
+            echo "Release ${{ needs.version.outputs.tag }}" > ../dist/RELEASE_NOTES.md
           fi
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@stable
       - name: Sign the update manifest
         env:
@@ -162,7 +200,13 @@ jobs:
           cargo run --manifest-path src/Cargo.toml --release -p fp-updater --bin fp-release -- verify dist/manifest.json
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.check-tag.outputs.tag }}
+          tag_name: ${{ needs.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          files: dist/*
-          generate_release_notes: true
+          body_path: dist/RELEASE_NOTES.md
+          files: |
+            dist/frameplayer-*.zip
+            dist/manifest.json
+            dist/manifest.json.sig
+            dist/framedrop.json
+            dist/frameplayer.json
+            dist/frameplayer-install-*

@@ -1,0 +1,44 @@
+# git-cliff configuration — https://git-cliff.org
+# Generates categorised release notes from conventional commits.
+# CI uses `git cliff --bumped-version` to calculate the next SemVer and
+# `git cliff --unreleased --strip header` for the GitHub Release body.
+
+[changelog]
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | trim }}\
+  {% if commit.scope %} *({{ commit.scope }})*{% endif %}\
+  {% if commit.breaking %} **BREAKING**{% endif %}\
+  ([`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/remotesojourner/frameplayer/commit/{{ commit.id }}))\
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+commit_parsers = [
+    { message = "^feat", group = "🚀 Features" },
+    { message = "^fix", group = "🐛 Bug Fixes" },
+    { message = "^perf", group = "⚡ Performance" },
+    { message = "^refactor", group = "🔧 Refactor" },
+    { message = "^docs", group = "📖 Documentation" },
+    { message = "^test", group = "🧪 Testing" },
+    { message = "^style", group = "🎨 Style" },
+    { message = "^chore\\(release\\)", skip = true },
+    { message = "^chore", group = "⚙️ Maintenance" },
+    { message = "^ci", group = "⚙️ Maintenance" },
+    { message = "^build", group = "⚙️ Maintenance" },
+    # Catch-all: commits not following any convention still appear.
+    { message = ".*", group = "📦 Other" },
+]
+tag_pattern = "v[0-9].*"
+
+[bump]
+initial_tag = "v0.4.0"
+features_always_bump_minor = true
+breaking_always_bump_major = true
