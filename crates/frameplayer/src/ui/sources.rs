@@ -14,7 +14,7 @@ fn kind_icon(kind: SourceKind) -> &'static str {
         SourceKind::Http => icons::GLOBE,
         SourceKind::WebDav => icons::CLOUD,
         SourceKind::Dlna => icons::BROADCAST,
-        SourceKind::DeoVr | SourceKind::HereSphere => icons::DATABASE,
+        SourceKind::DeoVr | SourceKind::HereSphere | SourceKind::MediaBrowser => icons::DATABASE,
         SourceKind::Smb => icons::SHARE_NETWORK,
     }
 }
@@ -658,7 +658,11 @@ fn short_location(l: &str) -> String {
     }
 }
 
-const KINDS: [(SourceKind, &str); 7] = [
+const KINDS: [(SourceKind, &str); 8] = [
+    (
+        SourceKind::MediaBrowser,
+        "Jellyfin / Emby server URL, e.g. http://192.168.1.10:8096",
+    ),
     (
         SourceKind::DeoVr,
         "XBVR / Stash / any DeoVR feed URL, e.g. http://192.168.1.10:9999/deovr",
@@ -953,6 +957,16 @@ pub fn build_config(f: &SourceForm, id: String) -> Result<SourceConfig, String> 
                 credentials,
             })
         }
+        SourceKind::MediaBrowser => SourceConfig::MediaBrowser(fp_sources::MediaBrowserConfig {
+            id,
+            name,
+            url: http_url(&address)?,
+            credentials,
+            insecure_tls: f.insecure_tls,
+            max_height: None,
+            access_token: None,
+            user_id: None,
+        }),
         SourceKind::Dlna => return Err("Pick a server found on the network".into()),
     })
 }

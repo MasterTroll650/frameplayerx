@@ -321,7 +321,7 @@ fn passthrough(ui: &mut egui::Ui, v: &mut View) {
     widgets::section_label(ui, "Passthrough videos");
     ui.label(
         RichText::new("Global settings. Each video can be individually adjusted and will save its adjustments.")
-            .color(theme::MUTED),
+            .color(theme::TEXT_2),
     );
     ui.add_space(6.0);
     super::player::chroma_controls(ui, &mut s.default_view, available);

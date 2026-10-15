@@ -711,7 +711,7 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                         widgets::section_label(ui, "Passthrough videos");
                         ui.label(
                             RichText::new("This video's settings, saved with its adjustments.")
-                                .color(theme::MUTED),
+                                .color(theme::TEXT_2),
                         );
                         ui.add_space(6.0);
                         chroma_tab(

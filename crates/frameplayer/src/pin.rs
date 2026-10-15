@@ -45,6 +45,7 @@ pub fn source_root(cfg: &fp_sources::SourceConfig) -> String {
         C::Smb(c) => fp_sources::smb::smb_url(&c.host, c.port, &c.share, &c.path),
         C::Dlna(c) => origin(&c.location).to_string(),
         C::DeoVr(c) | C::HereSphere(c) => origin(&c.url).to_string(),
+        C::MediaBrowser(c) => format!("mb:{}", c.url.trim_end_matches('/')),
     }
 }
 

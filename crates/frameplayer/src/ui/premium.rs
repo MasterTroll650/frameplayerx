@@ -2,7 +2,6 @@
 //! blue-to-violet gradient (the two rings of its icon) on a glowing header
 //! card, badges, buttons, swatches and section labels.
 
-use super::icons;
 use super::theme::{self, Weight};
 use egui::epaint::{PathShape, PathStroke};
 use egui::text::LayoutJob;
@@ -11,9 +10,6 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Response, Sense, Shape, Ui, Vec2};
 /// The gradient's ends, from the icon's rings.
 pub const BLUE: Color32 = Color32::from_rgb(92, 160, 255);
 pub const VIOLET: Color32 = Color32::from_rgb(170, 110, 255);
-
-/// How long the header celebrates a fresh unlock, in seconds.
-pub const CELEBRATE_SECS: f32 = 8.0;
 
 fn lerp(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
@@ -77,165 +73,6 @@ fn outline(ui: &Ui, r: Rect, radius: f32, width: f32, alpha: f32, phase: f32) {
         rounded(r, radius),
         stroke,
     )));
-}
-
-/// A soft violet glow behind `r`.
-fn glow(ui: &Ui, r: Rect, radius: u8, strength: f32) {
-    let s = egui::epaint::Shadow {
-        offset: [0, 6],
-        blur: 40,
-        spread: 0,
-        color: Color32::from_rgba_unmultiplied(130, 110, 255, (strength * 70.0) as u8),
-    };
-    ui.painter().add(s.as_shape(r, CornerRadius::same(radius)));
-}
-
-/// A small pill with gradient fill: "UNLOCKED", "$4.99".
-pub fn badge(ui: &mut Ui, text: &str) -> Response {
-    let g = ui.painter().layout_no_wrap(
-        text.to_uppercase(),
-        theme::font(Weight::Bold, 12.0),
-        Color32::WHITE,
-    );
-    let size = Vec2::new(g.size().x + 20.0, 24.0);
-    let (r, resp) = ui.allocate_exact_size(size, Sense::hover());
-    fill(ui, r, 12.0, 1.0);
-    ui.painter()
-        .galley(r.center() - g.size() / 2.0, g, Color32::WHITE);
-    resp
-}
-
-/// The header of a paid feature: gradient icon tile, title, badge, subtitle
-/// and a glowing gradient border. `celebrate` is seconds since the unlock,
-/// while it is fresh: the border flows and the glow pulses.
-pub fn header(
-    ui: &mut Ui,
-    title: &str,
-    badge_text: &str,
-    subtitle: &str,
-    compact: bool,
-    celebrate: Option<f32>,
-) {
-    let width = ui.available_width();
-    let tile = if compact { 48.0 } else { 64.0 };
-    let pad = if compact { 18.0 } else { 24.0 };
-    let text_w = width - pad * 3.0 - tile;
-    let sub = ui.painter().layout(
-        subtitle.to_string(),
-        theme::font(Weight::Regular, 16.0),
-        theme::TEXT_2,
-        text_w,
-    );
-    let title_h = if compact { 28.0 } else { 32.0 };
-    let h = (pad * 2.0 + title_h + 6.0 + sub.size().y).max(pad * 2.0 + tile);
-    let (r, _) = ui.allocate_exact_size(Vec2::new(width, h), Sense::hover());
-    if !ui.is_rect_visible(r) {
-        return;
-    }
-    let (phase, pulse) = match celebrate {
-        Some(t) => {
-            ui.ctx().request_repaint();
-            let fade = (1.0 - t / CELEBRATE_SECS).clamp(0.0, 1.0);
-            (t * 0.35, 1.0 + fade * (0.6 + 0.4 * (t * 3.0).sin()))
-        }
-        None => (0.0, 1.0),
-    };
-    glow(ui, r, 18, 0.55 * pulse);
-    ui.painter()
-        .rect_filled(r, CornerRadius::same(18), theme::SURFACE);
-    fill(ui, r, 18.0, 0.10);
-    outline(ui, r.shrink(0.75), 18.0, 1.5, 0.85, phase);
-
-    // Icon tile: the gradient, glasses and a sparkle.
-    let t = Rect::from_min_size(
-        Pos2::new(r.min.x + pad, r.center().y - tile / 2.0),
-        Vec2::splat(tile),
-    );
-    glow(ui, t, (tile * 0.28) as u8, 0.8);
-    fill(ui, t, tile * 0.28, 1.0);
-    let p = ui.painter();
-    p.text(
-        t.center() + Vec2::new(0.0, tile * 0.04),
-        egui::Align2::CENTER_CENTER,
-        icons::EYEGLASSES,
-        theme::icon(tile * 0.5),
-        Color32::WHITE,
-    );
-    p.text(
-        Pos2::new(t.max.x - tile * 0.2, t.min.y + tile * 0.22),
-        egui::Align2::CENTER_CENTER,
-        icons::SPARKLE,
-        theme::icon_fill(tile * 0.24),
-        Color32::WHITE,
-    );
-
-    // Title and badge, subtitle under them.
-    let x = t.max.x + pad;
-    let top = r.center().y - (title_h + 6.0 + sub.size().y) / 2.0;
-    let tg = p.layout_no_wrap(
-        title.to_string(),
-        theme::font(Weight::Bold, if compact { 22.0 } else { 26.0 }),
-        theme::TEXT,
-    );
-    let tw = tg.size().x;
-    p.galley(
-        Pos2::new(x, top + (title_h - tg.size().y) / 2.0),
-        tg,
-        theme::TEXT,
-    );
-    let mut b = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(
-        Pos2::new(x + tw + 12.0, top + (title_h - 24.0) / 2.0),
-        Vec2::new(200.0, 24.0),
-    )));
-    badge(&mut b, badge_text);
-    ui.painter()
-        .galley(Pos2::new(x, top + title_h + 6.0), sub, theme::TEXT_2);
-}
-
-/// The main button of a paid feature: gradient pill with a sparkle.
-pub fn button(ui: &mut Ui, label: &str) -> Response {
-    let g = ui.painter().layout_no_wrap(
-        label.to_string(),
-        theme::font(Weight::Bold, 19.0),
-        Color32::WHITE,
-    );
-    let ig = ui.painter().layout_no_wrap(
-        icons::SPARKLE.to_string(),
-        theme::icon_fill(20.0),
-        Color32::WHITE,
-    );
-    let w = ig.size().x + 10.0 + g.size().x + 56.0;
-    let (r, resp) = ui.allocate_exact_size(Vec2::new(w, 56.0), Sense::click());
-    if ui.is_rect_visible(r) {
-        let hover = ui.ctx().animate_bool(resp.id, resp.hovered());
-        let r2 = r.shrink(if resp.is_pointer_button_down_on() {
-            1.5
-        } else {
-            0.0
-        });
-        glow(ui, r2, 28, 0.7 + 0.6 * hover);
-        fill(ui, r2, 28.0, 1.0);
-        if hover > 0.0 {
-            ui.painter().rect_filled(
-                r2,
-                CornerRadius::same(28),
-                Color32::from_white_alpha((hover * 22.0) as u8),
-            );
-        }
-        let x = r.center().x - (w - 56.0) / 2.0;
-        let p = ui.painter();
-        p.galley(
-            Pos2::new(x, r.center().y - ig.size().y / 2.0),
-            ig.clone(),
-            Color32::WHITE,
-        );
-        p.galley(
-            Pos2::new(x + ig.size().x + 10.0, r.center().y - g.size().y / 2.0),
-            g,
-            Color32::WHITE,
-        );
-    }
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// A section label in the gradient, letter by letter.
