@@ -410,7 +410,7 @@ mod imp {
                 match res {
                     smb::Resource::File(f) => Ok(OpenFile {
                         session: s.clone(),
-                        file: Arc::new(f),
+                        file: Arc::new(Handle(Some(f))),
                         generation: 0,
                     }),
                     _ => Err(Error::invalid(url, "not a file")),
@@ -460,6 +460,9 @@ mod imp {
                         modified,
                     });
                 }
+                if let Err(e) = dir.close() {
+                    log::debug!("{url}: closing the folder: {e}");
+                }
                 Ok(out)
             })
         }
@@ -483,11 +486,45 @@ mod imp {
         }
     }
 
+    /// An SMB file that is closed on the server once nothing uses it. smb-rs
+    /// closes handles only when asked, so every video played (and every
+    /// handle replaced by a reconnect) stayed open on the NAS until
+    /// FramePlayer disconnected. The close goes out on a thread of its own:
+    /// it waits for the server, on a dead connection until the request
+    /// times out, and the last reference can go on a player's close path.
+    struct Handle(Option<smb::File>);
+
+    impl std::ops::Deref for Handle {
+        type Target = smb::File;
+
+        fn deref(&self) -> &smb::File {
+            self.0.as_ref().expect("SMB handle used after close")
+        }
+    }
+
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            let Some(file) = self.0.take() else {
+                return;
+            };
+            let spawned = std::thread::Builder::new()
+                .name("fp-smb-close".into())
+                .spawn(move || {
+                    if let Err(e) = file.close() {
+                        log::debug!("closing an SMB file: {e}");
+                    }
+                });
+            if let Err(e) = spawned {
+                log::warn!("cannot start a thread to close an SMB file: {e}");
+            }
+        }
+    }
+
     /// A file handle and the session it belongs to.
     #[derive(Clone)]
     struct OpenFile {
         session: Arc<Session>,
-        file: Arc<smb::File>,
+        file: Arc<Handle>,
         /// Counts reopens, so threads that fail together reconnect once.
         generation: u64,
     }
