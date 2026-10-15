@@ -113,6 +113,17 @@ pub enum Action {
         location: Option<String>,
     },
     DiscoverDlna,
+    /// Request a Quick Connect code from a Jellyfin/Emby server.
+    QuickConnectInitiate {
+        address: String,
+        insecure_tls: bool,
+    },
+    /// Poll for Quick Connect authorization.
+    QuickConnectPoll {
+        address: String,
+        secret: String,
+        insecure_tls: bool,
+    },
     AddDevice(HapticDeviceConfig),
     RemoveDevice(usize),
     ReconnectDevices,
@@ -193,17 +204,31 @@ pub struct SourceForm {
     pub username: String,
     pub password: String,
     pub insecure_tls: bool,
+    pub qc_loading: bool,
+    pub qc_code: Option<String>,
+    pub qc_secret: Option<String>,
+    pub qc_token: Option<String>,
+    pub qc_user_id: Option<String>,
+    pub qc_error: Option<String>,
+    pub qc_last_poll: Option<std::time::Instant>,
 }
 
 impl Default for SourceForm {
     fn default() -> Self {
         SourceForm {
-            kind: fp_sources::SourceKind::DeoVr,
+            kind: fp_sources::SourceKind::MediaBrowser,
             name: String::new(),
             address: String::new(),
             username: String::new(),
             password: String::new(),
             insecure_tls: false,
+            qc_loading: false,
+            qc_code: None,
+            qc_secret: None,
+            qc_token: None,
+            qc_user_id: None,
+            qc_error: None,
+            qc_last_poll: None,
         }
     }
 }

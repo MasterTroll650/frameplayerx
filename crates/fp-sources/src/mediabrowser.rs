@@ -181,10 +181,13 @@ pub(crate) fn best_media_source(
 /// Parses the access token and user ID from a `/Users/AuthenticateByName` response.
 pub(crate) fn parse_auth_response(v: &Value, url: &str) -> Result<(String, String)> {
     let access_token = text(v, "AccessToken")
+        .or_else(|| text(v, "Token"))
+        .or_else(|| text(v, "AuthenticationToken"))
         .ok_or_else(|| Error::invalid(url, "missing AccessToken in auth response"))?;
     let user_id = get(v, "User")
         .and_then(|u| text(u, "Id"))
         .or_else(|| text(v, "UserId"))
+        .or_else(|| get(v, "SessionInfo").and_then(|s| text(s, "UserId")))
         .ok_or_else(|| Error::invalid(url, "missing User.Id in auth response"))?;
     Ok((access_token, user_id))
 }
@@ -378,6 +381,22 @@ impl MediaBrowserSource {
                 "expected an http:// or https:// MediaBrowser URL",
             ));
         }
+        let auth = if let (Some(token), Some(uid)) = (&config.access_token, &config.user_id) {
+            let authed_header = mediabrowser_header(Some(token));
+            let opts = HttpOptions {
+                insecure_tls: config.insecure_tls,
+                ..HttpOptions::default()
+            };
+            let authed_client = HttpClient::new_with_header(opts, &authed_header);
+            Some(AuthState {
+                user_id: uid.clone(),
+                access_token: token.clone(),
+                server_name: config.name.clone(),
+                client: authed_client,
+            })
+        } else {
+            None
+        };
         Ok(MediaBrowserSource {
             id: config.id.clone(),
             name: config.name.clone(),
@@ -385,7 +404,7 @@ impl MediaBrowserSource {
             credentials: config.credentials.clone(),
             insecure_tls: config.insecure_tls,
             max_height: config.max_height,
-            auth: Mutex::new(None),
+            auth: Mutex::new(auth),
             parents: Mutex::new(HashMap::new()),
         })
     }
@@ -406,6 +425,7 @@ impl MediaBrowserSource {
         let body = serde_json::to_vec(&serde_json::json!({
             "Username": creds.username,
             "Pw": creds.password,
+            "Password": creds.password,
         }))
         .map_err(|e| Error::invalid(&auth_url, e.to_string()))?;
 
@@ -415,6 +435,8 @@ impl MediaBrowserSource {
                 &auth_url,
                 &[
                     ("Authorization", &auth_header),
+                    ("X-Emby-Authorization", &auth_header),
+                    ("Accept", "application/json"),
                     ("Content-Type", "application/json"),
                 ],
                 Some(&body),
@@ -428,7 +450,17 @@ impl MediaBrowserSource {
 
         let info_url = format!("{}/System/Info/Public", self.base_url);
         let server_name = unauthed_client
-            .request("GET", &info_url, &[], None, JSON_LIMIT)
+            .request(
+                "GET",
+                &info_url,
+                &[
+                    ("Authorization", &auth_header),
+                    ("X-Emby-Authorization", &auth_header),
+                    ("Accept", "application/json"),
+                ],
+                None,
+                JSON_LIMIT,
+            )
             .ok()
             .and_then(|r| serde_json::from_slice::<Value>(&r.body).ok())
             .and_then(|info| text(&info, "ProductName"))
@@ -474,9 +506,12 @@ impl MediaBrowserSource {
         let (client, _) = self.client()?;
         let url = format!("{}{}", self.base_url, path_and_query);
         let headers: &[(&str, &str)] = if body.is_some() {
-            &[("Content-Type", "application/json")]
+            &[
+                ("Content-Type", "application/json"),
+                ("Accept", "application/json"),
+            ]
         } else {
-            &[]
+            &[("Accept", "application/json")]
         };
         let reply = client.request(method, &url, headers, body, JSON_LIMIT)?;
         if reply.status == 401 {
@@ -485,10 +520,12 @@ impl MediaBrowserSource {
                 let mut auth = lock(&self.auth);
                 *auth = None;
             }
-            self.authenticate()?;
-            let (client, _) = self.client()?;
-            let reply = client.request(method, &url, headers, body, JSON_LIMIT)?;
-            return reply.error_for_status(&url);
+            if self.credentials.is_some() {
+                self.authenticate()?;
+                let (client, _) = self.client()?;
+                let reply = client.request(method, &url, headers, body, JSON_LIMIT)?;
+                return reply.error_for_status(&url);
+            }
         }
         reply.error_for_status(&url)
     }
@@ -541,6 +578,8 @@ impl MediaBrowserSource {
                 &url,
                 &[
                     ("Authorization", &auth_header),
+                    ("X-Emby-Authorization", &auth_header),
+                    ("Accept", "application/json"),
                     ("Content-Type", "application/json"),
                 ],
                 Some(b"{}"),
@@ -552,8 +591,8 @@ impl MediaBrowserSource {
         parse_quick_connect_initiate(&v, &url)
     }
 
-    /// Polls for Quick Connect authorization. Returns `true` when authorized.
-    pub fn quick_connect_poll(&self, secret: &str) -> Result<bool> {
+    /// Polls for Quick Connect authorization. Returns `Ok(Some((token, user_id)))` when authorized.
+    pub fn quick_connect_poll_auth(&self, secret: &str) -> Result<Option<(String, String)>> {
         let opts = HttpOptions {
             insecure_tls: self.insecure_tls,
             ..HttpOptions::default()
@@ -564,13 +603,24 @@ impl MediaBrowserSource {
             "{}/QuickConnect/Connect?secret={encoded_secret}",
             self.base_url
         );
-        let reply = client.request("GET", &url, &[], None, JSON_LIMIT)?;
+        let auth_header = mediabrowser_header(None);
+        let reply = client.request(
+            "GET",
+            &url,
+            &[
+                ("Authorization", &auth_header),
+                ("X-Emby-Authorization", &auth_header),
+                ("Accept", "application/json"),
+            ],
+            None,
+            JSON_LIMIT,
+        )?;
         let reply = reply.error_for_status(&url)?;
         let v: Value = serde_json::from_slice(&reply.body)
             .map_err(|e| Error::invalid(&url, format!("invalid JSON: {e}")))?;
         let (authenticated, token_opt, user_id_opt) = parse_quick_connect_connect(&v);
         if !authenticated {
-            return Ok(false);
+            return Ok(None);
         }
         if let Some(token) = token_opt {
             let authed_header = mediabrowser_header(Some(&token));
@@ -581,7 +631,17 @@ impl MediaBrowserSource {
             } else {
                 let me_url = format!("{}/Users/Me", self.base_url);
                 authed_client
-                    .request("GET", &me_url, &[], None, JSON_LIMIT)
+                    .request(
+                        "GET",
+                        &me_url,
+                        &[
+                            ("Authorization", &authed_header),
+                            ("X-Emby-Authorization", &authed_header),
+                            ("Accept", "application/json"),
+                        ],
+                        None,
+                        JSON_LIMIT,
+                    )
                     .ok()
                     .and_then(|r| serde_json::from_slice::<Value>(&r.body).ok())
                     .and_then(|me| text(&me, "Id"))
@@ -590,7 +650,17 @@ impl MediaBrowserSource {
 
             let info_url = format!("{}/System/Info/Public", self.base_url);
             let server_name = client
-                .request("GET", &info_url, &[], None, JSON_LIMIT)
+                .request(
+                    "GET",
+                    &info_url,
+                    &[
+                        ("Authorization", &auth_header),
+                        ("X-Emby-Authorization", &auth_header),
+                        ("Accept", "application/json"),
+                    ],
+                    None,
+                    JSON_LIMIT,
+                )
                 .ok()
                 .and_then(|r| serde_json::from_slice::<Value>(&r.body).ok())
                 .and_then(|info| text(&info, "ProductName"))
@@ -598,13 +668,20 @@ impl MediaBrowserSource {
 
             let mut auth = lock(&self.auth);
             *auth = Some(AuthState {
-                user_id,
-                access_token: token,
+                user_id: user_id.clone(),
+                access_token: token.clone(),
                 server_name,
                 client: authed_client,
             });
+
+            return Ok(Some((token, user_id)));
         }
-        Ok(true)
+        Ok(None)
+    }
+
+    /// Polls for Quick Connect authorization. Returns `true` when authorized.
+    pub fn quick_connect_poll(&self, secret: &str) -> Result<bool> {
+        Ok(self.quick_connect_poll_auth(secret)?.is_some())
     }
 
     /// Reports that playback of an item has started.
@@ -703,7 +780,6 @@ impl Source for MediaBrowserSource {
                 loop {
                     let query = format!(
                         "/Users/{user_id}/Items?ParentId={id}&Recursive=false\
-                        &IncludeItemTypes=Movie,Video,Episode,Series,Season,Folder,BoxSet,CollectionFolder\
                         &Fields=Path,MediaSources,Overview,DateCreated&SortBy=SortName&SortOrder=Ascending\
                         &StartIndex={start_index}&Limit={PAGE_SIZE}"
                     );
@@ -734,7 +810,15 @@ impl Source for MediaBrowserSource {
     fn open(&self, location: &str) -> Result<Arc<dyn ByteSource>> {
         let id = item_id(location)?;
         let (client, _) = self.client()?;
-        let url = format!("{}/Videos/{}/stream?static=true", self.base_url, id);
+        let token = self.auth_credentials().map(|(t, _)| t).unwrap_or_default();
+        let url = if token.is_empty() {
+            format!("{}/Videos/{}/stream?static=true", self.base_url, id)
+        } else {
+            format!(
+                "{}/Videos/{}/stream?static=true&api_key={token}",
+                self.base_url, id
+            )
+        };
         Ok(Arc::new(client.open(&url)?))
     }
 
@@ -762,6 +846,42 @@ impl Source for MediaBrowserSource {
         };
         Ok(Sidecars::from_entry(&full))
     }
+}
+
+/// Initiates Quick Connect for a server URL.
+pub fn quick_connect_initiate_url(url: &str, insecure_tls: bool) -> Result<QuickConnectState> {
+    let config = MediaBrowserConfig {
+        id: "qc".into(),
+        name: "Jellyfin".into(),
+        url: url.into(),
+        credentials: None,
+        insecure_tls,
+        max_height: None,
+        access_token: None,
+        user_id: None,
+    };
+    let src = MediaBrowserSource::new(&config)?;
+    src.quick_connect_initiate()
+}
+
+/// Polls Quick Connect authorization for a server URL and secret.
+pub fn quick_connect_poll_url(
+    url: &str,
+    secret: &str,
+    insecure_tls: bool,
+) -> Result<Option<(String, String)>> {
+    let config = MediaBrowserConfig {
+        id: "qc".into(),
+        name: "Jellyfin".into(),
+        url: url.into(),
+        credentials: None,
+        insecure_tls,
+        max_height: None,
+        access_token: None,
+        user_id: None,
+    };
+    let src = MediaBrowserSource::new(&config)?;
+    src.quick_connect_poll_auth(secret)
 }
 
 impl fmt::Debug for MediaBrowserSource {

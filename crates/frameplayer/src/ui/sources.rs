@@ -693,6 +693,32 @@ const KINDS: [(SourceKind, &str); 8] = [
     ),
 ];
 
+fn address_hint(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::Local => "/run/media/deck/SDCARD/Videos",
+        SourceKind::MediaBrowser => "http://192.168.1.10:8096",
+        SourceKind::DeoVr => "http://192.168.1.10:9999/deovr",
+        SourceKind::HereSphere => "http://192.168.1.10:9999/heresphere",
+        SourceKind::WebDav => "https://nas.local/dav/videos/",
+        SourceKind::Http => "http://192.168.1.10:8080/videos/",
+        SourceKind::Smb => "smb://nas.local/videos",
+        SourceKind::Dlna => "",
+    }
+}
+
+fn name_hint(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::MediaBrowser => "Optional (e.g. Jellyfin)",
+        SourceKind::DeoVr => "Optional (e.g. DeoVR feed)",
+        SourceKind::HereSphere => "Optional (e.g. HereSphere feed)",
+        SourceKind::WebDav => "Optional (e.g. Nextcloud)",
+        SourceKind::Http => "Optional (e.g. Video server)",
+        SourceKind::Smb => "Optional (e.g. Home NAS)",
+        SourceKind::Local => "Optional (e.g. SD Card)",
+        SourceKind::Dlna => "Optional",
+    }
+}
+
 fn add_form(ui: &mut egui::Ui, v: &mut View) {
     let mut cancel = false;
     let mut save: Option<SourceConfig> = None;
@@ -787,6 +813,7 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
     } else {
         let local = f.kind == SourceKind::Local;
         let smb = f.kind == SourceKind::Smb;
+        let is_mb = f.kind == SourceKind::MediaBrowser;
         let field = |ui: &mut egui::Ui, value: &mut String, hint: &str, password: bool| {
             ui.add(
                 egui::TextEdit::singleline(value)
@@ -801,25 +828,26 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
             r.row(
                 "Name",
                 Some("Optional; the server's name otherwise."),
-                |ui| field(ui, &mut f.name, "", false),
+                |ui| field(ui, &mut f.name, name_hint(f.kind), false),
             );
             r.row(if local { "Folder" } else { "Address" }, None, |ui| {
-                field(
-                    ui,
-                    &mut f.address,
-                    if local {
-                        "/run/media/deck/SDCARD/Videos"
-                    } else {
-                        "http://192.168.1.10:9999/deovr"
-                    },
-                    false,
-                )
+                field(ui, &mut f.address, address_hint(f.kind), false)
             });
             if !local {
-                r.row("User name", Some("If the server asks for one."), |ui| {
-                    field(ui, &mut f.username, "", false)
-                });
-                r.row("Password", None, |ui| field(ui, &mut f.password, "", true));
+                r.row(
+                    "User name",
+                    Some(if is_mb {
+                        "Jellyfin / Emby username (or use Quick Connect below)."
+                    } else {
+                        "If the server asks for one."
+                    }),
+                    |ui| field(ui, &mut f.username, "", false),
+                );
+                r.row(
+                    "Password",
+                    is_mb.then_some("Leave blank if using Quick Connect."),
+                    |ui| field(ui, &mut f.password, "", true),
+                );
                 if !smb {
                     r.switch(
                         "Accept self-signed certificates",
@@ -829,6 +857,111 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
                 }
             }
         });
+        if is_mb {
+            ui.add_space(14.0);
+            widgets::section_label(ui, "Quick Connect");
+            ui.add_space(6.0);
+            let qc_code = f.qc_code.clone();
+            let qc_secret = f.qc_secret.clone();
+            if f.qc_token.is_some() {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    ui.label(
+                        RichText::new(format!("{} Quick Connect authorized", icons::CHECK_CIRCLE))
+                            .font(theme::font(Weight::SemiBold, 17.0))
+                            .color(theme::OK),
+                    );
+                    if widgets::button_sized(ui, None, "Clear", Kind::Secondary, 36.0).clicked() {
+                        f.qc_token = None;
+                        f.qc_user_id = None;
+                        f.qc_code = None;
+                        f.qc_secret = None;
+                        f.qc_error = None;
+                    }
+                });
+            } else if let Some(code) = qc_code {
+                ui.label(
+                    RichText::new(
+                        "Enter this code in your Jellyfin or Emby app under Quick Connect:",
+                    )
+                    .font(theme::font(Weight::Regular, 15.0))
+                    .color(theme::TEXT_2),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 14.0;
+                    let spaced: String = code
+                        .chars()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    ui.label(
+                        RichText::new(spaced)
+                            .font(theme::font(Weight::Bold, 28.0))
+                            .color(theme::ACCENT),
+                    );
+                    ui.spinner();
+                    ui.label(RichText::new("Waiting for approval...").color(theme::TEXT_3));
+                    if widgets::button_sized(ui, None, "Cancel", Kind::Secondary, 36.0).clicked() {
+                        f.qc_code = None;
+                        f.qc_secret = None;
+                        f.qc_error = None;
+                    }
+                });
+
+                if let Some(secret) = qc_secret {
+                    let now = std::time::Instant::now();
+                    let should_poll = match f.qc_last_poll {
+                        Some(t) => now.duration_since(t).as_secs_f32() >= 2.5,
+                        None => true,
+                    };
+                    if should_poll {
+                        f.qc_last_poll = Some(now);
+                        v.actions.push(Action::QuickConnectPoll {
+                            address: f.address.clone(),
+                            secret,
+                            insecure_tls: f.insecure_tls,
+                        });
+                    }
+                }
+            } else {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    let can_initiate = !f.address.trim().is_empty() && !f.qc_loading;
+                    if ui
+                        .add_enabled_ui(can_initiate, |ui| {
+                            widgets::button(
+                                ui,
+                                Some(icons::KEY_RETURN),
+                                "Log in with Quick Connect",
+                                Kind::Secondary,
+                            )
+                        })
+                        .inner
+                        .clicked()
+                    {
+                        f.qc_loading = true;
+                        f.qc_error = None;
+                        v.actions.push(Action::QuickConnectInitiate {
+                            address: f.address.clone(),
+                            insecure_tls: f.insecure_tls,
+                        });
+                    }
+                    if f.qc_loading {
+                        ui.spinner();
+                        ui.label(RichText::new("Connecting to server...").color(theme::TEXT_3));
+                    }
+                });
+            }
+            if let Some(err) = &f.qc_error {
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(format!("Quick Connect: {err}"))
+                        .font(theme::font(Weight::Regular, 15.0))
+                        .color(theme::WARN),
+                );
+            }
+        }
         ui.add_space(12.0);
         ui.horizontal(|ui| match build_config(f, id) {
             Ok(cfg) => {
@@ -878,12 +1011,13 @@ pub fn build_config(f: &SourceForm, id: String) -> Result<SourceConfig, String> 
         f.name.trim().to_string()
     };
     let http_url = |a: &str| -> Result<String, String> {
-        if a.starts_with("http://") || a.starts_with("https://") {
-            Ok(a.to_string())
-        } else if a.contains("://") {
+        let clean = a.trim_end_matches('/');
+        if clean.starts_with("http://") || clean.starts_with("https://") {
+            Ok(clean.to_string())
+        } else if clean.contains("://") {
             Err("Address must start with http:// or https://".into())
         } else {
-            Ok(format!("http://{a}"))
+            Ok(format!("http://{clean}"))
         }
     };
     Ok(match f.kind {
@@ -957,16 +1091,21 @@ pub fn build_config(f: &SourceForm, id: String) -> Result<SourceConfig, String> 
                 credentials,
             })
         }
-        SourceKind::MediaBrowser => SourceConfig::MediaBrowser(fp_sources::MediaBrowserConfig {
-            id,
-            name,
-            url: http_url(&address)?,
-            credentials,
-            insecure_tls: f.insecure_tls,
-            max_height: None,
-            access_token: None,
-            user_id: None,
-        }),
+        SourceKind::MediaBrowser => {
+            if f.qc_token.is_none() && credentials.is_none() {
+                return Err("Enter username/password or use Quick Connect".into());
+            }
+            SourceConfig::MediaBrowser(fp_sources::MediaBrowserConfig {
+                id,
+                name,
+                url: http_url(&address)?,
+                credentials,
+                insecure_tls: f.insecure_tls,
+                max_height: None,
+                access_token: f.qc_token.clone(),
+                user_id: f.qc_user_id.clone(),
+            })
+        }
         SourceKind::Dlna => return Err("Pick a server found on the network".into()),
     })
 }
@@ -1007,5 +1146,26 @@ mod tests {
         f.kind = SourceKind::Local;
         f.address = "relative/path".into();
         assert!(build_config(&f, "x".into()).is_err());
+
+        // MediaBrowser validation
+        f.kind = SourceKind::MediaBrowser;
+        f.address = "192.168.1.10:8096/".into();
+        f.username.clear();
+        f.password.clear();
+        f.qc_token = None;
+        assert!(build_config(&f, "mb-1".into()).is_err());
+
+        f.qc_token = Some("tok_abc".into());
+        f.qc_user_id = Some("user_123".into());
+        match build_config(&f, "mb-1".into()).unwrap() {
+            SourceConfig::MediaBrowser(c) => {
+                assert_eq!(c.url, "http://192.168.1.10:8096");
+                assert_eq!(c.name, "192.168.1.10");
+                assert_eq!(c.access_token.as_deref(), Some("tok_abc"));
+                assert_eq!(c.user_id.as_deref(), Some("user_123"));
+                assert!(c.credentials.is_none());
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

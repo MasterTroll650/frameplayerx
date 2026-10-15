@@ -50,7 +50,9 @@ pub use feed::{DeoVrSource, HereSphereSource, MediaSource, SceneInfo};
 pub use http::{HttpClient, HttpFile, HttpOptions};
 pub use httpdir::HttpDirSource;
 pub use local::LocalSource;
-pub use mediabrowser::{MediaBrowserSource, QuickConnectState};
+pub use mediabrowser::{
+    MediaBrowserSource, QuickConnectState, quick_connect_initiate_url, quick_connect_poll_url,
+};
 pub use sidecar::{ScriptFile, Sidecars, SubtitleFile, match_sidecars};
 pub use smb::SmbSource;
 pub use webdav::WebDavSource;

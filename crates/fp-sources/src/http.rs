@@ -255,6 +255,12 @@ impl HttpClient {
         }
         if let Some(a) = &auth {
             builder = builder.header("Authorization", a.as_str());
+            if a.starts_with("MediaBrowser ") {
+                builder = builder.header("X-Emby-Authorization", a.as_str());
+                if let Some(tok) = a.split("Token=\"").nth(1).and_then(|t| t.split('"').next()) {
+                    builder = builder.header("X-Emby-Token", tok);
+                }
+            }
         }
         let build_err = |e: http::Error| Failure::Fatal(Error::invalid(url, e.to_string()));
         let result = match body {

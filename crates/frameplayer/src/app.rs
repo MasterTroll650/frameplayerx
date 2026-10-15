@@ -82,6 +82,8 @@ enum Job {
     ),
     Update(UpdateStatus, Option<Box<fp_updater::Update>>),
     Mounted(String, Result<std::path::PathBuf, String>),
+    QuickConnectInitiated(Result<fp_sources::QuickConnectState, String>),
+    QuickConnectPolled(Result<Option<(String, String)>, String>),
 }
 
 const MAIN: usize = 0;
@@ -805,6 +807,41 @@ impl App {
                     }
                     self.ui.update = status;
                 }
+                Job::QuickConnectInitiated(r) => {
+                    if let Some(f) = self.ui.source_form.as_mut() {
+                        f.qc_loading = false;
+                        match r {
+                            Ok(qc) => {
+                                f.qc_code = Some(qc.code);
+                                f.qc_secret = Some(qc.secret);
+                                f.qc_last_poll = Some(std::time::Instant::now());
+                                f.qc_error = None;
+                            }
+                            Err(e) => {
+                                f.qc_error = Some(e);
+                            }
+                        }
+                    }
+                }
+                Job::QuickConnectPolled(r) => {
+                    if let Some(f) = self.ui.source_form.as_mut() {
+                        match r {
+                            Ok(Some((token, user_id))) => {
+                                f.qc_token = Some(token);
+                                f.qc_user_id = Some(user_id);
+                                f.qc_code = None;
+                                f.qc_secret = None;
+                                f.qc_error = None;
+                                self.ui.toast("Quick Connect authorized!");
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                log::warn!("Quick Connect poll error: {e}");
+                                f.qc_error = Some(e);
+                            }
+                        }
+                    }
+                }
             }
         }
         if let Some(rx) = &self.services.worker_events {
@@ -1141,6 +1178,47 @@ impl App {
                 self.jobs.spawn("dlna", || {
                     Job::Dlna(
                         fp_sources::discover(Duration::from_secs(3)).map_err(|e| e.to_string()),
+                    )
+                });
+            }
+            Action::QuickConnectInitiate {
+                address,
+                insecure_tls,
+            } => {
+                if let Some(f) = self.ui.source_form.as_mut() {
+                    f.qc_loading = true;
+                    f.qc_error = None;
+                    f.qc_code = None;
+                    f.qc_secret = None;
+                }
+                self.jobs.spawn("quick_connect_initiate", move || {
+                    let addr = if address.starts_with("http://") || address.starts_with("https://")
+                    {
+                        address
+                    } else {
+                        format!("http://{address}")
+                    };
+                    Job::QuickConnectInitiated(
+                        fp_sources::quick_connect_initiate_url(&addr, insecure_tls)
+                            .map_err(|e| e.to_string()),
+                    )
+                });
+            }
+            Action::QuickConnectPoll {
+                address,
+                secret,
+                insecure_tls,
+            } => {
+                self.jobs.spawn("quick_connect_poll", move || {
+                    let addr = if address.starts_with("http://") || address.starts_with("https://")
+                    {
+                        address
+                    } else {
+                        format!("http://{address}")
+                    };
+                    Job::QuickConnectPolled(
+                        fp_sources::quick_connect_poll_url(&addr, &secret, insecure_tls)
+                            .map_err(|e| e.to_string()),
                     )
                 });
             }
