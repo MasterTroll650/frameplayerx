@@ -805,7 +805,10 @@ fn details(ui: &mut egui::Ui, v: &mut View, id: fp_library::MediaId) {
         ui.add_space(28.0);
         widgets::section_label(ui, "Format");
         ui.add_space(2.0);
-        let fmt = r.effective_format();
+        let mut fmt = r.effective_format();
+        if fmt.evidence == fp_core::format::Evidence::Default {
+            fmt.format = v.settings.default_format;
+        }
         ui.label(
             RichText::new(format!(
                 "Detected {} ({})",

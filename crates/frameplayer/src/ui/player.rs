@@ -530,8 +530,8 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                         ui.label(
                             RichText::new(format!(
                                 "Detected {} ({})",
-                                pb.detected.label(),
-                                pb.evidence.label()
+                                pb.detected.format.label(),
+                                pb.detected.evidence.label()
                             ))
                             .color(theme::TEXT_2),
                         );

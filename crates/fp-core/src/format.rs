@@ -114,8 +114,8 @@ impl Default for VideoFormat {
 impl VideoFormat {
     /// The format of a video nothing identifies (no metadata, file name tag
     /// or telling shape): stereo 180 side by side, the most common VR video
-    /// format and what FramePlayer is mostly used for. Flat videos are
-    /// switched in the player's format menu.
+    /// format and what FramePlayer is mostly used for. FramePlayer's
+    /// settings choose another for the player.
     pub const FALLBACK: VideoFormat = VideoFormat {
         projection: Projection::EQUIRECT_180,
         stereo: StereoLayout::SideBySide,
@@ -289,12 +289,28 @@ pub fn detect_from_name(name: &str) -> Option<VideoFormat> {
 }
 
 /// Guesses a format from the frame size when nothing else is known. Only
-/// confident cases: 2:1 is mono 360, 1:1 halves are stereo 180.
+/// confident cases: 2:1 is mono 360 or (from 4K up) stereo 180, a big 1:1
+/// frame is 360 top/bottom, and a movie's shape (4:3 to 2.76:1, or two
+/// 16:9 pictures side by side or stacked) is a flat screen: no VR format
+/// has those shapes, but for YouTube's 3:2 cubemap (EAC), which is left
+/// alone from 2560 wide.
 pub fn guess_from_aspect(width: u32, height: u32) -> Option<VideoFormat> {
     if width == 0 || height == 0 {
         return None;
     }
     let ar = width as f32 / height as f32;
+    let near = |target: f32, tolerance: f32| (ar - target).abs() < tolerance;
+    let cubemap = near(1.5, 0.02) && width >= 2560;
+    if ((1.25..1.9).contains(&ar) || (2.1..2.8).contains(&ar)) && !cubemap {
+        return Some(VideoFormat::new(Projection::Flat, StereoLayout::Mono));
+    }
+    // Full side by side (3840x1080) and full over/under (1920x2160) 3D.
+    if near(32.0 / 9.0, 0.05) {
+        return Some(VideoFormat::new(Projection::Flat, StereoLayout::SideBySide));
+    }
+    if near(8.0 / 9.0, 0.02) {
+        return Some(VideoFormat::new(Projection::Flat, StereoLayout::TopBottom));
+    }
     // 3840x1920 and similar: SBS 180 (two square eyes) or mono 360 (2:1).
     // The two are indistinguishable by shape; VR players default to SBS 180
     // for high resolutions because it is far more common for VR video.
@@ -545,7 +561,31 @@ mod tests {
             P::EQUIRECT_360
         );
         assert_eq!(guess_from_aspect(4096, 4096).unwrap().stereo, S::TopBottom);
-        assert_eq!(guess_from_aspect(1920, 1080), None);
+        // Movies: 16:9, 4:3, 1.85, scope, and full-width 3D.
+        let flat = Some(VideoFormat::new(P::Flat, S::Mono));
+        for (w, h) in [
+            (1920, 1080),
+            (3840, 2160),
+            (1440, 1080),
+            (1998, 1080),
+            (1920, 800),
+        ] {
+            assert_eq!(guess_from_aspect(w, h), flat, "{w}x{h}");
+        }
+        assert_eq!(
+            guess_from_aspect(3840, 1080),
+            Some(VideoFormat::new(P::Flat, S::SideBySide))
+        );
+        assert_eq!(
+            guess_from_aspect(1920, 2160),
+            Some(VideoFormat::new(P::Flat, S::TopBottom))
+        );
+        assert_eq!(guess_from_aspect(720, 480), flat, "DVD");
+        // Nothing to go by: a cubemap's shape, square below 360 sizes, or
+        // no size.
+        assert_eq!(guess_from_aspect(3072, 2048), None);
+        assert_eq!(guess_from_aspect(1080, 1080), None);
+        assert_eq!(guess_from_aspect(0, 0), None);
     }
 
     #[test]
@@ -574,7 +614,12 @@ mod tests {
         );
         assert_eq!(
             resolve(None, Default::default(), "a.mp4", 1920, 1080).format,
-            VideoFormat::FALLBACK
+            VideoFormat::new(P::Flat, S::Mono)
+        );
+        let unknown = resolve(None, Default::default(), "a.mp4", 1080, 1080);
+        assert_eq!(
+            (unknown.evidence, unknown.format),
+            (Evidence::Default, VideoFormat::FALLBACK)
         );
     }
 

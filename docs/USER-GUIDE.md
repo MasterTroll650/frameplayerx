@@ -106,27 +106,40 @@ shape. File-name tags understood include `_180`, `_360`, `_LR`/`_SBS`,
 `_TB`/`_OU`, `_RL`, `_FISHEYE190`, `_MKX200`, `_MKX220`, `_VRCA220`,
 `_EAC`, `_2D`, `_3D`.
 
+Movie shapes (16:9, 4:3, 1.85, scope) play on a flat screen, and full
+side-by-side or over/under 3D movies (3840x1080, 1920x2160) as flat 3D. A
+video nothing identifies starts as 180° side by side; Settings › Playback ›
+**Default format** picks another.
+
 To change it: open the video, press **⚙** on the control bar, **Format**.
 Overrides are remembered per video. The same panel has position, zoom,
 IPD/depth, stereo alignment, picture controls, subtitle depth and
 keyframes (adjustments that change smoothly along the video).
 
 Codecs: H.264, HEVC (8/10-bit, HDR10/HLG tone-mapped), AV1, VP9, VP8,
-MPEG-4, MPEG-2, ProRes. Audio: AAC, AC-3/E-AC-3, Opus, Vorbis, FLAC, MP3,
-DTS, TrueHD, PCM, and spatial (ambisonic) audio that follows your head.
+VC-1, MPEG-4, MPEG-2, ProRes. Audio: AAC, AC-3/E-AC-3, Opus, Vorbis, FLAC,
+MP3, DTS, TrueHD, PCM (Blu-ray and DVD LPCM too), and spatial (ambisonic)
+audio that follows your head.
 Subtitles: SRT, ASS/SSA, WebVTT, and embedded text or picture subtitles.
 
 ### Videos that stutter: 10-bit HEVC and AV1
 
-The Frame's hardware decoder plays 8-bit H.264 and HEVC (H.265), up to 8K.
-10-bit HEVC and AV1 have no hardware path on the Frame, so they decode on
-the CPU, which can't keep up with VR resolutions: they stutter or stop to
-buffer, and the control bar says so ("No hardware decoding for 10-bit
-HEVC"). Convert them to 8-bit HEVC once on a PC and they play smoothly.
+The Frame's hardware decoder plays 8-bit 4:2:0 H.264 and HEVC (H.265), up
+to 8K. 10-bit HEVC, 4:2:2 or 4:4:4 colour and AV1 have no hardware path on
+the Frame, so they decode on the CPU, which can't keep up with VR
+resolutions: they stutter or stop to buffer, and the control bar says why
+("No hardware decoding for 10-bit HEVC", "… for 4:2:2 HEVC"). Convert them
+to 8-bit 4:2:0 HEVC once on a PC and they play smoothly.
+
+"Hardware decoder busy" means the file is fine but the decoder had no room
+for it (Steam's own streaming uses it too). "The hardware decoder can't
+play this HEVC" means it tried and refused the file; frameplayer.log says
+why.
 
 To check a file: `ffprobe -v error -select_streams v:0 -show_entries
 stream=codec_name,profile,pix_fmt video.mp4` (`Main 10` / `yuv420p10le`
-is 10-bit).
+is 10-bit, `yuv422p` is 4:2:2), or MediaInfo's *Bit depth* and *Chroma
+subsampling*. Windows' file properties don't tell these reliably.
 
 With an NVIDIA graphics card (fast):
 
@@ -169,9 +182,11 @@ picture. Play/pause and seeking are under either thumb.
 | Hold grip + trigger, move | Drag the picture (the dome follows your hand) | The same |
 | Trigger | Click; on empty space, show or hide the controls | The same |
 
-Both grips together also recenter. Point at the library or adjust panel and
-hold grip to move it; it stays where you leave it. The format on the control
-bar (for example 180° SBS) opens the adjust panel's Format tab.
+Both grips together also recenter. Point at the library or adjust panel (or
+the keyboard under it) and hold grip to move it; it stays where you leave
+it. Recentering brings them back in front of you, at the height you left
+them. The format on the control bar (for example 180° SBS) opens the adjust
+panel's Format tab.
 
 Every button and thumbstick direction above can be changed in Settings ›
 Controller (tap a row, pick an action; Reset to defaults puts this layout
@@ -182,8 +197,8 @@ grip + trigger drags, both grips and menu paging are fixed.
 Drags, turns, tilts and zoom count as adjustments: save them for that video
 under ⚙, or press the left thumbstick to undo them.
 
-Text fields bring up a keyboard in front of you; **#+=** switches it to
-symbols (`! # $ % ( ) [ ] { }` and the rest) and **abc** back. You can also
+Text fields bring up a keyboard below the panel you type in; **#+=**
+switches it to symbols (`! # $ % ( ) [ ] { }` and the rest) and **abc** back. You can also
 type on your phone through the web remote.
 
 ## Passthrough videos

@@ -73,6 +73,8 @@ pub enum PlayerState {
 pub struct Stats {
     pub video_decoder: String,
     pub hardware: bool,
+    /// Why hardware decoding was tried and is not decoding this video.
+    pub hardware_error: Option<String>,
     pub audio_decoder: String,
     pub audio_sink: String,
     pub frames_shown: u64,
@@ -262,6 +264,7 @@ impl Player {
             let mut st = shared.stats();
             st.video_decoder = d.name.clone();
             st.hardware = d.hardware;
+            st.hardware_error = d.hardware_error.clone();
         }
         let audio_streams: Vec<(usize, *mut ff::AVStream)> = info
             .audio_streams()
@@ -784,6 +787,7 @@ fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
     let mut frame = Frame::new();
     let mut conv = FrameConverter::default();
     let default_duration = 1.0 / sh.video_fps.max(1.0);
+    let mut hardware = dec.hardware;
     while !sh.quit.load(Ordering::Acquire) {
         let Some((pkt_serial, pkt)) = sh.vpkts.pop(Duration::from_millis(20)) else {
             continue;
@@ -799,6 +803,15 @@ fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
             .as_ref()
             .map(|p| p.as_ptr() as *const ff::AVPacket)
             .unwrap_or(std::ptr::null());
+        // The hardware decoder can fail once running and hand over to
+        // software (Decoder::fall_back): the stats follow.
+        if dec.hardware != hardware {
+            hardware = dec.hardware;
+            let mut st = sh.stats();
+            st.video_decoder = dec.name.clone();
+            st.hardware = dec.hardware;
+            st.hardware_error = dec.hardware_error.clone();
+        }
         loop {
             let accepted = match dec.send(pkt_ptr) {
                 Ok(a) => a,

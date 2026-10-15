@@ -266,9 +266,28 @@ impl App {
         })
     }
 
-    /// Repaints every panel next frame (the preview changed the UI state).
+    /// Forward becomes where the head faces, and the library and adjust
+    /// panels come back in front: moved round to the side or behind, they
+    /// stayed there after recentering. How high they were moved is kept.
+    fn recenter(&mut self) {
+        self.reanchor = true;
+        self.panel_drag = None;
+        self.offsets.main[0] = 0.0;
+        self.offsets.adjust[0] = 0.0;
+        self.settings.panel_offsets = self.offsets;
+    }
+
+    /// The panel the keyboard types into: the library or adjust panel with
+    /// a text field in focus.
+    fn keyboard_target(&self) -> Option<usize> {
+        [MAIN, ADJUST]
+            .into_iter()
+            .find(|&i| self.panels[i].visible && self.panels[i].wants_keyboard())
+    }
+
     /// Squeezing a grip on the library or adjust panel moves it round the
-    /// viewer with that hand; where it is let go is saved.
+    /// viewer with that hand; where it is let go is saved. Squeezing one on
+    /// the keyboard moves the panel it types into, and the keyboard with it.
     fn move_panels(
         &mut self,
         grab: Option<(usize, usize)>,
@@ -278,7 +297,12 @@ impl App {
     ) {
         use crate::controls::{GRIP, angles, wrap};
         let anchor_rot = anchor.to_scale_rotation_translation().1;
-        if let Some((panel, hand)) = grab.filter(|g| [MAIN, ADJUST].contains(&g.0))
+        let grab = grab.and_then(|(panel, hand)| match panel {
+            KEYBOARD => self.keyboard_target().map(|t| (t, hand)),
+            MAIN | ADJUST => Some((panel, hand)),
+            _ => None,
+        });
+        if let Some((panel, hand)) = grab
             && let Some((_, rot)) = hands[hand].aim
         {
             let start = if panel == MAIN {
@@ -322,6 +346,7 @@ impl App {
     }
 
 
+    /// Repaints every panel next frame (the preview changed the UI state).
     pub fn repaint_all(&mut self) {
         for p in self.panels.iter_mut() {
             p.request_repaint();
@@ -1161,7 +1186,7 @@ impl App {
             }
             Action::CheckUpdates => self.check_updates(),
             Action::InstallUpdate => self.install_update(),
-            Action::Recenter => self.reanchor = true,
+            Action::Recenter => self.recenter(),
             Action::TogglePassthrough => self.settings.passthrough = !self.settings.passthrough,
             Action::ShowBrowser(show) => {
                 self.show_browser = show;
@@ -1451,7 +1476,7 @@ impl App {
                 }
                 Cmd::DragEnd => self.drag_start = None,
                 Cmd::Recenter => {
-                    self.reanchor = true;
+                    self.recenter();
                     buzz.push((0, 0.3, 20));
                     buzz.push((1, 0.3, 20));
                 }
@@ -1478,10 +1503,7 @@ impl App {
     /// B / Y, as DeoVR's Back: close the innermost thing that is open.
     fn back(&mut self) {
         if self.panels[KEYBOARD].visible {
-            let target = [MAIN, ADJUST]
-                .into_iter()
-                .find(|&i| self.panels[i].wants_keyboard());
-            if let Some(i) = target {
+            if let Some(i) = self.keyboard_target() {
                 self.panels[i].push(egui::Event::Key {
                     key: egui::Key::Escape,
                     physical_key: None,
@@ -1595,7 +1617,7 @@ impl App {
         if let Some(p) = &mut self.playback {
             p.save_progress(&self.services.library, false);
             p.save_key(&self.services.library, false);
-            p.watch_decoding();
+            p.watch_decoding(self.settings.hardware_decoding);
         }
         self.publish_status();
 
@@ -1638,9 +1660,7 @@ impl App {
         self.panels[MAIN].visible = browser;
         self.panels[BAR].visible = playing && self.ui_visible && !self.show_browser;
         self.panels[ADJUST].visible = self.panels[BAR].visible && self.ui.adjust_open;
-        let kb_target = [MAIN, ADJUST]
-            .into_iter()
-            .find(|&i| self.panels[i].visible && self.panels[i].wants_keyboard());
+        let kb_target = self.keyboard_target();
         self.panels[KEYBOARD].visible = kb_target.is_some();
 
         // Placement. During 180°/360° video the control bar turns with the
@@ -1660,7 +1680,15 @@ impl App {
         self.panels[BAR].pose = place(bar_anchor, 0.0, 1.05, -0.42, 28.0);
         // To the right, clear of the control bar's end.
         self.panels[ADJUST].pose = place_around(anchor, -48.0 + ay, ap, 1.15, -0.08);
-        self.panels[KEYBOARD].pose = place(anchor, 0.0, 0.95, -0.55, 35.0);
+        // The keyboard sits below the panel it types into, turned with it, so
+        // it is where that panel was moved to.
+        let [ky, kp] = match kb_target {
+            Some(ADJUST) => [-48.0 + ay, ap],
+            Some(_) => [my, mp],
+            None => [0.0, 0.0],
+        };
+        let kb_anchor = place_around(anchor, ky, kp, 0.0, 0.0);
+        self.panels[KEYBOARD].pose = place(kb_anchor, 0.0, 0.95, -0.55, 35.0);
 
         // Pointer → panel events.
         let routed = {
@@ -1789,6 +1817,9 @@ impl App {
 
         // Quads: panels back to front, then pointers.
         let mut quads = Vec::new();
+        // Subtitles fade in like the panels (a panel that never fades in is
+        // never drawn).
+        self.subs.update_fade(input.dt);
         if self.subs.visible {
             quads.extend(self.subs.quad());
         }

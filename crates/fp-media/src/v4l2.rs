@@ -809,6 +809,15 @@ mod linux {
             if p.width <= 0 || p.height <= 0 {
                 return Err(Error::Unsupported("V4L2: stream size unknown".into()));
             }
+            // The queues are set up for whole frames (FIELD_NONE); fields
+            // from an interlaced H.264 stream (1080i Blu-ray) are not
+            // something this path was built or tested for. Software decodes
+            // 1080 H.264 easily.
+            if codec == Codec::H264 && crate::info::interlaced(p) {
+                return Err(Error::Unsupported(
+                    "V4L2 path takes progressive H.264 only (this is interlaced)".into(),
+                ));
+            }
             let stream_size = (p.width as u32, p.height as u32);
             let (device, fd) = find_device(codec)?;
             let mut dec = V4l2Decoder {

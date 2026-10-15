@@ -3,7 +3,7 @@
 
 use crate::services::Opener;
 use crate::settings::Settings;
-use fp_core::format::{self, ContainerHints, Evidence, VideoFormat};
+use fp_core::format::{self, ContainerHints, DetectedFormat, Evidence, VideoFormat};
 use fp_core::source::Entry;
 use fp_core::view::{Keyframes, ViewSettings};
 use fp_core::{PlaybackStatus, playback::now_ms};
@@ -34,7 +34,7 @@ pub struct Playback {
     pub format: VideoFormat,
     pub evidence: Evidence,
     /// Format the file would have without the user's override.
-    pub detected: VideoFormat,
+    pub detected: DetectedFormat,
     pub settings: ViewSettings,
     pub keyframes: Keyframes,
     /// Adjustments differ from what is saved for this video.
@@ -93,6 +93,21 @@ fn percent_decode(s: &str) -> String {
 fn title_from_name(name: &str) -> String {
     let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
     stem.replace(['_', '.'], " ").trim().to_string()
+}
+
+/// The format a source declared for a video: on the browse entry, or, when
+/// opened from the library or home (no entry), as saved in its record. A
+/// DeoVR scene's `_LR_ALPHA.json` name alone makes a flat screen of a
+/// fisheye passthrough video: mask in the corners, no height or forward.
+fn declared_format(
+    entry: Option<&Entry>,
+    record: Option<&fp_library::MediaRecord>,
+) -> Option<VideoFormat> {
+    entry.and_then(|e| e.format).or_else(|| {
+        record
+            .filter(|r| r.detected.evidence == Evidence::Metadata)
+            .map(|r| r.detected.format)
+    })
 }
 
 /// Opens media; blocking (network probing), so run it on a job thread.
@@ -167,7 +182,7 @@ pub fn open(
     let user = record.as_ref().and_then(|r| r.user_format);
     let hints = if info.hints.projection.is_some() || info.hints.stereo.is_some() {
         info.hints
-    } else if let Some(f) = entry.as_ref().and_then(|e| e.format) {
+    } else if let Some(f) = declared_format(entry.as_ref(), record.as_ref()) {
         ContainerHints {
             projection: Some(f.projection),
             stereo: Some(f.stereo),
@@ -175,8 +190,25 @@ pub fn open(
     } else {
         info.hints
     };
-    let resolved = format::resolve(user, hints, &name, w, h);
-    let detected = format::resolve(None, hints, &name, w, h).format;
+    // A video nothing identifies starts in the format chosen in Settings.
+    let unidentified = |mut d: DetectedFormat| {
+        if d.evidence == Evidence::Default {
+            d.format = settings.default_format;
+        }
+        d
+    };
+    let resolved = unidentified(format::resolve(user, hints, &name, w, h));
+    let detected = unidentified(format::resolve(None, hints, &name, w, h));
+    log::info!(
+        "format {}{} ({}), {w}x{h}",
+        resolved.format.label(),
+        if resolved.format.alpha_packed {
+            " with mask"
+        } else {
+            ""
+        },
+        resolved.evidence.label()
+    );
 
     let settings_v = record
         .as_ref()
@@ -346,7 +378,8 @@ impl Playback {
 
     /// Every few seconds: when software decoding falls behind, says why in
     /// the control bar (the picture stutters with no other explanation).
-    pub fn watch_decoding(&mut self) {
+    /// `hardware_on` is the hardware decoding setting.
+    pub fn watch_decoding(&mut self, hardware_on: bool) {
         if self.decode_check.0.elapsed().as_secs_f64() < DECODE_CHECK_SECS {
             return;
         }
@@ -371,23 +404,37 @@ impl Playback {
         let Some(v) = self.player.info().video_stream() else {
             return;
         };
-        let notice = slow_decode_notice(v);
+        let notice = slow_decode_notice(v, hardware_on, st.hardware_error.as_deref());
         log::info!(
-            "software decoding ({}) behind: {} stalls, {} of {} frames dropped",
+            "software decoding ({}, {} {}x{} {}) behind: {} stalls, {} of {} frames dropped; \
+             hardware: {}",
             st.video_decoder,
+            v.codec,
+            v.width,
+            v.height,
+            if v.pixel_format.is_empty() {
+                "pixel format unknown"
+            } else {
+                &v.pixel_format
+            },
             st.stalls - stalls,
             st.frames_dropped - dropped,
-            st.frames_shown - shown + st.frames_dropped - dropped
+            st.frames_shown - shown + st.frames_dropped - dropped,
+            match (&st.hardware_error, hardware_on) {
+                (Some(e), _) => e.as_str(),
+                (None, false) => "off in Settings",
+                (None, true) => "not tried",
+            }
         );
         self.notice = Some(notice);
     }
 
     pub fn set_format(&mut self, library: &Library, format: Option<VideoFormat>) {
-        self.format = format.unwrap_or(self.detected);
+        self.format = format.unwrap_or(self.detected.format);
         self.evidence = if format.is_some() {
             Evidence::User
         } else {
-            Evidence::FileName
+            self.detected.evidence
         };
         if let Some(id) = self.record_id
             && let Err(e) = library.set_user_format(id, format)
@@ -518,7 +565,13 @@ fn falling_behind(stalls: u64, dropped: u64, shown: u64) -> bool {
 }
 
 /// Why a software-decoded video stutters, and what plays smoothly instead.
-pub(crate) fn slow_decode_notice(v: &StreamInfo) -> String {
+/// `hardware_on` is the hardware decoding setting; `hardware_error` why the
+/// hardware decoder, when tried, is not decoding.
+pub(crate) fn slow_decode_notice(
+    v: &StreamInfo,
+    hardware_on: bool,
+    hardware_error: Option<&str>,
+) -> String {
     let codec = match v.codec.as_str() {
         "hevc" => "HEVC".to_string(),
         "h264" => "H.264".to_string(),
@@ -526,16 +579,36 @@ pub(crate) fn slow_decode_notice(v: &StreamInfo) -> String {
         "vp9" => "VP9".to_string(),
         c => c.to_uppercase(),
     };
-    let desc = if v.bit_depth > 8 {
-        format!("{}-bit {codec}", v.bit_depth)
-    } else {
-        codec
+    // The hardware decodes 8-bit 4:2:0 only: say which of the two it isn't.
+    let chroma = v.chroma();
+    let desc = match (v.bit_depth > 8, chroma != "4:2:0") {
+        (true, true) => format!("{}-bit {chroma} {codec}", v.bit_depth),
+        (true, false) => format!("{}-bit {codec}", v.bit_depth),
+        (false, true) => format!("{chroma} {codec}"),
+        (false, false) => codec,
     };
     let hardware_codec = matches!(v.codec.as_str(), "hevc" | "h264" | "vp9");
-    if hardware_codec && v.bit_depth <= 8 {
+    if !hardware_codec || v.bit_depth > 8 || chroma != "4:2:0" {
+        return format!(
+            "No hardware decoding for {desc}, so it stutters. 8-bit 4:2:0 H.265 plays smoothly"
+        );
+    }
+    if !hardware_on {
+        return format!("{desc} in software stutters: turn on hardware decoding in Settings");
+    }
+    // Out of decoder memory or sessions: other apps (Steam's streaming
+    // among them) hold the hardware decoder.
+    let busy = hardware_error.is_none_or(|e| {
+        let e = e.to_ascii_lowercase();
+        e.contains("memory") || e.contains("busy") || e.contains("no free")
+    });
+    if busy {
         format!("Hardware decoder busy: {desc} in software stutters")
     } else {
-        format!("No hardware decoding for {desc}, so it stutters. 8-bit H.265 plays smoothly")
+        format!(
+            "The hardware decoder can't play this {desc} ({}x{}), so it stutters in software",
+            v.width, v.height
+        )
     }
 }
 
@@ -552,6 +625,49 @@ mod tests {
         assert_eq!(file_name("/media/x/My.Video_2024.mkv"), "My.Video_2024.mkv");
         assert_eq!(title_from_name("My.Video_2024.mkv"), "My Video 2024");
         assert_eq!(percent_decode("a%2Fb%zz"), "a/b%zz");
+    }
+
+    #[test]
+    fn library_opens_keep_the_format_the_source_declared() {
+        use fp_core::format::{Projection, StereoLayout};
+        use fp_core::source::EntryKind;
+        let lib = Library::open_in_memory().unwrap();
+        let loc = "http://127.0.0.1:1/deovr/scene/7/Room_Scene_7_LR_ALPHA.json";
+        let mut e = Entry::new("Room Scene", loc, EntryKind::Video);
+        e.format = Some(VideoFormat::new(
+            Projection::fisheye(190.0),
+            StereoLayout::SideBySide,
+        ));
+        lib.upsert_entry("feed", &e).unwrap();
+        let record = lib.get_by_location(loc).unwrap();
+        let resolve = |declared: Option<VideoFormat>| {
+            let hints = declared.map_or_else(ContainerHints::default, |f| ContainerHints {
+                projection: Some(f.projection),
+                stereo: Some(f.stereo),
+            });
+            format::resolve(None, hints, &file_name(loc), 2160, 1080).format
+        };
+
+        // From the source's browser and from the library or home (no
+        // entry): a masked fisheye, not a flat screen.
+        for declared in [
+            declared_format(Some(&e), None),
+            declared_format(None, record.as_ref()),
+        ] {
+            let f = resolve(declared);
+            assert_eq!(f.projection, Projection::fisheye(190.0));
+            assert_eq!(f.stereo, StereoLayout::SideBySide);
+            assert!(f.alpha_packed);
+        }
+        // What the name alone gives.
+        assert_eq!(resolve(None).projection, Projection::Flat);
+
+        // A format guessed from the name or shape is not a declaration.
+        let local = "/v/Clip_LR.mp4";
+        lib.upsert(&fp_library::MediaUpsert::new(local, "local"))
+            .unwrap();
+        let r = lib.get_by_location(local).unwrap();
+        assert_eq!(declared_format(None, r.as_ref()), None);
     }
 
     #[test]
@@ -585,20 +701,37 @@ mod tests {
             height: 4096,
             fps: 59.94,
             bit_depth,
+            pixel_format: if bit_depth > 8 {
+                "yuv420p10le".into()
+            } else {
+                "yuv420p".into()
+            },
+            interlaced: false,
             transfer: Default::default(),
             rotation: 0.0,
             sample_rate: 0,
             channels: 0,
             ambisonic: false,
         };
-        let n = slow_decode_notice(&stream("hevc", 10));
+        let n = slow_decode_notice(&stream("hevc", 10), true, None);
         assert!(
-            n.contains("10-bit HEVC") && n.contains("8-bit H.265"),
+            n.contains("10-bit HEVC") && n.contains("8-bit 4:2:0 H.265"),
             "{n}"
         );
-        let n = slow_decode_notice(&stream("av1", 8));
+        let n = slow_decode_notice(&stream("av1", 8), true, None);
         assert!(n.contains("for AV1,"), "{n}");
-        let n = slow_decode_notice(&stream("hevc", 8));
+        let busy = "V4L2 REQBUFS: Cannot allocate memory (os error 12)";
+        let n = slow_decode_notice(&stream("hevc", 8), true, Some(busy));
         assert!(n.contains("busy"), "{n}");
+        // 8-bit, but 4:2:2: the hardware can't, whatever Windows says.
+        let mut s422 = stream("hevc", 8);
+        s422.pixel_format = "yuv422p".into();
+        let n = slow_decode_notice(&s422, true, None);
+        assert!(n.contains("for 4:2:2 HEVC"), "{n}");
+        let n = slow_decode_notice(&stream("hevc", 8), false, None);
+        assert!(n.contains("turn on hardware decoding"), "{n}");
+        let refused = "V4L2: stream size unknown";
+        let n = slow_decode_notice(&stream("hevc", 8), true, Some(refused));
+        assert!(n.contains("can't play this HEVC (8192x4096)"), "{n}");
     }
 }
