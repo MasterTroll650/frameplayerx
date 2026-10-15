@@ -3,6 +3,19 @@
 use crate::{Error, Result, check};
 use fp_ffmpeg_sys as ff;
 use std::ffi::{CStr, CString};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+/// Hardware decoder sessions this process holds (native V4L2 decoders and
+/// FFmpeg hardware decoders). The driver admits only a few at a time, Steam
+/// holding some, so one a closed video never gave back leaves later videos
+/// in software ("Hardware decoder busy").
+pub(crate) static HW_SESSIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// See [`HW_SESSIONS`].
+pub fn hardware_sessions() -> usize {
+    HW_SESSIONS.load(Ordering::Relaxed)
+}
 
 /// An owned `AVPacket`.
 pub struct Packet(pub(crate) *mut ff::AVPacket);
@@ -169,6 +182,43 @@ fn on_all_cpus<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
+/// Replaces a frame that references a hardware decoder's buffer with a copy
+/// in ordinary memory, giving the buffer straight back to the decoder.
+/// FFmpeg's V4L2 decoders hand out their CAPTURE buffers themselves, and the
+/// player holds more frames (queue, picture on screen) than the 8 buffers
+/// they get: with the picture standing still (paused, or the video closing)
+/// the decoder then waits forever for a free one ("All capture buffers
+/// returned to userspace"), the video never finishes closing and its
+/// hardware session stays taken, so later videos decode in software.
+fn copy_out(frame: &mut Frame) -> Result<()> {
+    // SAFETY: frame holds a decoded picture; the copy is allocated with its
+    // format and size before av_frame_copy fills it.
+    unsafe {
+        let src = frame.0;
+        if (*src).format == ff::AV_PIX_FMT_DRM_PRIME {
+            return Ok(()); // descriptors, not pixels (never requested)
+        }
+        let mut dst = ff::av_frame_alloc();
+        if dst.is_null() {
+            return Err(Error::Unsupported("out of memory for a frame".into()));
+        }
+        (*dst).format = (*src).format;
+        (*dst).width = (*src).width;
+        (*dst).height = (*src).height;
+        let copied = check(ff::av_frame_get_buffer(dst, 0), "frame copy buffer")
+            .and_then(|_| check(ff::av_frame_copy(dst, src), "frame copy"))
+            .and_then(|_| check(ff::av_frame_copy_props(dst, src), "frame copy props"));
+        if let Err(e) = copied {
+            ff::av_frame_free(&mut dst);
+            return Err(e);
+        }
+        ff::av_frame_unref(src);
+        ff::av_frame_move_ref(src, dst);
+        ff::av_frame_free(&mut dst);
+    }
+    Ok(())
+}
+
 /// Packets kept while the native decoder starts up, replayed into the
 /// fallback decoder if it fails before its first frame.
 #[cfg(target_os = "linux")]
@@ -213,6 +263,9 @@ unsafe impl Send for Decoder {}
 
 impl Drop for Decoder {
     fn drop(&mut self) {
+        if self.hardware && !self.ctx.is_null() {
+            HW_SESSIONS.fetch_sub(1, Ordering::Relaxed);
+        }
         // SAFETY: we own the context (null-safe).
         unsafe { ff::avcodec_free_context(&mut self.ctx) };
     }
@@ -345,6 +398,9 @@ impl Decoder {
                 hardware_error: None,
                 time_base,
             };
+            if hardware {
+                HW_SESSIONS.fetch_add(1, Ordering::Relaxed); // until Drop
+            }
             check(
                 ff::avcodec_parameters_to_context(ctx, par),
                 "decoder parameters",
@@ -403,12 +459,28 @@ impl Decoder {
                 " (resumes at the next keyframe)"
             }
         );
-        let mut next = Self::open_with(native.par, self.time_base, native.hw, false)?;
+        let startup = native.startup.take().unwrap_or_default();
+        let hw = native.hw;
+        // Close the failed device session before opening the next decoder:
+        // FFmpeg's V4L2 wrapper needs a session of its own, and the driver
+        // refuses one more while Steam holds others, so it went to software.
+        // SAFETY: copies the parameters into a fresh allocation, freed below.
+        let mut par = unsafe { ff::avcodec_parameters_alloc() };
+        if par.is_null() || unsafe { ff::avcodec_parameters_copy(par, native.par) } < 0 {
+            // SAFETY: null-safe free of our own allocation.
+            unsafe { ff::avcodec_parameters_free(&mut par) };
+            return Err(Error::Unsupported("codec parameters copy".into()));
+        }
+        drop(native);
+        let next = Self::open_with(par, self.time_base, hw, false);
+        // SAFETY: our copy; open_with copied what it needs.
+        unsafe { ff::avcodec_parameters_free(&mut par) };
+        let mut next = next?;
         std::mem::swap(&mut self.ctx, &mut next.ctx);
         self.name = std::mem::take(&mut next.name);
         self.hardware = next.hardware;
         self.hardware_error = (!next.hardware).then(|| why.to_string());
-        self.replay = native.startup.take().unwrap_or_default().into();
+        self.replay = startup.into();
         log::info!("now decoding with {}", self.name);
         Ok(())
     }
@@ -495,7 +567,21 @@ impl Decoder {
             return Ok(Some(false));
         }
         check(r, "receive frame")?;
+        if self.hardware {
+            copy_out(frame)?;
+        }
         Ok(Some(true))
+    }
+
+    /// A flag that, once set, cuts the native decoder's waits for the
+    /// device short (the player sets it when closing).
+    pub(crate) fn set_interrupt(&mut self, flag: Arc<AtomicBool>) {
+        #[cfg(target_os = "linux")]
+        if let Some(n) = self.native.as_mut() {
+            n.dec.set_interrupt(flag);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = flag;
     }
 
     pub fn flush(&mut self) {
@@ -654,6 +740,56 @@ mod tests {
             .iter()
             .fold((255u8, 0u8), |(a, b), &v| (a.min(v), b.max(v)));
         assert!(mx - mn > 100);
+    }
+
+    #[test]
+    fn failed_hardware_opens_hold_no_session() {
+        // No V4L2 device here: FFmpeg's hardware decoder is tried and fails,
+        // and software decodes. Nothing may stay counted afterwards (other
+        // tests open decoders at the same time, so allow them to finish).
+        let (name, _) = decode_all("h264_aac_180_LR.mp4", 5);
+        assert_eq!(name, "h264");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while hardware_sessions() != 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(hardware_sessions(), 0);
+    }
+
+    #[test]
+    fn hardware_frames_are_copied_out_unchanged() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/h264_aac_180_LR.mp4");
+        let mut input = Input::open(
+            Arc::new(FileSource::open(&path).unwrap()),
+            "x.mp4",
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let vi = input.best_stream(ff::AVMEDIA_TYPE_VIDEO).unwrap();
+        let mut dec = Decoder::open(input.streams()[vi], HwDecode::Off).unwrap();
+        let pkt = Packet::new();
+        let mut frame = Frame::new();
+        while dec.receive(&mut frame).unwrap() != Some(true) {
+            assert!(input.read(pkt.as_ptr()).unwrap());
+            if pkt.stream_index() == vi {
+                dec.send(pkt.as_ptr()).unwrap();
+            }
+            unsafe { ff::av_packet_unref(pkt.as_ptr()) };
+        }
+        let mut conv = FrameConverter::default();
+        let mut copy = Frame::new();
+        unsafe { ff::av_frame_ref(copy.as_ptr(), frame.as_ptr()) };
+        let before = unsafe { (*frame.as_ptr()).buf[0] };
+        copy_out(&mut copy).unwrap();
+        unsafe {
+            assert_ne!((*copy.as_ptr()).buf[0], before, "own buffer");
+            assert_eq!((*copy.as_ptr()).pts, (*frame.as_ptr()).pts);
+        }
+        let a = conv.convert(frame.take_raw(), 0.0, 0.0, 0).unwrap();
+        let b = conv.convert(copy.take_raw(), 0.0, 0.0, 0).unwrap();
+        assert_eq!((a.width, a.height, a.layout), (b.width, b.height, b.layout));
+        assert_eq!(a.packed_planes(), b.packed_planes());
     }
 
     #[test]

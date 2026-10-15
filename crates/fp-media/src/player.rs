@@ -608,6 +608,10 @@ impl Player {
         s.frames_cv.notify_all();
         s.vpkts.cv.notify_all();
         s.apkts.cv.notify_all();
+        // Frames can hold the hardware decoder's own buffers; one blocked
+        // waiting for a free buffer only returns once they are given back.
+        s.frames().clear();
+        s.current.lock().unwrap_or_else(|e| e.into_inner()).take();
         for t in self.threads.drain(..) {
             let _ = t.join();
         }
@@ -783,6 +787,7 @@ fn demux_thread(
 }
 
 fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
+    dec.set_interrupt(sh.quit.clone());
     let mut serial = 0u64;
     let mut frame = Frame::new();
     let mut conv = FrameConverter::default();
