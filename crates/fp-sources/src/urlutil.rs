@@ -106,8 +106,8 @@ fn split_url(location: &str) -> (&str, &str, &str) {
 pub fn last_segment(location: &str) -> String {
     let (_, path, _) = split_url(location);
     let seg = path
-        .trim_end_matches('/')
-        .rsplit('/')
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
         .next()
         .unwrap_or_default();
     percent_decode(seg)

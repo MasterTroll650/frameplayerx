@@ -42,8 +42,16 @@ impl ByteSource for FileSource {
         Some(self.size)
     }
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        use std::os::unix::fs::FileExt;
-        self.file.read_at(buf, offset)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileExt;
+            self.file.read_at(buf, offset)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileExt;
+            self.file.seek_read(buf, offset)
+        }
     }
     fn describe(&self) -> String {
         self.path.clone()

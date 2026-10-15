@@ -61,13 +61,20 @@ impl VideoPlanes {
     ) -> Result<bool> {
         let Some(formats) = plane_formats(frame.layout) else {
             return Err(crate::Error::Unsupported(
-                "DRM-PRIME frames need the zero-copy import path".into(),
+                "unsupported frame layout for upload".into(),
             ));
         };
+        if frame.width == 0 || frame.height == 0 {
+            return Ok(false);
+        }
         if slot
             .as_ref()
             .is_some_and(|s| s.key == Some(frame_key(frame)))
         {
+            return Ok(false);
+        }
+        let planes = frame.planes();
+        if planes.is_empty() {
             return Ok(false);
         }
         let mut recreated = false;
@@ -81,7 +88,6 @@ impl VideoPlanes {
                 garbage.append(&mut old.images);
                 old.staging.destroy(gpu);
             }
-            let planes = frame.planes();
             let mut images = Vec::new();
             for (p, &f) in planes.iter().zip(&formats) {
                 images.push(Image::new(
@@ -96,8 +102,9 @@ impl VideoPlanes {
             }
             let bytes: u64 = planes
                 .iter()
-                .map(|p| (p.stride * p.height as usize) as u64 + 64)
-                .sum();
+                .map(|p| (p.stride * p.height as usize) as u64 + 4096)
+                .sum::<u64>()
+                .max(65536);
             let staging = Buffer::new(
                 gpu,
                 bytes,
@@ -122,25 +129,70 @@ impl VideoPlanes {
             return Ok(recreated);
         };
         s.desc.color = frame.color;
-        // Copy every plane into staging as-is (with its stride) and let the
-        // copy command de-stride via bufferRowLength.
-        let planes = frame.planes();
+
+        // Ensure staging buffer is large enough for all planes (in case strides vary across frames)
+        let mut total_bytes: usize = 0;
+        for p in &planes {
+            let row_len = (p.width * p.components * p.bytes_per_sample) as usize;
+            let len = if p.height > 0 {
+                p.stride * (p.height as usize - 1) + row_len
+            } else {
+                0
+            };
+            total_bytes = (total_bytes + len + 63) & !63;
+        }
+        if total_bytes as u64 > s.staging.size {
+            let bigger = Buffer::new(
+                gpu,
+                (total_bytes as u64 + 65536).max(s.staging.size * 2),
+                vk::BufferUsageFlags::TRANSFER_SRC,
+                MemoryLocation::CpuToGpu,
+                "video staging",
+            )?;
+            let mut old = std::mem::replace(&mut s.staging, bigger);
+            old.destroy(gpu);
+        }
+
+        // Copy every plane into staging
         let mut offset = 0usize;
         let mut regions = Vec::new();
         {
             let dst = s.staging.bytes();
             for p in &planes {
-                let len = p.stride * (p.height as usize - 1)
-                    + (p.width * p.components * p.bytes_per_sample) as usize;
-                if offset + len > dst.len() {
-                    return Err(crate::Error::Unsupported("staging buffer too small".into()));
-                }
-                par_copy(&mut dst[offset..offset + len], &p.data[..len]);
+                let row_len = (p.width * p.components * p.bytes_per_sample) as usize;
                 let texel = (p.components * p.bytes_per_sample) as usize;
-                regions.push((offset as u64, (p.stride / texel) as u32, p.width, p.height));
-                offset = (offset + len + 63) & !63;
+                let len = if p.height > 0 {
+                    p.stride * (p.height as usize - 1) + row_len
+                } else {
+                    0
+                };
+                if p.data.len() < len || offset + len > dst.len() {
+                    continue;
+                }
+                if p.stride >= row_len && p.stride % texel == 0 {
+                    par_copy(&mut dst[offset..offset + len], &p.data[..len]);
+                    regions.push((offset as u64, (p.stride / texel) as u32, p.width, p.height));
+                    offset = (offset + len + 63) & !63;
+                } else {
+                    // Stride is misaligned: pack rows tightly without padding
+                    let tight_len = row_len * p.height as usize;
+                    if offset + tight_len <= dst.len() {
+                        for y in 0..p.height as usize {
+                            let src_start = y * p.stride;
+                            let src_end = src_start + row_len;
+                            if src_end <= p.data.len() {
+                                let dst_start = offset + y * row_len;
+                                dst[dst_start..dst_start + row_len]
+                                    .copy_from_slice(&p.data[src_start..src_end]);
+                            }
+                        }
+                        regions.push((offset as u64, p.width, p.width, p.height));
+                        offset = (offset + tight_len + 63) & !63;
+                    }
+                }
             }
         }
+        s.key = Some(frame_key(frame));
         for (img, (off, row_len, w, h)) in s.images.iter().zip(regions) {
             mem::barrier(
                 gpu,

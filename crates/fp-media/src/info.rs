@@ -97,16 +97,16 @@ pub(crate) fn dict_get(dict: *mut ff::AVDictionary, key: &str) -> Option<String>
 }
 
 fn side_data(par: &ff::AVCodecParameters, kind: ff::AVPacketSideDataType) -> Option<&[u8]> {
-    if par.coded_side_data.is_null() {
+    if par.coded_side_data.is_null() || par.nb_coded_side_data <= 0 {
         return None;
     }
     // SAFETY: coded_side_data holds nb_coded_side_data entries.
     let all =
         unsafe { std::slice::from_raw_parts(par.coded_side_data, par.nb_coded_side_data as usize) };
     all.iter()
-        .find(|sd| sd.type_ == kind && !sd.data.is_null())
+        .find(|sd| sd.type_ == kind && !sd.data.is_null() && sd.size > 0)
         // SAFETY: data is valid for size bytes while the stream lives.
-        .map(|sd| unsafe { std::slice::from_raw_parts(sd.data, sd.size) })
+        .map(|sd| unsafe { std::slice::from_raw_parts(sd.data, sd.size as usize) })
 }
 
 /// Maps FFmpeg spherical side data to a projection.

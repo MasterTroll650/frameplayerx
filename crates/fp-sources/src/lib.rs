@@ -15,6 +15,7 @@
 //! | DLNA/UPnP | [`dlna`] | `dlna:<object id>` folders, `http://` media |
 //! | DeoVR / HereSphere feeds | [`feed`] | feed and scene URLs |
 //! | SMB2/3 | [`smb`] | `smb://host/share/path` |
+//! | Jellyfin / Emby | [`mediabrowser`] | `mb:<url>#<kind>=<id>` |
 //!
 //! Sources are built from a serializable [`SourceConfig`] with [`build`];
 //! [`save_configs`] / [`load_configs`] persist them (credentials included)
@@ -30,6 +31,7 @@ pub mod feed;
 pub mod http;
 pub mod httpdir;
 pub mod local;
+pub mod mediabrowser;
 pub mod sidecar;
 pub mod smb;
 pub mod timeutil;
@@ -39,8 +41,8 @@ mod xml;
 
 pub use cache::{CacheOptions, CacheStats};
 pub use config::{
-    Credentials, DlnaConfig, FeedConfig, HttpConfig, LocalConfig, SmbConfig, SourceConfig,
-    SourceKind, default_config_path, load_configs, save_configs,
+    Credentials, DlnaConfig, FeedConfig, HttpConfig, LocalConfig, MediaBrowserConfig, SmbConfig,
+    SourceConfig, SourceKind, default_config_path, load_configs, save_configs,
 };
 pub use dlna::{DlnaDevice, DlnaSource, SsdpResponse, discover};
 pub use error::{Error, Result};
@@ -48,6 +50,7 @@ pub use feed::{DeoVrSource, HereSphereSource, MediaSource, SceneInfo};
 pub use http::{HttpClient, HttpFile, HttpOptions};
 pub use httpdir::HttpDirSource;
 pub use local::LocalSource;
+pub use mediabrowser::{MediaBrowserSource, QuickConnectState};
 pub use sidecar::{ScriptFile, Sidecars, SubtitleFile, match_sidecars};
 pub use smb::SmbSource;
 pub use webdav::WebDavSource;
@@ -127,6 +130,7 @@ pub fn build(config: &SourceConfig) -> Result<Box<dyn Source>> {
         SourceConfig::DeoVr(c) => Box::new(DeoVrSource::new(c)?),
         SourceConfig::HereSphere(c) => Box::new(HereSphereSource::new(c)?),
         SourceConfig::Smb(c) => Box::new(SmbSource::new(c)?),
+        SourceConfig::MediaBrowser(c) => Box::new(MediaBrowserSource::new(c)?),
     })
 }
 

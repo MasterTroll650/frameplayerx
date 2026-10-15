@@ -138,7 +138,10 @@ mod tests {
         std::fs::write(root.join("Trip_360_TB.pitch.funscript"), b"{}").unwrap();
         std::fs::write(root.join("Trip_360_TB.en.srt"), b"1").unwrap();
         std::fs::write(root.join(".hidden.mp4"), b"x").unwrap();
+        #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("missing"), root.join("broken.mp4")).unwrap();
+        #[cfg(windows)]
+        let _ = std::os::windows::fs::symlink_file(root.join("missing"), root.join("broken.mp4"));
         let src = source(root);
 
         let list = src.list(None).unwrap();

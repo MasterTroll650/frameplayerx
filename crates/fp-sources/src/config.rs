@@ -9,6 +9,7 @@ use crate::urlutil::redact;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -62,6 +63,9 @@ pub enum SourceKind {
     HereSphere,
     /// An SMB2/3 share.
     Smb,
+    /// A Jellyfin or Emby media server (MediaBrowser API).
+    #[serde(rename = "mediabrowser")]
+    MediaBrowser,
 }
 
 impl SourceKind {
@@ -75,6 +79,7 @@ impl SourceKind {
             SourceKind::DeoVr => "DeoVR feed",
             SourceKind::HereSphere => "HereSphere API",
             SourceKind::Smb => "SMB share",
+            SourceKind::MediaBrowser => "Jellyfin/Emby",
         }
     }
 }
@@ -171,6 +176,32 @@ pub struct SmbConfig {
     pub credentials: Option<Credentials>,
 }
 
+/// A Jellyfin or Emby media server (MediaBrowser API).
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct MediaBrowserConfig {
+    /// Stable identifier chosen by the app.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Server base URL, e.g. `http://jellyfin:8096`.
+    pub url: String,
+    /// User credentials (username + password).
+    #[serde(default)]
+    pub credentials: Option<Credentials>,
+    /// Accept invalid TLS certificates.
+    #[serde(default)]
+    pub insecure_tls: bool,
+    /// Highest video height to select among media sources.
+    #[serde(default)]
+    pub max_height: Option<u32>,
+    /// Persisted access token from a previous session.
+    #[serde(default)]
+    pub access_token: Option<String>,
+    /// Persisted user ID from a previous session.
+    #[serde(default)]
+    pub user_id: Option<String>,
+}
+
 fn debug_with_url(
     f: &mut fmt::Formatter<'_>,
     ty: &str,
@@ -185,6 +216,19 @@ fn debug_with_url(
         .field("url", &redact(url))
         .field("credentials", creds)
         .finish_non_exhaustive()
+}
+
+impl fmt::Debug for MediaBrowserConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        debug_with_url(
+            f,
+            "MediaBrowserConfig",
+            &self.id,
+            &self.name,
+            &self.url,
+            &self.credentials,
+        )
+    }
 }
 
 impl fmt::Debug for HttpConfig {
@@ -244,6 +288,9 @@ pub enum SourceConfig {
     HereSphere(FeedConfig),
     /// An SMB2/3 share.
     Smb(SmbConfig),
+    /// A Jellyfin or Emby media server.
+    #[serde(rename = "mediabrowser")]
+    MediaBrowser(MediaBrowserConfig),
 }
 
 impl SourceConfig {
@@ -255,6 +302,7 @@ impl SourceConfig {
             SourceConfig::Dlna(c) => &c.id,
             SourceConfig::DeoVr(c) | SourceConfig::HereSphere(c) => &c.id,
             SourceConfig::Smb(c) => &c.id,
+            SourceConfig::MediaBrowser(c) => &c.id,
         }
     }
 
@@ -266,6 +314,7 @@ impl SourceConfig {
             SourceConfig::Dlna(c) => &c.name,
             SourceConfig::DeoVr(c) | SourceConfig::HereSphere(c) => &c.name,
             SourceConfig::Smb(c) => &c.name,
+            SourceConfig::MediaBrowser(c) => &c.name,
         }
     }
 
@@ -279,6 +328,7 @@ impl SourceConfig {
             SourceConfig::DeoVr(_) => SourceKind::DeoVr,
             SourceConfig::HereSphere(_) => SourceKind::HereSphere,
             SourceConfig::Smb(_) => SourceKind::Smb,
+            SourceConfig::MediaBrowser(_) => SourceKind::MediaBrowser,
         }
     }
 
@@ -290,6 +340,7 @@ impl SourceConfig {
             SourceConfig::Dlna(c) => redact(&c.location),
             SourceConfig::DeoVr(c) | SourceConfig::HereSphere(c) => redact(&c.url),
             SourceConfig::Smb(c) => crate::smb::smb_url(&c.host, c.port, &c.share, &c.path),
+            SourceConfig::MediaBrowser(c) => redact(&c.url),
         };
         format!("{} \"{}\" ({target})", self.kind().label(), self.name())
     }
@@ -312,10 +363,11 @@ pub fn default_config_path() -> PathBuf {
 /// write is atomic (temporary file + rename).
 pub fn save_configs(path: &Path, configs: &[SourceConfig]) -> Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)?;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        builder.mode(0o700);
+        builder.create(dir)?;
     }
     let json = serde_json::to_vec_pretty(&ConfigFile {
         version: 1,
@@ -327,13 +379,13 @@ pub fn save_configs(path: &Path, configs: &[SourceConfig]) -> Result<()> {
     tmp_name.push(".tmp");
     let tmp = PathBuf::from(tmp_name);
     let result = (|| -> std::io::Result<()> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&tmp)?;
         // `mode` only applies on creation; tighten a leftover temp file too.
+        #[cfg(unix)]
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         file.write_all(&json)?;
         file.write_all(b"\n")?;
@@ -355,6 +407,7 @@ pub fn load_configs(path: &Path) -> Result<Vec<SourceConfig>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e.into()),
     };
+    #[cfg(unix)]
     if let Ok(meta) = std::fs::metadata(path)
         && meta.permissions().mode() & 0o077 != 0
     {
@@ -410,6 +463,16 @@ mod tests {
                 path: "vr".into(),
                 credentials: Some(Credentials::new("bob", "hunter2")),
             }),
+            SourceConfig::MediaBrowser(MediaBrowserConfig {
+                id: "mb".into(),
+                name: "Jellyfin".into(),
+                url: "http://jellyfin:8096".into(),
+                credentials: Some(Credentials::new("alice", "hunter2")),
+                insecure_tls: false,
+                max_height: Some(2880),
+                access_token: None,
+                user_id: None,
+            }),
         ]
     }
 
@@ -418,14 +481,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sub/dir/sources.json");
         save_configs(&path, &sample()).unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
-        let dmode = std::fs::metadata(path.parent().unwrap())
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(dmode, 0o700);
+        #[cfg(unix)]
+        {
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+            let dmode = std::fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(dmode, 0o700);
+        }
         assert_eq!(load_configs(&path).unwrap(), sample());
         // Overwrite keeps 0600 and leaves no temp file.
         save_configs(&path, &sample()[..1]).unwrap();
@@ -439,10 +505,13 @@ mod tests {
         let path = dir.path().join("none.json");
         assert!(load_configs(&path).unwrap().is_empty());
         std::fs::write(&path, "[]").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(load_configs(&path).unwrap().is_empty());
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        #[cfg(unix)]
+        {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(load_configs(&path).unwrap().is_empty());
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
         std::fs::write(&path, "{nope").unwrap();
         assert!(matches!(load_configs(&path), Err(Error::Config(_))));
     }
@@ -453,6 +522,8 @@ mod tests {
         assert!(j.contains("\"type\":\"webdav\""), "{j}");
         let j = serde_json::to_string(&sample()[2]).unwrap();
         assert!(j.contains("\"type\":\"deovr\""), "{j}");
+        let j = serde_json::to_string(&sample()[4]).unwrap();
+        assert!(j.contains("\"type\":\"mediabrowser\""), "{j}");
         // Optional fields may be omitted.
         let c: SourceConfig =
             serde_json::from_str(r#"{"type":"http","id":"h","name":"H","url":"http://h/"}"#)
