@@ -172,6 +172,18 @@ pub fn open(
     }
     let player = Player::open(src, &name, cfg).map_err(|e| format!("{name}: {e}"))?;
     let info = player.info().clone();
+    let st = player.stats();
+    if settings.hardware_decoding
+        && !st.hardware
+        && info.video_stream().is_some_and(has_hardware_decoder)
+    {
+        log::warn!(
+            "{name}: no hardware decoder ({}), decoding with {}; {}",
+            st.hardware_error.as_deref().unwrap_or("not tried"),
+            st.video_decoder,
+            hardware_holders()
+        );
+    }
     let (w, h) = info
         .video_stream()
         .map(|v| (v.width, v.height))
@@ -407,7 +419,7 @@ impl Playback {
         let notice = slow_decode_notice(v, hardware_on, st.hardware_error.as_deref());
         log::info!(
             "software decoding ({}, {} {}x{} {}) behind: {} stalls, {} of {} frames dropped; \
-             hardware: {}",
+             hardware: {}; {}",
             st.video_decoder,
             v.codec,
             v.width,
@@ -424,7 +436,8 @@ impl Playback {
                 (Some(e), _) => e.as_str(),
                 (None, false) => "off in Settings",
                 (None, true) => "not tried",
-            }
+            },
+            hardware_holders()
         );
         self.notice = Some(notice);
     }
@@ -525,6 +538,22 @@ impl Playback {
     }
 }
 
+/// Who in FramePlayer holds hardware decoders, for the log when a video
+/// cannot get one: sessions left by videos that never finished closing
+/// keep every later video in software until a restart.
+fn hardware_holders() -> String {
+    let closing = CLOSING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|h| !h.is_finished())
+        .count();
+    format!(
+        "FramePlayer holds {} hardware decoder session(s), {closing} closed video(s) still closing",
+        fp_media::hardware_sessions()
+    )
+}
+
 /// Players still closing (see [`Playback::close`]).
 static CLOSING: Mutex<Vec<JoinHandle<()>>> = Mutex::new(Vec::new());
 
@@ -564,6 +593,11 @@ fn falling_behind(stalls: u64, dropped: u64, shown: u64) -> bool {
     stalls >= 2 || dropped * 20 > dropped + shown
 }
 
+/// Whether the Frame's hardware decoder takes this stream.
+fn has_hardware_decoder(v: &StreamInfo) -> bool {
+    matches!(v.codec.as_str(), "hevc" | "h264" | "vp9") && v.bit_depth <= 8 && v.chroma() == "4:2:0"
+}
+
 /// Why a software-decoded video stutters, and what plays smoothly instead.
 /// `hardware_on` is the hardware decoding setting; `hardware_error` why the
 /// hardware decoder, when tried, is not decoding.
@@ -587,8 +621,7 @@ pub(crate) fn slow_decode_notice(
         (false, true) => format!("{chroma} {codec}"),
         (false, false) => codec,
     };
-    let hardware_codec = matches!(v.codec.as_str(), "hevc" | "h264" | "vp9");
-    if !hardware_codec || v.bit_depth > 8 || chroma != "4:2:0" {
+    if !has_hardware_decoder(v) {
         return format!(
             "No hardware decoding for {desc}, so it stutters. 8-bit 4:2:0 H.265 plays smoothly"
         );
