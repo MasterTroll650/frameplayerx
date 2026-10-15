@@ -89,7 +89,9 @@ pub(crate) fn stereo_str(stereo: StereoLayout) -> &'static str {
     match stereo {
         StereoLayout::Mono => "mono",
         StereoLayout::SideBySide => "side_by_side",
+        StereoLayout::HalfSideBySide => "half_side_by_side",
         StereoLayout::TopBottom => "top_bottom",
+        StereoLayout::HalfTopBottom => "half_top_bottom",
     }
 }
 

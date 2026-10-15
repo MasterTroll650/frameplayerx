@@ -134,8 +134,8 @@ pub(crate) fn build(
     };
     let stereo = match video.format.stereo {
         StereoLayout::Mono => 0u32,
-        StereoLayout::SideBySide => 1,
-        StereoLayout::TopBottom => 2,
+        StereoLayout::SideBySide | StereoLayout::HalfSideBySide => 1,
+        StereoLayout::TopBottom | StereoLayout::HalfTopBottom => 2,
     };
     let swap = (video.format.eyes_swapped ^ s.swap_eyes) as u32;
     let (rows, offset, layout_code, tex) = match frame {
@@ -157,7 +157,9 @@ pub(crate) fn build(
     // Per-eye aspect for flat screens.
     let (ew, eh) = match video.format.stereo {
         StereoLayout::SideBySide => (tex.0 as f32 / 2.0, tex.1 as f32),
+        StereoLayout::HalfSideBySide => (tex.0 as f32, tex.1 as f32),
         StereoLayout::TopBottom => (tex.0 as f32, tex.1 as f32 / 2.0),
+        StereoLayout::HalfTopBottom => (tex.0 as f32, tex.1 as f32),
         StereoLayout::Mono => (tex.0 as f32, tex.1 as f32),
     };
     let screen_w = s.screen_width * s.zoom;
@@ -277,5 +279,62 @@ mod tests {
         let s = 1.0 / 65535.0;
         let out = apply(&rows, off, [940.0 * s, 512.0 * s, 512.0 * s]);
         assert!(out.iter().all(|v| (v - 1.0).abs() < 0.01), "{out:?}");
+    }
+
+    #[test]
+    fn flat_screen_aspect_ratios_full_vs_half() {
+        let s = ViewSettings::default();
+        let make_video = |stereo| VideoParams {
+            format: VideoFormat::new(Projection::Flat, stereo),
+            settings: s,
+            ..Default::default()
+        };
+        let frame = FrameDesc {
+            width: 1920,
+            height: 1080,
+            layout: PixelLayout::Nv12,
+            color: ColorInfo {
+                matrix: Matrix::Bt709,
+                full_range: false,
+                transfer: Transfer::Sdr,
+                wide_gamut: false,
+            },
+        };
+        let sp_fsbs = build(
+            &make_video(StereoLayout::SideBySide),
+            Some(&frame),
+            [Mat4::IDENTITY; 2],
+        );
+        let sp_hsbs = build(
+            &make_video(StereoLayout::HalfSideBySide),
+            Some(&frame),
+            [Mat4::IDENTITY; 2],
+        );
+        let sp_ftb = build(
+            &make_video(StereoLayout::TopBottom),
+            Some(&frame),
+            [Mat4::IDENTITY; 2],
+        );
+        let sp_htb = build(
+            &make_video(StereoLayout::HalfTopBottom),
+            Some(&frame),
+            [Mat4::IDENTITY; 2],
+        );
+
+        // Full SBS expects 960x1080 per eye (8:9), so screen is narrow/tall:
+        let ar_fsbs = sp_fsbs.screen.x / sp_fsbs.screen.y;
+        assert!((ar_fsbs - 960.0 / 1080.0).abs() < 1e-4);
+
+        // Half SBS restores 16:9 widescreen per eye:
+        let ar_hsbs = sp_hsbs.screen.x / sp_hsbs.screen.y;
+        assert!((ar_hsbs - 1920.0 / 1080.0).abs() < 1e-4);
+
+        // Full TB expects 1920x540 per eye (32:9), so screen is ultra-wide:
+        let ar_ftb = sp_ftb.screen.x / sp_ftb.screen.y;
+        assert!((ar_ftb - 1920.0 / 540.0).abs() < 1e-4);
+
+        // Half TB restores 16:9 widescreen per eye:
+        let ar_htb = sp_htb.screen.x / sp_htb.screen.y;
+        assert!((ar_htb - 1920.0 / 1080.0).abs() < 1e-4);
     }
 }

@@ -15,8 +15,12 @@ pub enum Crop {
     Full,
     /// Left half (side-by-side stereo).
     LeftHalf,
+    /// Left half stretched horizontally by 2x (half side-by-side stereo).
+    LeftHalfStretched,
     /// Top half (top/bottom stereo).
     TopHalf,
+    /// Top half stretched vertically by 2x (half top/bottom stereo).
+    TopHalfStretched,
 }
 
 /// An RGBA image.
@@ -140,19 +144,21 @@ fn scale(frame: &Frame, max_w: u32, max_h: u32, crop: Crop) -> Result<Rgba> {
     // limiting the source width/height (pointers start at the top-left).
     unsafe {
         let f = &*frame.as_ptr();
-        let (sw, sh) = match crop {
-            Crop::Full => (f.width, f.height),
-            Crop::LeftHalf => (f.width / 2, f.height),
-            Crop::TopHalf => (f.width, f.height / 2),
+        let (sw, sh, aspect_w, aspect_h) = match crop {
+            Crop::Full => (f.width, f.height, f.width as f64, f.height as f64),
+            Crop::LeftHalf => (f.width / 2, f.height, (f.width / 2) as f64, f.height as f64),
+            Crop::LeftHalfStretched => (f.width / 2, f.height, f.width as f64, f.height as f64),
+            Crop::TopHalf => (f.width, f.height / 2, f.width as f64, (f.height / 2) as f64),
+            Crop::TopHalfStretched => (f.width, f.height / 2, f.width as f64, f.height as f64),
         };
         if sw <= 0 || sh <= 0 {
             return Err(Error::Unsupported("empty frame".into()));
         }
-        let s = (max_w as f64 / sw as f64)
-            .min(max_h as f64 / sh as f64)
+        let s = (max_w as f64 / aspect_w)
+            .min(max_h as f64 / aspect_h)
             .min(1.0);
-        let dw = ((sw as f64 * s).round() as i32).max(2) & !1;
-        let dh = ((sh as f64 * s).round() as i32).max(2) & !1;
+        let dw = ((aspect_w * s).round() as i32).max(2) & !1;
+        let dh = ((aspect_h * s).round() as i32).max(2) & !1;
         let ctx = ff::sws_getContext(
             sw,
             sh,

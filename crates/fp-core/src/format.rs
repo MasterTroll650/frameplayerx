@@ -64,10 +64,14 @@ impl Projection {
 pub enum StereoLayout {
     #[default]
     Mono,
-    /// Left eye on the left half.
+    /// Left eye on the left half (full width per eye).
     SideBySide,
-    /// Left eye on the top half.
+    /// Left eye on the left half, squeezed horizontally to half width (e.g. 16:9 container).
+    HalfSideBySide,
+    /// Left eye on the top half (full height per eye).
     TopBottom,
+    /// Left eye on the top half, squeezed vertically to half height (e.g. 16:9 container).
+    HalfTopBottom,
 }
 
 impl StereoLayout {
@@ -75,8 +79,28 @@ impl StereoLayout {
         match self {
             StereoLayout::Mono => "Mono",
             StereoLayout::SideBySide => "Side by side",
+            StereoLayout::HalfSideBySide => "Half side by side",
             StereoLayout::TopBottom => "Top/bottom",
+            StereoLayout::HalfTopBottom => "Half top/bottom",
         }
+    }
+
+    /// True if the layout packs two eyes (any 3D format).
+    pub fn is_stereo(&self) -> bool {
+        *self != StereoLayout::Mono
+    }
+
+    /// True if the eye views are side-by-side (full or half).
+    pub fn is_side_by_side(&self) -> bool {
+        matches!(
+            self,
+            StereoLayout::SideBySide | StereoLayout::HalfSideBySide
+        )
+    }
+
+    /// True if the eye views are top-and-bottom (full or half).
+    pub fn is_top_bottom(&self) -> bool {
+        matches!(self, StereoLayout::TopBottom | StereoLayout::HalfTopBottom)
     }
 }
 
@@ -142,7 +166,7 @@ impl VideoFormat {
     /// Scale of the packed passthrough mask, if the video has one that can
     /// be read (the packing is only defined for side-by-side frames).
     pub fn alpha_pack_scale(&self) -> Option<f32> {
-        (self.alpha_packed && self.stereo == StereoLayout::SideBySide).then_some(ALPHA_PACK_SCALE)
+        (self.alpha_packed && self.stereo.is_side_by_side()).then_some(ALPHA_PACK_SCALE)
     }
 
     /// Same projection, stereo layout and eye order (the alpha mask aside).
@@ -220,16 +244,26 @@ pub fn detect_from_name(name: &str) -> Option<VideoFormat> {
 
     for t in &toks {
         match t.as_str() {
-            "LR" | "SBS" | "3DH" | "HSBS" | "FSBS" => stereo = Some(StereoLayout::SideBySide),
-            "RL" => {
+            "LR" | "SBS" | "3DH" | "FSBS" => stereo = Some(StereoLayout::SideBySide),
+            "HSBS" => stereo = Some(StereoLayout::HalfSideBySide),
+            "RL" | "FRL" => {
                 stereo = Some(StereoLayout::SideBySide);
                 swapped = true;
             }
-            "TB" | "OU" | "3DV" | "HOU" | "FOU" | "HTB" | "FTB" | "OVERUNDER" | "TOPBOTTOM" => {
+            "HRL" => {
+                stereo = Some(StereoLayout::HalfSideBySide);
+                swapped = true;
+            }
+            "TB" | "OU" | "3DV" | "FOU" | "FTB" | "OVERUNDER" | "TOPBOTTOM" => {
                 stereo = Some(StereoLayout::TopBottom)
             }
-            "BT" => {
+            "HOU" | "HTB" => stereo = Some(StereoLayout::HalfTopBottom),
+            "BT" | "FBT" => {
                 stereo = Some(StereoLayout::TopBottom);
+                swapped = true;
+            }
+            "HBT" => {
+                stereo = Some(StereoLayout::HalfTopBottom);
                 swapped = true;
             }
             "MONO" | "2D" => stereo = Some(StereoLayout::Mono),
@@ -258,6 +292,21 @@ pub fn detect_from_name(name: &str) -> Option<VideoFormat> {
                     projection = Some(Projection::fisheye(deg));
                 }
             }
+        }
+    }
+
+    if has("HALF") {
+        if stereo == Some(StereoLayout::SideBySide) {
+            stereo = Some(StereoLayout::HalfSideBySide);
+        } else if stereo == Some(StereoLayout::TopBottom) {
+            stereo = Some(StereoLayout::HalfTopBottom);
+        }
+    }
+    if has("FULL") {
+        if stereo == Some(StereoLayout::HalfSideBySide) {
+            stereo = Some(StereoLayout::SideBySide);
+        } else if stereo == Some(StereoLayout::HalfTopBottom) {
+            stereo = Some(StereoLayout::TopBottom);
         }
     }
 
@@ -343,6 +392,29 @@ pub struct ContainerHints {
     pub stereo: Option<StereoLayout>,
 }
 
+/// For flat screens, refines generic SideBySide or TopBottom into HalfSideBySide
+/// or HalfTopBottom if the frame aspect ratio indicates squeezed 3D (e.g. 16:9
+/// container) rather than full-resolution 3D (32:9 or 8:9), unless the file
+/// name explicitly specified full (`FSBS`, `FOU`, `FULL`).
+fn refine_flat_stereo(format: &mut VideoFormat, name: &str, width: u32, height: u32) {
+    if format.projection != Projection::Flat || width == 0 || height == 0 {
+        return;
+    }
+    let toks = tokens(name);
+    let is_explicit_full = toks
+        .iter()
+        .any(|t| t == "FSBS" || t == "FOU" || t == "FTB" || t == "FULL");
+    if is_explicit_full {
+        return;
+    }
+    let ar = width as f32 / height as f32;
+    if format.stereo == StereoLayout::SideBySide && ar < 2.8 {
+        format.stereo = StereoLayout::HalfSideBySide;
+    } else if format.stereo == StereoLayout::TopBottom && ar > 1.2 {
+        format.stereo = StereoLayout::HalfTopBottom;
+    }
+}
+
 /// Combines every source of evidence. `user` wins, then container metadata,
 /// then the file name, then the aspect ratio.
 pub fn resolve(
@@ -370,17 +442,20 @@ pub fn resolve(
             .unwrap_or_default();
         let eyes_swapped = from_name.is_some_and(|f| f.eyes_swapped);
         let alpha_packed = from_name.is_some_and(|f| f.alpha_packed);
+        let mut format = VideoFormat {
+            projection,
+            stereo,
+            eyes_swapped,
+            alpha_packed,
+        };
+        refine_flat_stereo(&mut format, name, width, height);
         return DetectedFormat {
-            format: VideoFormat {
-                projection,
-                stereo,
-                eyes_swapped,
-                alpha_packed,
-            },
+            format,
             evidence: Evidence::Metadata,
         };
     }
-    if let Some(format) = from_name {
+    if let Some(mut format) = from_name {
+        refine_flat_stereo(&mut format, name, width, height);
         return DetectedFormat {
             format,
             evidence: Evidence::FileName,
@@ -457,7 +532,19 @@ mod tests {
         );
         assert_eq!(
             d("Movie.3D.HSBS.1080p.mkv"),
+            Some((P::Flat, S::HalfSideBySide, false))
+        );
+        assert_eq!(
+            d("Movie.Half-SBS.1080p.mkv"),
+            Some((P::Flat, S::HalfSideBySide, false))
+        );
+        assert_eq!(
+            d("Movie.3D.FSBS.1080p.mkv"),
             Some((P::Flat, S::SideBySide, false))
+        );
+        assert_eq!(
+            d("Movie.3D.HOU.1080p.mkv"),
+            Some((P::Flat, S::HalfTopBottom, false))
         );
         assert_eq!(d("Movie_FLAT_OU.mp4"), Some((P::Flat, S::TopBottom, false)));
         assert_eq!(d("Movie.mkv"), None);
@@ -620,6 +707,48 @@ mod tests {
         assert_eq!(
             (unknown.evidence, unknown.format),
             (Evidence::Default, VideoFormat::FALLBACK)
+        );
+        // Generic SBS with 16:9 frame is refined to HalfSideBySide:
+        assert_eq!(
+            resolve(None, Default::default(), "Movie_SBS.mkv", 1920, 1080)
+                .format
+                .stereo,
+            S::HalfSideBySide
+        );
+        // Generic SBS with 32:9 frame remains Full SideBySide:
+        assert_eq!(
+            resolve(None, Default::default(), "Movie_SBS.mkv", 3840, 1080)
+                .format
+                .stereo,
+            S::SideBySide
+        );
+        // Explicit FSBS is not refined to Half:
+        assert_eq!(
+            resolve(None, Default::default(), "Movie_FSBS.mkv", 1920, 1080)
+                .format
+                .stereo,
+            S::SideBySide
+        );
+        // VR180 SBS is spherical and not refined:
+        assert_eq!(
+            resolve(None, Default::default(), "VR180_SBS.mp4", 3840, 1920)
+                .format
+                .stereo,
+            S::SideBySide
+        );
+        // Generic OU with 16:9 frame is refined to HalfTopBottom:
+        assert_eq!(
+            resolve(None, Default::default(), "Movie_OU.mkv", 1920, 1080)
+                .format
+                .stereo,
+            S::HalfTopBottom
+        );
+        // Generic OU with 8:9 frame remains Full TopBottom:
+        assert_eq!(
+            resolve(None, Default::default(), "Movie_OU.mkv", 1920, 2160)
+                .format
+                .stereo,
+            S::TopBottom
         );
     }
 

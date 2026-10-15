@@ -42,8 +42,12 @@ pub struct ProbeInfo {
 pub enum ThumbnailCrop {
     /// Left half (side-by-side stereo).
     LeftEye,
+    /// Left half stretched horizontally by 2x (half side-by-side stereo).
+    LeftEyeStretched,
     /// Top half (top/bottom stereo).
     TopEye,
+    /// Top half stretched vertically by 2x (half top/bottom stereo).
+    TopEyeStretched,
     /// The whole frame (mono).
     Full,
 }
@@ -53,7 +57,9 @@ impl ThumbnailCrop {
     pub fn for_format(format: &VideoFormat) -> ThumbnailCrop {
         match format.stereo {
             StereoLayout::SideBySide => ThumbnailCrop::LeftEye,
+            StereoLayout::HalfSideBySide => ThumbnailCrop::LeftEyeStretched,
             StereoLayout::TopBottom => ThumbnailCrop::TopEye,
+            StereoLayout::HalfTopBottom => ThumbnailCrop::TopEyeStretched,
             StereoLayout::Mono => ThumbnailCrop::Full,
         }
     }
@@ -600,7 +606,9 @@ mod tests {
             let info = self.probe(location)?;
             let (w, h) = match crop {
                 ThumbnailCrop::LeftEye => (info.width / 2, info.height),
+                ThumbnailCrop::LeftEyeStretched => (info.width, info.height),
                 ThumbnailCrop::TopEye => (info.width, info.height / 2),
+                ThumbnailCrop::TopEyeStretched => (info.width, info.height),
                 ThumbnailCrop::Full => (info.width, info.height),
             };
             let (w, h) = crate::image::fit_size(w, h, max_w, max_h);
@@ -639,8 +647,16 @@ mod tests {
             ThumbnailCrop::LeftEye
         );
         assert_eq!(
+            ThumbnailCrop::for_format(&f(StereoLayout::HalfSideBySide)),
+            ThumbnailCrop::LeftEyeStretched
+        );
+        assert_eq!(
             ThumbnailCrop::for_format(&f(StereoLayout::TopBottom)),
             ThumbnailCrop::TopEye
+        );
+        assert_eq!(
+            ThumbnailCrop::for_format(&f(StereoLayout::HalfTopBottom)),
+            ThumbnailCrop::TopEyeStretched
         );
         assert_eq!(
             ThumbnailCrop::for_format(&f(StereoLayout::Mono)),

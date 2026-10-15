@@ -14,7 +14,9 @@ pub fn format_choices() -> Vec<(&'static str, VideoFormat)> {
     let f = |p, s| VideoFormat::new(p, s);
     vec![
         ("Flat 2D", f(Projection::Flat, Mono)),
+        ("Flat 3D Half SBS", f(Projection::Flat, HalfSideBySide)),
         ("Flat 3D SBS", f(Projection::Flat, SideBySide)),
+        ("Flat 3D Half TB", f(Projection::Flat, HalfTopBottom)),
         ("Flat 3D TB", f(Projection::Flat, TopBottom)),
         ("180° SBS", f(Projection::EQUIRECT_180, SideBySide)),
         ("180° TB", f(Projection::EQUIRECT_180, TopBottom)),

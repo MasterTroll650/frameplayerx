@@ -62,7 +62,9 @@ impl MediaProber for FfmpegProber {
         let src = self.opener.open(location).map_err(|e| self.err(e))?;
         let crop = match crop {
             ThumbnailCrop::LeftEye => fp_media::thumb::Crop::LeftHalf,
+            ThumbnailCrop::LeftEyeStretched => fp_media::thumb::Crop::LeftHalfStretched,
             ThumbnailCrop::TopEye => fp_media::thumb::Crop::TopHalf,
+            ThumbnailCrop::TopEyeStretched => fp_media::thumb::Crop::TopHalfStretched,
             ThumbnailCrop::Full => fp_media::thumb::Crop::Full,
         };
         let img = fp_media::thumb::grab(

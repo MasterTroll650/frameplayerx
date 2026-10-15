@@ -201,8 +201,12 @@ fn deovr_projection(screen_type: &str) -> Option<Projection> {
 
 fn stereo_from(mode: &str) -> Option<StereoLayout> {
     Some(match mode.trim().to_ascii_lowercase().as_str() {
-        "sbs" | "lr" | "sidebyside" => StereoLayout::SideBySide,
-        "tb" | "ou" | "topbottom" => StereoLayout::TopBottom,
+        "sbs" | "lr" | "sidebyside" | "fsbs" => StereoLayout::SideBySide,
+        "hsbs" | "half_sbs" | "half-sbs" | "halfsbs" => StereoLayout::HalfSideBySide,
+        "tb" | "ou" | "topbottom" | "fou" | "ftb" => StereoLayout::TopBottom,
+        "hou" | "htb" | "half_tb" | "half-tb" | "half_ou" | "half-ou" | "halfou" | "halftb" => {
+            StereoLayout::HalfTopBottom
+        }
         "off" | "mono" | "none" | "" => StereoLayout::Mono,
         _ => return None,
     })

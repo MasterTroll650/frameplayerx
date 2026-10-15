@@ -16,7 +16,7 @@ use crate::error::{Error, Result};
 use crate::http::{HttpClient, HttpOptions, HttpReply};
 use crate::sidecar::Sidecars;
 use crate::urlutil::redact;
-use fp_core::format::detect_from_name;
+use fp_core::format::{Projection, StereoLayout, VideoFormat, detect_from_name};
 use fp_core::source::{ByteSource, Entry, EntryKind};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -265,11 +265,33 @@ pub(crate) fn item_to_entry(v: &Value, base_url: &str) -> Option<Entry> {
             ));
             e.modified = text(v, "DateCreated").and_then(|d| crate::timeutil::parse_iso8601(&d));
             let path = text(v, "Path").unwrap_or_default();
-            e.format = detect_from_name(&path).or_else(|| detect_from_name(&name));
+            e.format = detect_from_name(&path)
+                .or_else(|| detect_from_name(&name))
+                .or_else(|| video_3d_format(v));
             Some(e)
         }
         _ => None,
     }
+}
+
+/// Parses 3D video layout from Jellyfin / Emby item or stream metadata.
+fn video_3d_format(v: &Value) -> Option<VideoFormat> {
+    let mode = text(v, "Video3DFormat").or_else(|| {
+        array(v, "MediaStreams")
+            .iter()
+            .find(|s| text(s, "Type").as_deref() == Some("Video"))
+            .and_then(|s| text(s, "Video3DFormat"))
+    })?;
+    let stereo = match mode.to_ascii_lowercase().as_str() {
+        "halfsidebyside" | "hsbs" => StereoLayout::HalfSideBySide,
+        "fullsidebyside" | "fsbs" | "sidebyside" => StereoLayout::SideBySide,
+        "halftopandbottom" | "halfoverunder" | "hou" | "htb" => StereoLayout::HalfTopBottom,
+        "fulltopandbottom" | "fulloverunder" | "fou" | "ftb" | "topandbottom" => {
+            StereoLayout::TopBottom
+        }
+        _ => return None,
+    };
+    Some(VideoFormat::new(Projection::Flat, stereo))
 }
 
 /// Parses an items listing response from `/Users/{userId}/Items`.
@@ -320,6 +342,9 @@ pub(crate) fn apply_item_details(
     }
     if entry.format.is_none() {
         entry.format = detect_from_name(&entry.name);
+    }
+    if entry.format.is_none() {
+        entry.format = video_3d_format(v);
     }
 
     for ch in array(v, "Chapters") {
@@ -1249,5 +1274,30 @@ mod tests {
         assert!(auth);
         assert_eq!(tok.as_deref(), Some("token_xyz"));
         assert_eq!(uid.as_deref(), Some("user_789"));
+    }
+
+    #[test]
+    fn test_video_3d_format_parse() {
+        let v_hsbs = json!({
+            "Video3DFormat": "HalfSideBySide"
+        });
+        assert_eq!(
+            video_3d_format(&v_hsbs),
+            Some(VideoFormat::new(
+                Projection::Flat,
+                StereoLayout::HalfSideBySide
+            ))
+        );
+
+        let v_stream = json!({
+            "MediaStreams": [
+                {"Type": "Audio"},
+                {"Type": "Video", "Video3DFormat": "FullSideBySide"}
+            ]
+        });
+        assert_eq!(
+            video_3d_format(&v_stream),
+            Some(VideoFormat::new(Projection::Flat, StereoLayout::SideBySide))
+        );
     }
 }
