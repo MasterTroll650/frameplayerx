@@ -67,8 +67,6 @@ pub struct Settings {
     pub ui_scale: f32,
     /// What the controller buttons and thumbsticks do.
     pub controls: crate::bindings::Bindings,
-    /// The passthrough videos licence from yellkell.com/unlock.
-    pub unlock: Option<String>,
     /// Where the library and adjust panels were moved to: yaw and pitch in
     /// degrees from their usual places (left and up positive).
     pub panel_offsets: PanelOffsets,
@@ -117,7 +115,6 @@ impl Default for Settings {
             check_updates: true,
             ui_scale: 1.0,
             controls: crate::bindings::Bindings::default(),
-            unlock: None,
             panel_offsets: PanelOffsets::default(),
             browse_sort: fp_sources::EntrySort::default(),
             source_pins: Default::default(),

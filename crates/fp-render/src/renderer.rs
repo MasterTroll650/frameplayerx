@@ -677,17 +677,26 @@ impl Renderer {
             // flight, which begin_frame has waited for.
             let target = 1 - self.video_cur;
             let slot = &mut self.slots[self.current];
-            let recreated = VideoPlanes::upload(
+            match VideoPlanes::upload(
                 &mut self.videos[target],
                 &self.gpu,
                 slot.cmd,
                 f,
                 &mut slot.garbage,
-            )?;
-            if recreated {
-                self.video_gen[target] += 1;
+            ) {
+                Ok(recreated) => {
+                    if recreated {
+                        self.video_gen[target] += 1;
+                    }
+                    self.video_cur = target;
+                }
+                Err(e) => {
+                    log::warn!("video frame upload failed: {e}");
+                    slot.has_video = false;
+                    slot.scene_set_dirty = true;
+                    return Err(e);
+                }
             }
-            self.video_cur = target;
         }
         let bound = (self.video_cur, self.video_gen[self.video_cur]);
         let slot = &mut self.slots[self.current];

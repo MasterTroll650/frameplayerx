@@ -318,16 +318,12 @@ fn passthrough(ui: &mut egui::Ui, v: &mut View) {
         }
     });
     ui.add_space(14.0);
-    if !v.unlocked {
-        super::player::unlock_card(ui, v.purchase, v.actions, false);
-        return;
-    }
-    super::player::unlocked_header(
-        ui,
-        "Global settings. Each video can be individually adjusted and will save its adjustments.",
-        false,
-        v.state,
+    widgets::section_label(ui, "Passthrough videos");
+    ui.label(
+        RichText::new("Global settings. Each video can be individually adjusted and will save its adjustments.")
+            .color(theme::MUTED),
     );
+    ui.add_space(6.0);
     super::player::chroma_controls(ui, &mut s.default_view, available);
 }
 

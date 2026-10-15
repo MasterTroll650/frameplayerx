@@ -52,7 +52,7 @@ import urllib.request
 import zipfile
 import zlib
 
-REPO = 'yellkell/frameplayer'
+REPO = 'remotesojourner/frameplayer'
 API = f'https://api.github.com/repos/{REPO}/releases?per_page=30'
 DEVTOOLS = 'http://127.0.0.1:8080/json'
 HOME = os.path.expanduser('~')

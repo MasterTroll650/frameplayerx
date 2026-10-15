@@ -32,9 +32,23 @@ impl Resampler {
 
     /// Converts one frame, appending samples to `out`.
     pub fn convert(&mut self, frame: &Frame, out: &mut Vec<f32>) -> Result<()> {
+        if frame.as_ptr().is_null() {
+            return Ok(());
+        }
         // SAFETY: frame is a decoded audio frame; swr is (re)created to match it.
         unsafe {
             let f = &*frame.as_ptr();
+            if f.nb_samples <= 0 || f.sample_rate <= 0 || f.ch_layout.nb_channels <= 0 {
+                return Ok(());
+            }
+            if self.out_channels == f.ch_layout.nb_channels as u32
+                && f.ch_layout.order == ff::AV_CHANNEL_ORDER_AMBISONIC
+                && self.out_layout.order != ff::AV_CHANNEL_ORDER_AMBISONIC
+            {
+                ff::av_channel_layout_uninit(&mut self.out_layout);
+                ff::av_channel_layout_copy(&mut self.out_layout, &f.ch_layout);
+                ff::swr_free(&mut self.swr);
+            }
             let key = (
                 f.format,
                 f.sample_rate,

@@ -19,7 +19,6 @@ mod prober;
 mod services;
 mod settings;
 mod ui;
-mod unlock;
 mod world;
 
 use app::{App, FrameInput, LayerDraw};
@@ -418,7 +417,10 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         );
         frames += 1;
         video_frames += out.frame.is_some() as u64;
-        renderer.set_video(out.frame.as_ref())?;
+        if let Err(e) = renderer.set_video(out.frame.as_ref()) {
+            log::warn!("set_video: {e}");
+            let _ = renderer.set_video(None);
+        }
         let mut submits = Vec::new();
         if let (Some(targets), Some(eyes)) = (frame.targets, frame.eyes) {
             renderer.draw(&targets, &eyes, &out.video, &out.quads)?;

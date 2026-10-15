@@ -178,6 +178,30 @@ impl HttpClient {
         }
     }
 
+    /// Creates a client with a custom `Authorization` header value sent with
+    /// every request. Used by sources that need a non-Basic auth scheme
+    /// (e.g. the MediaBrowser `Authorization: MediaBrowser ...` header).
+    pub fn new_with_header(opts: HttpOptions, auth_header: impl Into<String>) -> HttpClient {
+        let tls = ureq::tls::TlsConfig::builder()
+            .disable_verification(opts.insecure_tls)
+            .build();
+        let config = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .allow_non_standard_methods(true)
+            .timeout_connect(Some(opts.connect_timeout))
+            .timeout_recv_response(Some(opts.read_timeout))
+            .timeout_recv_body(Some(opts.read_timeout))
+            .max_idle_connections_per_host(4)
+            .user_agent(opts.user_agent.as_str())
+            .tls_config(tls)
+            .build();
+        HttpClient {
+            agent: ureq::Agent::new_with_config(config),
+            auth: Some(auth_header.into()),
+            opts,
+        }
+    }
+
     /// The options this client was created with.
     pub fn options(&self) -> &HttpOptions {
         &self.opts

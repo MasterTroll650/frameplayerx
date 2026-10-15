@@ -112,7 +112,15 @@ impl VideoFrame {
         // SAFETY: frame is a valid decoded frame of this layout; plane sizes
         // follow from the 4:2:0 subsampling.
         unsafe {
+            if self.frame.is_null() || self.width == 0 || self.height == 0 {
+                return Vec::new();
+            }
             let f = &*self.frame;
+            for i in 0..n {
+                if f.data[i].is_null() {
+                    return Vec::new();
+                }
+            }
             (0..n)
                 .map(|i| {
                     let (w, h, comps) = if i == 0 {
@@ -125,9 +133,18 @@ impl VideoFrame {
                         )
                     };
                     let stride = f.linesize[i].unsigned_abs() as usize;
-                    let len = stride * (h as usize - 1) + (w * comps * bps) as usize;
+                    let row_bytes = (w * comps * bps) as usize;
+                    let len = if h == 0 {
+                        0
+                    } else {
+                        stride * (h as usize - 1) + row_bytes
+                    };
                     Plane {
-                        data: std::slice::from_raw_parts(f.data[i], len),
+                        data: if f.data[i].is_null() || len == 0 {
+                            &[]
+                        } else {
+                            std::slice::from_raw_parts(f.data[i], len)
+                        },
                         stride,
                         width: w,
                         height: h,
@@ -295,19 +312,46 @@ impl FrameConverter {
     /// Takes ownership of `src` (a decoded frame reference).
     pub(crate) fn convert(
         &mut self,
-        src: *mut ff::AVFrame,
+        mut src: *mut ff::AVFrame,
         pts: f64,
         duration: f64,
         serial: u64,
     ) -> Result<VideoFrame> {
+        if src.is_null() {
+            return Err(Error::Unsupported("null frame".into()));
+        }
         // SAFETY: src is a valid decoded frame we own.
+        let f = unsafe { &*src };
+        if f.width <= 0 || f.height <= 0 {
+            let mut s = src;
+            unsafe { ff::av_frame_free(&mut s) };
+            return Err(Error::Unsupported("invalid frame dimensions".into()));
+        }
+
+        // If the frame is in hardware or DRM_PRIME format, transfer to system memory
+        unsafe {
+            let desc = ff::av_pix_fmt_desc_get(f.format);
+            let is_hw = f.format == ff::AV_PIX_FMT_DRM_PRIME
+                || (!desc.is_null() && ((*desc).flags & ff::AV_PIX_FMT_FLAG_HWACCEL as u64 != 0))
+                || !f.hw_frames_ctx.is_null();
+            if is_hw {
+                let mut sw = ff::av_frame_alloc();
+                if !sw.is_null() && ff::av_hwframe_transfer_data(sw, src, 0) >= 0 {
+                    (*sw).pts = (*src).pts;
+                    (*sw).duration = (*src).duration;
+                    ff::av_frame_free(&mut src);
+                    src = sw;
+                } else if !sw.is_null() {
+                    ff::av_frame_free(&mut sw);
+                }
+            }
+        }
         let f = unsafe { &*src };
         let layout = match f.format {
             ff::AV_PIX_FMT_YUV420P | ff::AV_PIX_FMT_YUVJ420P => Some(PixelLayout::I420 { bits: 8 }),
             ff::AV_PIX_FMT_YUV420P10LE => Some(PixelLayout::I420 { bits: 10 }),
             ff::AV_PIX_FMT_NV12 => Some(PixelLayout::Nv12),
             ff::AV_PIX_FMT_P010LE => Some(PixelLayout::P010),
-            ff::AV_PIX_FMT_DRM_PRIME => Some(PixelLayout::DrmPrime),
             _ => None,
         };
         let color = color_info(f);
@@ -330,7 +374,12 @@ impl FrameConverter {
         // allocated with av_frame_get_buffer before scaling into it.
         unsafe {
             let desc = ff::av_pix_fmt_desc_get(f.format);
-            let deep = !desc.is_null() && (*desc).comp[0].depth > 8;
+            if desc.is_null() || ((*desc).flags & ff::AV_PIX_FMT_FLAG_HWACCEL as u64 != 0) {
+                let mut s = src;
+                ff::av_frame_free(&mut s);
+                return Err(Error::Unsupported(format!("unsupported pixel format {}", f.format)));
+            }
+            let deep = (*desc).comp[0].depth > 8;
             let (dst_fmt, bits) = if deep {
                 (ff::AV_PIX_FMT_YUV420P10LE, 10)
             } else {

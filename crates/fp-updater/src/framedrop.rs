@@ -253,7 +253,7 @@ mod tests {
     fn good() -> FramedropManifest {
         FramedropManifest::for_zip(
             "FramePlayer",
-            "https://github.com/yellkell/frameplayer/releases/download/v1.0.0/frameplayer-1.0.0-aarch64.zip",
+            "https://github.com/remotesojourner/frameplayer/releases/download/v1.0.0/frameplayer-1.0.0-aarch64.zip",
             SHA,
             12345,
             "frameplayer/frameplayer.sh",

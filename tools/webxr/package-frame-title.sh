@@ -15,7 +15,7 @@ set -euo pipefail
 W=${CHROMIUM_XR_DIR:-$HOME/chromium-xr}
 FP=$(cd "$(dirname "$0")/../.." && pwd)
 TAG=${TAG:?set TAG, the GitHub release tag the zip will be uploaded to}
-REPO=${REPO:-yellkell/frameplayer}
+REPO=${REPO:-remotesojourner/frameplayer}
 B=$W/src/out/XR
 OUT=$W/release
 ZIP=ChromiumXR-Frame-arm64.zip
@@ -80,8 +80,8 @@ Unofficial and experimental; based on
 
 What works on the Frame:
 
-- Opens Fish & Chips (https://yellkell.com/fac) at 90 Hz and 2160 pixels per eye
-  (SteamVR per-app settings, unless you chose your own). To start on another
+- Runs at 90 Hz and 2160 pixels per eye
+  (SteamVR per-app settings, unless you chose your own). To start on a specific
   page, put its address in \`~/.config/chromium-xr-frame/home-url\`.
 - Both eyes render (patch 0005; WebXR layers are off, they render black).
 - The controllers work like Quest Touch controllers in games made for Quest

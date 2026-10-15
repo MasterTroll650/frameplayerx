@@ -83,7 +83,10 @@ impl Sim {
                 layers: false,
             },
         );
-        self.renderer.set_video(out.frame.as_ref())?;
+        if let Err(e) = self.renderer.set_video(out.frame.as_ref()) {
+            log::warn!("set_video: {e}");
+            let _ = self.renderer.set_video(None);
+        }
         let proj = projection(Fov::symmetric(100.0), 0.05, 200.0);
         let right = self.head * Vec3::X * (IPD / 2.0);
         let ev = |p: Vec3| EyeView {
@@ -270,9 +273,8 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
-            // Passthrough videos as if bought (crate::unlock).
+            // Passthrough videos are fully unlocked.
             Some("unlocked") => {
-                self.app.unlocked = true;
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }

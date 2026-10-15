@@ -207,8 +207,8 @@ the `frame-control://install?manifest=…` links. Both titles share the zip:
 - **Chromium XR Sandboxed**: seccomp filter on, with its own profile: the
   configuration §5 step 4 tests.
 
-Each opens the page in `~/.config/chromium-xr-frame/home-url` (FramePlayer's
-Web XR tab writes it), else Fish & Chips (https://yellkell.com/fac). The
+Each opens the page in `~/.config/chromium-xr-frame/home-url` if set,
+otherwise the browser's default start page. The
 WebXR check page is in the title's `chromium/start/` folder. Logs go to
 `~/.local/state/chromium-xr-frame/`.
 

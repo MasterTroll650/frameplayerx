@@ -1,6 +1,6 @@
 [package]
 name = "frameplayer"
-version = "0.3.0-alpha.14"
+version = "0.4.0-alpha.1"
 description = "Native VR video player for the Valve Steam Frame"
 edition.workspace = true
 rust-version.workspace = true
@@ -23,7 +23,7 @@ fp-xr = { path = "../fp-xr" }
 glam = "0.33"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 log = "0.4"
-# Checks the passthrough unlock licence (already built for rustls).
+# Source PIN protection PBKDF2 hashing.
 ring = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
