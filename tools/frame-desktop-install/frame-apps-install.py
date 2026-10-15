@@ -62,7 +62,7 @@ STEAM_ROOTS = [os.path.join(HOME, '.local/share/Steam'), os.path.join(HOME, '.st
 APPS = {
     'frameplayer': {
         'name': 'FramePlayer',
-        'tag': re.compile(r'^v\d'),
+        'tag': re.compile(r'^v?\d'),
         'asset': re.compile(r'^frameplayer-.*-aarch64\.zip$'),
         'dir': 'frameplayer',
         'exe': 'frameplayer.sh',
