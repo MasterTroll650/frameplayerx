@@ -1,0 +1,44 @@
+# smb 0.12.1, patched
+
+This is [smb](https://crates.io/crates/smb) 0.12.1 (smb-rs,
+https://github.com/afiffon/smb-rs, MIT, see LICENSE.md) as published on
+crates.io, used through `[patch.crates-io]` in the workspace `Cargo.toml`.
+The tests and dev-dependencies are left out; everything else is unchanged
+except for the SMB credit accounting below. The same code is still on
+upstream `main` (f4524d0) as of October 2026. Drop this copy once a release
+fixes it.
+
+## The bug
+
+SMB2 servers hand out credits; each request spends some (a 1 MiB read spends
+16) and each response grants some back. smb-rs counts its credits in a
+semaphore, and a request waits on it until enough credits are free.
+
+- When a request takes the server a while (Samba: a read not done within
+  0.5 s, which happens with a busy NAS or a spun-down disk), the server first
+  sends an interim `STATUS_PENDING` response, which grants the credits, then
+  the final response, which Samba sends with no credits. smb-rs only counted
+  the final response, so every read that went async lost its credits for
+  good.
+- The pool size then dropped below zero (a `u16` that wrapped around), after
+  which the client stopped asking the server for more credits.
+- The wait on the semaphore had no timeout.
+
+So after enough slow reads every request on the connection, the read in
+progress and every later open, waited forever. FramePlayer showed this as
+playback from a NAS freezing on "buffering" after a few minutes, with no
+other video opening until the app was restarted. A Samba share served from a
+FUSE folder that delays one read in 40 by 1.2 s hung the old code within
+5 MiB; the patched code reads the whole file.
+
+## The changes (marked "FramePlayer patch" in the source)
+
+- `src/connection/worker/worker_trait.rs`: credits granted by interim
+  responses are added to the final response's credit grant, so the credit
+  accounting sees them.
+- `src/connection.rs`: the pool size update saturates instead of wrapping,
+  and a request waits for credits at most the connection timeout, then fails
+  with `Error::OperationTimeout(TimedOutTask::AcquireCredits, _)` (FramePlayer
+  then reconnects).
+- `src/sync_helpers.rs`: `Semaphore::acquire_many_timeout`.
+- `src/error.rs`: `TimedOutTask::AcquireCredits`.

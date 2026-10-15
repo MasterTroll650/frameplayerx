@@ -126,7 +126,7 @@ pub struct SmbSource {
     config: SmbConfig,
     root: String,
     #[cfg(feature = "smb")]
-    client: std::sync::Mutex<Option<Arc<imp::Session>>>,
+    sessions: Arc<imp::Sessions>,
 }
 
 impl std::fmt::Debug for SmbSource {
@@ -150,13 +150,14 @@ impl SmbSource {
                 "this build of FramePlayer was compiled without SMB support".into(),
             ));
         }
+        let root = smb_url(&config.host, config.port, &config.share, &config.path);
         Ok(SmbSource {
             id: config.id.clone(),
             name: config.name.clone(),
-            root: smb_url(&config.host, config.port, &config.share, &config.path),
-            config: config.clone(),
             #[cfg(feature = "smb")]
-            client: std::sync::Mutex::new(None),
+            sessions: Arc::new(imp::Sessions::new(config, &root)),
+            root,
+            config: config.clone(),
         })
     }
 
@@ -263,6 +264,7 @@ mod imp {
 
     use super::{DirItem, SmbLocation, SmbSource};
     use crate::cache::{CacheOptions, CachedSource, RangeFetch, lock};
+    use crate::config::SmbConfig;
     use crate::error::{Error, Result};
     use fp_core::source::ByteSource;
     use smb::{
@@ -271,7 +273,7 @@ mod imp {
     };
     use std::io;
     use std::str::FromStr;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     /// Seconds between 1601-01-01 and 1970-01-01.
@@ -285,6 +287,14 @@ mod imp {
     pub(super) struct Session {
         client: Client,
         max_read: usize,
+    }
+
+    /// The share's current session, shared by the source and its open
+    /// files, so a file that loses its connection reconnects for everyone.
+    pub(super) struct Sessions {
+        config: SmbConfig,
+        root: String,
+        current: Mutex<Option<Arc<Session>>>,
     }
 
     /// Maps an smb-rs error, keeping "not found" and "access denied"
@@ -316,9 +326,17 @@ mod imp {
         })
     }
 
-    impl SmbSource {
+    impl Sessions {
+        pub(super) fn new(config: &SmbConfig, root: &str) -> Sessions {
+            Sessions {
+                config: config.clone(),
+                root: root.to_string(),
+                current: Mutex::new(None),
+            }
+        }
+
         fn session(&self) -> Result<Arc<Session>> {
-            let mut guard = lock(&self.client);
+            let mut guard = lock(&self.current);
             if let Some(s) = guard.as_ref() {
                 return Ok(s.clone());
             }
@@ -361,13 +379,49 @@ mod imp {
 
         /// Runs `op` with a session; after a connection-level failure the
         /// session is dropped so the next call reconnects.
-        fn with_session<T>(&self, op: impl Fn(&Session) -> Result<T>) -> Result<T> {
+        fn with_session<T>(&self, op: impl Fn(&Arc<Session>) -> Result<T>) -> Result<T> {
             let session = self.session()?;
             let r = op(&session);
             if let Err(Error::Smb(_)) = &r {
-                *lock(&self.client) = None;
+                self.discard(&session);
             }
             r
+        }
+
+        /// Forgets `stale` unless it was already replaced, so the next call
+        /// connects again.
+        fn discard(&self, stale: &Arc<Session>) {
+            let mut guard = lock(&self.current);
+            if guard.as_ref().is_some_and(|s| Arc::ptr_eq(s, stale)) {
+                *guard = None;
+            }
+        }
+
+        /// Opens a file for reading on the current session.
+        fn open_file(&self, path: &UncPath, url: &str) -> Result<OpenFile> {
+            self.with_session(|s| {
+                let args = FileCreateArgs::make_open_existing(
+                    FileAccessMask::new().with_generic_read(true),
+                );
+                let res = s
+                    .client
+                    .create_file(path, &args)
+                    .map_err(|e| map_err(e, url))?;
+                match res {
+                    smb::Resource::File(f) => Ok(OpenFile {
+                        session: s.clone(),
+                        file: Arc::new(f),
+                        generation: 0,
+                    }),
+                    _ => Err(Error::invalid(url, "not a file")),
+                }
+            })
+        }
+    }
+
+    impl SmbSource {
+        fn with_session<T>(&self, op: impl Fn(&Arc<Session>) -> Result<T>) -> Result<T> {
+            self.sessions.with_session(op)
         }
 
         pub(super) fn list_dir(&self, loc: &SmbLocation) -> Result<Vec<DirItem>> {
@@ -413,24 +467,13 @@ mod imp {
         pub(super) fn open_file(&self, loc: &SmbLocation) -> Result<Arc<dyn ByteSource>> {
             let path = unc(loc)?;
             let url = loc.to_url();
-            let (file, max_read) = self.with_session(|s| {
-                let args = FileCreateArgs::make_open_existing(
-                    FileAccessMask::new().with_generic_read(true),
-                );
-                let res = s
-                    .client
-                    .create_file(&path, &args)
-                    .map_err(|e| map_err(e, &url))?;
-                match res {
-                    smb::Resource::File(f) => Ok((f, s.max_read)),
-                    _ => Err(Error::invalid(&url, "not a file")),
-                }
-            })?;
-            let size = file.get_len().map_err(|e| map_err(e, &url))?;
+            let open = self.sessions.open_file(&path, &url)?;
+            let size = open.file.get_len().map_err(|e| map_err(e, &url))?;
             let fetcher = SmbFetcher {
-                file,
+                sessions: self.sessions.clone(),
+                path,
+                open: Mutex::new(open),
                 size,
-                max_read,
                 url,
             };
             Ok(Arc::new(CachedSource::new(
@@ -440,12 +483,67 @@ mod imp {
         }
     }
 
+    /// A file handle and the session it belongs to.
+    #[derive(Clone)]
+    struct OpenFile {
+        session: Arc<Session>,
+        file: Arc<smb::File>,
+        /// Counts reopens, so threads that fail together reconnect once.
+        generation: u64,
+    }
+
+    impl OpenFile {
+        fn read(&self, out: &mut [u8], offset: u64) -> smb::Result<usize> {
+            let mut done = 0;
+            while done < out.len() {
+                let chunk = (out.len() - done).min(self.session.max_read);
+                let n = self
+                    .file
+                    .read_at(&mut out[done..done + chunk], offset + done as u64)?;
+                if n == 0 {
+                    break;
+                }
+                done += n;
+            }
+            Ok(done)
+        }
+    }
+
+    /// Lets go of a handle on a dead connection without waiting: the last
+    /// reference to a session logs off and disconnects, which on a dead
+    /// connection blocks until the requests time out.
+    fn release(open: OpenFile) {
+        let spawned = std::thread::Builder::new()
+            .name("fp-smb-release".into())
+            .spawn(move || drop(open));
+        if let Err(e) = spawned {
+            log::warn!("cannot start a thread to release an SMB handle: {e}");
+        }
+    }
+
     /// Reads ranges of one open SMB file.
     struct SmbFetcher {
-        file: smb::File,
+        sessions: Arc<Sessions>,
+        path: UncPath,
+        open: Mutex<OpenFile>,
         size: u64,
-        max_read: usize,
         url: String,
+    }
+
+    impl SmbFetcher {
+        /// Replaces the handle of generation `failed` with one on a new
+        /// connection; when another thread already did, returns its handle.
+        fn reopen(&self, failed: &OpenFile) -> Result<OpenFile> {
+            let mut open = lock(&self.open);
+            if open.generation != failed.generation {
+                return Ok(open.clone());
+            }
+            self.sessions.discard(&failed.session);
+            let mut fresh = self.sessions.open_file(&self.path, &self.url)?;
+            fresh.generation = failed.generation + 1;
+            release(std::mem::replace(&mut *open, fresh.clone()));
+            Ok(fresh)
+        }
     }
 
     impl RangeFetch for SmbFetcher {
@@ -455,18 +553,22 @@ mod imp {
             }
             let len = len.min((self.size - offset) as usize);
             let mut out = vec![0u8; len];
-            let mut done = 0;
-            while done < len {
-                let chunk = (len - done).min(self.max_read);
-                let n = self
-                    .file
-                    .read_at(&mut out[done..done + chunk], offset + done as u64)
-                    .map_err(|e| io::Error::other(format!("{}: {e}", self.url)))?;
-                if n == 0 {
-                    break;
+            let open = lock(&self.open).clone();
+            let done = match open.read(&mut out, offset) {
+                Ok(n) => n,
+                Err(e) => {
+                    // A NAS that drops the connection, or a request that
+                    // timed out (the connection is then unusable), must not
+                    // end playback: reconnect and read again, once.
+                    log::warn!("{} at {offset}: {e}; reconnecting", self.url);
+                    let fresh = self.reopen(&open);
+                    release(open);
+                    let fresh = fresh.map_err(|e| io::Error::other(e.to_string()))?;
+                    fresh
+                        .read(&mut out, offset)
+                        .map_err(|e| io::Error::other(format!("{}: {e}", self.url)))?
                 }
-                done += n;
-            }
+            };
             out.truncate(done);
             Ok(out)
         }
