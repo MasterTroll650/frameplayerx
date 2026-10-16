@@ -47,21 +47,44 @@ versions before they are released.
 
 | Where | How |
 |---|---|
-| `~/Videos`, `~/Downloads` | Added to the library automatically |
-| microSD card / USB drive (exFAT from a PC, or ext4) | Added automatically when inserted (Settings › Library) |
+| `~/Videos`, `~/Downloads` | Found automatically (Home › On this device) |
+| microSD card / USB drive (exFAT from a PC, or ext4) | Found automatically when inserted (Settings › Library) |
 | Other folders on the headset | Settings › Library › Add folder |
 | XBVR, Stash and other DeoVR / HereSphere servers | Sources › Add source › DeoVR feed or HereSphere API |
 | NAS / Windows share | Sources › Add source › SMB share (`smb://nas/videos`) |
 | Nextcloud and other WebDAV | Sources › Add source › WebDAV |
-| Plex, Jellyfin, Emby, Serviio | Sources › Add source › DLNA › Search the network |
+| Jellyfin, Emby | Sources › Add source › Jellyfin / Emby (Quick Connect or password) |
+| Plex, Serviio and other DLNA servers | Sources › Add source › DLNA › Search the network |
 | A web server folder listing | Sources › Add source › HTTP |
+
+### Home, watch history and browsing
+
+**Home** opens on what you were watching (a banner to resume, then
+*Continue watching* and *Favorites*) and ends with a row of your sources:
+**On this device** first, then every source you added, then *Add a source*.
+Each opens in a browser made for that kind of source; Back returns to Home.
+
+**Watch history** lists everything you have played, from any source, with
+the same search, format filters and orders (recently watched, title, most
+watched, rating, length). Remove one video with ⋯ › *Remove from history*,
+or everything with *Clear history*; favorites and ratings stay. Browsing a
+network source never adds anything here; Settings › Library › *Forget
+unwatched network videos* clears what older versions imported, and removing
+a source forgets its unwatched videos.
+
+| Source | What browsing it offers |
+|---|---|
+| On this device | **Videos**: everything found on the headset, its cards and drives, with search, format filters and sorting. **Folders**: the home folder and the drives as folders |
+| Jellyfin / Emby | Your libraries, *Continue watching*, *Next up* and the latest additions; poster grids searched, sorted and filtered by the server (unwatched, in progress, favorites); series by season and episode; details with the story, cast and genres. Watched marks, favorites and resume points are the server's, and what you watch is reported back to it |
+| DeoVR feed / HereSphere API (XBVR, Stash) | The server's scene groups as chips over a grid of scenes; search across titles, studios, performers and tags; order by title, date, rating or length; *Scripted* and *Favorites* filters. ⋯ opens a scene's details: description, performers and tags (tap one to see its other scenes), and chapters to start from |
+| SMB, WebDAV, HTTP folders, DLNA, local folders | Folders and files: search the folder you are in, order by name, date or size, *Play all* |
 
 ### Locking a source with a PIN
 
 To keep a share or folder private when someone else uses the headset, press
 the padlock next to it under **Sources** and choose a PIN (4 to 8 digits).
-While it is locked it can't be browsed, and its videos are left out of the
-library, continue watching, history, search and the phone remote; opening
+While it is locked it can't be browsed, and its videos are left out of
+Home, the watch history, search and the phone remote; opening
 one asks for the PIN. **Unlock** opens it until FramePlayer restarts; the
 padlock then locks it again at once, changes the PIN or removes it.
 Removing the source also removes its PIN. This keeps guests out, it doesn't
@@ -70,13 +93,14 @@ encrypt anything: the files themselves stay as they are.
 To lock one folder of a NAS, add that folder as its own source
 (`smb://nas/videos/private`) and lock it. Everything in it is then hidden
 everywhere, also when browsing a source for the whole share, and from the
-library even if it was added through that source.
+watch history even if it was played through that source.
 
 ### microSD cards and USB drives (VR180 and everything else)
 
 FramePlayer notices when a card or drive is inserted (a "Found drive"
-message appears), adds its videos to the library and makes thumbnails. You
-can also browse it directly under **Sources › microSD and USB drives**.
+message appears), adds its videos to **On this device** and makes
+thumbnails. You can also browse it as folders under **On this device ›
+Folders**.
 
 **Copying videos from a Windows PC or Mac:** format the card as **exFAT**
 on the computer (Windows: right-click the card › Format › exFAT), copy the
@@ -92,7 +116,7 @@ videos onto it and put it in the Frame. exFAT has no 4 GB file limit, so
   read. FramePlayer still finds the videos.
 - An ext4 card formatted by Steam works too (shared with games: Steam game
   folders, `steamapps`, are skipped), but only the Frame can read it.
-- When the card is removed its videos stay in the library with your
+- When the card is removed its videos stay listed with your
   ratings, resume points and adjustments; they play again once it is back.
 - VR180 videos are recognised from their metadata (VR180 cameras, YouTube
   VR180 downloads) or from names like `Trip_VR180.mp4`,

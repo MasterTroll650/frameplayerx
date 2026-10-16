@@ -40,9 +40,9 @@ for the commands):
 ```
 cat > /tmp/demo.fps <<'X'
 wait 2
-point main 0.24 0.04     # Library tab
+point main 0.24 0.04     # Watch history tab
 click
-shot library
+shot history
 open ~/Videos/clip_180_LR.mp4
 wait-playing 20
 shot playing
@@ -51,7 +51,40 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
   cargo run -p frameplayer -- --preview /tmp/shots --script /tmp/demo.fps
 ```
 
-With a real OpenXR runtime, e.g. Monado's simulated headset:
+### On this computer with Monado
+
+`tools/local-xr.sh` runs FramePlayer against [Monado](https://monado.freedesktop.org),
+the open-source OpenXR runtime, so a change can be tried without building
+and installing on the Frame. Monado shows both eyes in a desktop window and
+fakes the headset and controllers from the keyboard and mouse. It works on
+Ubuntu and Debian, and on Windows in Ubuntu under WSL2 (WSLg shows the
+windows and plays the sound; Vulkan runs on llvmpipe there, so expect a low
+frame rate).
+
+```
+tools/local-xr.sh setup                 # once: Monado, build tools, FFmpeg
+tools/local-xr.sh run                   # Monado + FramePlayer
+tools/local-xr.sh run ~/Videos/clip.mp4 # ...opening a video
+tools/local-xr.sh headless --exit-after 10 clip.mp4   # no window: smoke test
+tools/local-xr.sh preview /tmp/shots    # every screen as PNGs (ui-preview.sh)
+```
+
+Click into Monado's debug window (*Monado!*) to drive it: the keyboard and
+mouse move the headset, or the left or right controller while left Ctrl or
+left Alt is held. WASD/QE move, the arrow keys or a right-button drag turn,
+a left click is the trigger, Shift goes faster; its *Qwerty › Help* tab
+lists every key. The controllers present themselves as Khronos simple
+controllers (select and menu), which FramePlayer binds. The window with the
+eyes opens at 1600×900 (`LOCAL_XR_WINDOW=1280x720` for another size) and
+can be resized; under WSL it is Monado's X11 window, as its Wayland one
+stays black there. Monado's own log is
+in `/tmp/monado-service.log`; `-v` gives FramePlayer's debug log. Under WSL
+the Linux build goes to `~/.cache/frameplayer-target`, away from the
+Windows `target/`. The eyes are 150% of the fake headset's 640×720 by
+default; `XRT_COMPOSITOR_SCALE_PERCENTAGE=200 tools/local-xr.sh run` is
+sharper, `=60` smoother on a software renderer.
+
+By hand, with Monado's simulated headset and no window:
 
 ```
 XRT_COMPOSITOR_NULL=1 SIMULATED_ENABLE=1 monado-service &

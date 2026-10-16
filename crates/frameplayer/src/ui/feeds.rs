@@ -1,0 +1,670 @@
+//! DeoVR feeds and HereSphere APIs (XBVR, Stash): their scene groups as
+//! chips over a grid of scenes, searched across titles, studios,
+//! performers and tags, sorted and filtered, with a details page per scene
+//! (description, performers, tags, chapters to start from).
+//!
+//! A HereSphere library lists scene addresses only: scenes on screen (and,
+//! while searching, every scene) have their details fetched as they are
+//! needed.
+
+use super::page::{self, Card};
+use super::theme::{self, Weight};
+use super::widgets::{self, Kind, Tip};
+use super::{Action, View, fmt_date, fmt_time, icons};
+use crate::playback::OpenRequest;
+use egui::{RichText, Sense, Vec2};
+use fp_sources::{FeedLibrary, FeedScene, SceneInfo, SourceKind};
+use std::collections::{HashMap, HashSet};
+
+/// Scenes shown before "Show more".
+const PAGE: usize = 60;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FeedSort {
+    /// As the feed lists them.
+    #[default]
+    Feed,
+    Title,
+    /// Newest release (or addition) first.
+    Newest,
+    Rating,
+    Longest,
+    Shortest,
+}
+
+pub struct FeedView {
+    pub kind: SourceKind,
+    pub loading: bool,
+    pub error: Option<String>,
+    /// Groups in feed order with their scenes' URLs.
+    pub groups: Vec<(String, Vec<String>)>,
+    pub scenes: HashMap<String, FeedScene>,
+    /// Every scene once, as first listed.
+    pub order: Vec<String>,
+    /// The group shown; `None` for all of them.
+    pub group: Option<usize>,
+    pub search: String,
+    pub sort: FeedSort,
+    pub scripted_only: bool,
+    pub favorites_only: bool,
+    /// Scenes shown (paging).
+    pub shown: usize,
+    pub details: Option<Details>,
+    /// Scenes whose details were asked for.
+    pub requested: HashSet<String>,
+}
+
+/// A scene's details page.
+pub struct Details {
+    pub url: String,
+    pub info: Option<SceneInfo>,
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
+impl FeedView {
+    pub fn new(kind: SourceKind) -> FeedView {
+        FeedView {
+            kind,
+            loading: true,
+            error: None,
+            groups: Vec::new(),
+            scenes: HashMap::new(),
+            order: Vec::new(),
+            group: None,
+            search: String::new(),
+            sort: FeedSort::Feed,
+            scripted_only: false,
+            favorites_only: false,
+            shown: PAGE,
+            details: None,
+            requested: HashSet::new(),
+        }
+    }
+
+    /// Takes the feed's groups and scenes (keeping details already read).
+    pub fn loaded(&mut self, result: Result<FeedLibrary, String>) {
+        self.loading = false;
+        let lib = match result {
+            Ok(l) => l,
+            Err(e) => {
+                self.error = Some(e);
+                return;
+            }
+        };
+        self.error = None;
+        self.order = lib.scenes.iter().map(|s| s.url.clone()).collect();
+        let mut scenes = HashMap::with_capacity(lib.scenes.len());
+        for s in lib.scenes {
+            let keep = self.scenes.remove(&s.url).filter(|old| old.detailed);
+            scenes.insert(s.url.clone(), keep.unwrap_or(s));
+        }
+        self.scenes = scenes;
+        self.groups = lib.groups;
+        if self.group.is_some_and(|g| g >= self.groups.len()) {
+            self.group = None;
+        }
+        // One group: show it rather than "All" beside it.
+        if self.groups.len() == 1 {
+            self.group = Some(0);
+        }
+    }
+
+    /// Takes a scene's details: into its card, and its page when open
+    /// (`full`: with media, for the page).
+    pub fn scene_loaded(&mut self, url: &str, result: Result<SceneInfo, String>, full: bool) {
+        match result {
+            Ok(info) => {
+                if let Some(s) = self.scenes.get_mut(url) {
+                    s.apply(&info);
+                }
+                if full && let Some(d) = self.details.as_mut().filter(|d| d.url == url) {
+                    d.loading = false;
+                    d.info = Some(info);
+                }
+            }
+            Err(e) => {
+                log::debug!("scene details {url}: {e}");
+                // A card without details keeps what the listing said.
+                if let Some(s) = self.scenes.get_mut(url) {
+                    s.detailed = true;
+                }
+                if full && let Some(d) = self.details.as_mut().filter(|d| d.url == url) {
+                    d.loading = false;
+                    d.error = Some(e);
+                }
+            }
+        }
+    }
+
+    /// URLs of the scenes in the group shown (all of them for "All").
+    fn scope(&self) -> &[String] {
+        match self.group.and_then(|g| self.groups.get(g)) {
+            Some((_, urls)) => urls,
+            None => &self.order,
+        }
+    }
+
+    /// The scenes to show: searched, filtered and sorted.
+    pub fn visible(&self) -> Vec<&FeedScene> {
+        let words: Vec<String> = self
+            .search
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        // A search looks through every group.
+        let scope = if words.is_empty() {
+            self.scope()
+        } else {
+            &self.order
+        };
+        let mut out: Vec<&FeedScene> = scope
+            .iter()
+            .filter_map(|u| self.scenes.get(u))
+            .filter(|s| words.is_empty() || s.matches(&words))
+            .filter(|s| !self.scripted_only || s.scripted)
+            .filter(|s| !self.favorites_only || s.favorite)
+            .collect();
+        let title = |s: &FeedScene| widgets::display_title(&s.title).to_lowercase();
+        // Known values first in either direction, the rest after in feed
+        // order (the sorts are stable).
+        use std::cmp::Ordering;
+        fn known<T: PartialOrd>(a: Option<T>, b: Option<T>, descending: bool) -> Ordering {
+            match (a, b) {
+                (Some(a), Some(b)) => {
+                    let o = a.partial_cmp(&b).unwrap_or(Ordering::Equal);
+                    if descending { o.reverse() } else { o }
+                }
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            }
+        }
+        let date = |s: &FeedScene| s.released.or(s.added);
+        match self.sort {
+            FeedSort::Feed => {}
+            FeedSort::Title => out.sort_by_cached_key(|s| title(s)),
+            FeedSort::Newest => out.sort_by(|a, b| known(date(a), date(b), true)),
+            FeedSort::Rating => out.sort_by(|a, b| known(a.rating, b.rating, true)),
+            FeedSort::Longest => out.sort_by(|a, b| known(a.duration, b.duration, true)),
+            FeedSort::Shortest => out.sort_by(|a, b| known(a.duration, b.duration, false)),
+        }
+        out
+    }
+
+    /// Whether any scene says `has`.
+    fn any(&self, has: impl Fn(&FeedScene) -> bool) -> bool {
+        self.scenes.values().any(has)
+    }
+
+    /// Scenes that need their details fetched to be searched: those
+    /// without, not asked for yet.
+    fn unfilled(&self) -> Vec<String> {
+        self.order
+            .iter()
+            .filter(|u| !self.requested.contains(*u))
+            .filter(|u| self.scenes.get(*u).is_some_and(|s| !s.detailed))
+            .cloned()
+            .collect()
+    }
+}
+
+/// Opens `scene`.
+fn request(source: &str, scene: &FeedScene, start_at: Option<f64>) -> OpenRequest {
+    OpenRequest {
+        location: scene.url.clone(),
+        source_id: Some(source.to_string()),
+        entry: Some(scene.to_entry()),
+        start_at,
+    }
+}
+
+/// "25:12 · VRStudio" or "25:12 · 12 Oct 2026".
+fn card_facts(s: &FeedScene) -> String {
+    let mut f = Vec::new();
+    if let Some(d) = s.duration {
+        f.push(fmt_time(d));
+    }
+    if let Some(studio) = &s.studio {
+        f.push(studio.clone());
+    } else if let Some(t) = s.released.or(s.added) {
+        f.push(fmt_date(t));
+    }
+    f.join("  ·  ")
+}
+
+/// A feed's scenes or a scene's page; true when Back was clicked.
+pub fn page(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut FeedView) -> bool {
+    if f.details.is_some() {
+        return details(ui, v, source, name, f);
+    }
+    let lazy = f.kind == SourceKind::HereSphere;
+    let subtitle = format!(
+        "{} · {}",
+        f.kind.label(),
+        page::plural(f.order.len(), "scene", "scenes")
+    );
+    let back = page::header(ui, name, Some(&subtitle), |ui| {
+        if widgets::icon_button(ui, icons::ARROWS_CLOCKWISE, 44.0, false)
+            .tip("Refresh")
+            .clicked()
+        {
+            f.loading = true;
+            v.actions.push(Action::FeedLoad {
+                source: source.to_string(),
+            });
+        }
+    });
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        changed |= page::search_field(ui, &mut f.search, "Search titles, people, tags", 300.0);
+        ui.add_space(10.0);
+        if f.any(|s| s.scripted)
+            && widgets::chip_icon(ui, Some(icons::WAVEFORM), "Scripted", f.scripted_only).clicked()
+        {
+            f.scripted_only = !f.scripted_only;
+            changed = true;
+        }
+        if f.any(|s| s.favorite)
+            && widgets::chip_icon(ui, Some(icons::HEART), "Favorites", f.favorites_only).clicked()
+        {
+            f.favorites_only = !f.favorites_only;
+            changed = true;
+        }
+    });
+    if f.groups.len() > 1 {
+        ui.add_space(6.0);
+        egui::ScrollArea::horizontal()
+            .id_salt("feed-groups")
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if widgets::chip(ui, "All", f.group.is_none()).clicked() {
+                        f.group = None;
+                        changed = true;
+                    }
+                    for (i, (g, urls)) in f.groups.iter().enumerate() {
+                        let label = format!("{g}  {}", urls.len());
+                        if widgets::chip(ui, &label, f.group == Some(i)).clicked() {
+                            f.group = Some(i);
+                            changed = true;
+                        }
+                    }
+                });
+            });
+    }
+    let shown = f.visible();
+    let total = shown.len();
+    let mut sorts = vec![(FeedSort::Feed, "Feed order"), (FeedSort::Title, "Title")];
+    if f.any(|s| s.released.or(s.added).is_some()) {
+        sorts.push((FeedSort::Newest, "Newest"));
+    }
+    if f.any(|s| s.rating.is_some()) {
+        sorts.push((FeedSort::Rating, "Rating"));
+    }
+    sorts.extend([
+        (FeedSort::Longest, "Longest"),
+        (FeedSort::Shortest, "Shortest"),
+    ]);
+    let mut sort = f.sort;
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        changed |= page::sort_bar(ui, &sorts, &mut sort);
+        page::count_label(ui, &page::plural(total, "scene", "scenes"));
+    });
+    ui.add_space(10.0);
+    page::status(ui, f.loading && f.order.is_empty(), f.error.as_deref());
+
+    let list: Vec<FeedScene> = shown.into_iter().take(f.shown).cloned().collect();
+    let mut on_screen = Vec::new();
+    let (mut play, mut open, mut more) = (None, None, false);
+    egui::ScrollArea::vertical()
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            if list.is_empty() && !f.loading && f.error.is_none() {
+                let (title, body) = if f.order.is_empty() {
+                    ("No scenes", "The server lists no scenes here.")
+                } else {
+                    (
+                        "Nothing matches",
+                        "Try another search, or clear the filters.",
+                    )
+                };
+                page::empty_state(ui, icons::VIRTUAL_REALITY, title, body, |_| {});
+            }
+            page::grid(ui, list.len(), page::LANDSCAPE.x, |ui, i| {
+                let s = &list[i];
+                let title = widgets::display_title(&s.title);
+                let facts = card_facts(s);
+                let badge = s.format.map(|f| widgets::format_short(&f));
+                let c = page::card(
+                    ui,
+                    v.thumbs,
+                    &Card {
+                        thumb: s.thumbnail_url.as_deref(),
+                        placeholder: icons::VIRTUAL_REALITY,
+                        title: &title,
+                        facts: &facts,
+                        badge: badge.as_deref(),
+                        corner: s.scripted.then_some(icons::WAVEFORM),
+                        favorite: s.favorite,
+                        more: true,
+                        ..Card::default()
+                    },
+                );
+                if c.visible && !s.detailed {
+                    on_screen.push(s.url.clone());
+                }
+                if c.open {
+                    play = Some(i);
+                }
+                if c.more {
+                    open = Some(s.url.clone());
+                }
+            });
+            if total > list.len() {
+                ui.vertical_centered(|ui| {
+                    more = widgets::button(ui, None, "Show more", Kind::Secondary).clicked();
+                });
+                ui.add_space(20.0);
+            }
+        });
+
+    if sort != f.sort {
+        f.sort = sort;
+    }
+    if changed {
+        f.shown = PAGE;
+    }
+    if more {
+        f.shown += PAGE;
+    }
+    if let Some(i) = play {
+        let reqs = list.iter().map(|s| request(source, s, None)).collect();
+        v.actions.push(Action::OpenList(reqs, i));
+    }
+    if let Some(url) = open {
+        f.details = Some(Details {
+            url: url.clone(),
+            info: None,
+            loading: true,
+            error: None,
+        });
+        v.actions.push(Action::FeedScene {
+            source: source.to_string(),
+            url,
+        });
+    }
+    if lazy {
+        // Cards on screen first; while searching, everything else after.
+        on_screen.retain(|u| f.requested.insert(u.clone()));
+        if !on_screen.is_empty() {
+            v.actions.push(Action::FeedFill {
+                source: source.to_string(),
+                urls: on_screen,
+                front: true,
+            });
+        }
+        if !f.search.trim().is_empty() {
+            let rest = f.unfilled();
+            if !rest.is_empty() {
+                f.requested.extend(rest.iter().cloned());
+                v.actions.push(Action::FeedFill {
+                    source: source.to_string(),
+                    urls: rest,
+                    front: false,
+                });
+            }
+        }
+    }
+    back
+}
+
+/// A scene's page; true when Back was clicked.
+fn details(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut FeedView) -> bool {
+    let Some(d) = f.details.as_ref() else {
+        return false;
+    };
+    let mut scene = f.scenes.get(&d.url).cloned().unwrap_or_else(|| FeedScene {
+        url: d.url.clone(),
+        ..FeedScene::default()
+    });
+    if let Some(info) = &d.info {
+        scene.apply(info);
+    }
+    let title = widgets::display_title(&scene.title);
+    let back = page::header(ui, name, Some(&title), |_| {});
+    page::status(ui, d.loading, d.error.as_deref());
+    let info = d.info.clone();
+    let (mut play_at, mut search) = (None::<f64>, None::<String>);
+    egui::ScrollArea::vertical()
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            ui.add_space(8.0);
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 28.0;
+                let (rect, _) = ui.allocate_exact_size(Vec2::new(512.0, 288.0), Sense::hover());
+                widgets::shadow(ui.painter(), rect, 16, 0.6);
+                page::picture(
+                    ui,
+                    v.thumbs,
+                    scene.thumbnail_url.as_deref(),
+                    rect,
+                    16,
+                    icons::VIRTUAL_REALITY,
+                );
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    ui.label(
+                        RichText::new(&title)
+                            .font(theme::font(Weight::Bold, 34.0))
+                            .color(theme::TEXT),
+                    );
+                    let mut facts = Vec::new();
+                    if let Some(t) = scene.duration {
+                        facts.push(fmt_time(t));
+                    }
+                    if let Some(t) = scene.released {
+                        facts.push(fmt_date(t));
+                    }
+                    if let Some(fm) = scene.format {
+                        facts.push(widgets::format_short(&fm));
+                    }
+                    if let Some(r) = scene.rating {
+                        facts.push(page::rating(r));
+                    }
+                    if scene.favorite {
+                        facts.push(format!("{}  Favorite", icons::HEART));
+                    }
+                    if scene.scripted {
+                        facts.push(format!("{}  Haptics", icons::WAVEFORM));
+                    }
+                    page::facts(ui, &facts);
+                    ui.add_space(10.0);
+                    if widgets::button(ui, Some(icons::PLAY), "Play", Kind::Primary).clicked() {
+                        play_at = Some(0.0);
+                    }
+                    if let Some(info) = &info
+                        && !info.sources.is_empty()
+                    {
+                        let mut versions: Vec<String> = info
+                            .sources
+                            .iter()
+                            .map(|s| match (s.height, s.label.is_empty()) {
+                                (Some(h), false) => format!("{h}p {}", s.label),
+                                (Some(h), true) => format!("{h}p"),
+                                (None, _) => s.label.clone(),
+                            })
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        versions.dedup();
+                        if !versions.is_empty() {
+                            ui.label(
+                                RichText::new(format!("Versions: {}", versions.join(", ")))
+                                    .font(theme::font(Weight::Regular, 15.0))
+                                    .color(theme::TEXT_3),
+                            );
+                        }
+                    }
+                });
+            });
+            ui.add_space(22.0);
+            ui.set_max_width(1100.0);
+            if let Some(text) = info.as_ref().and_then(|i| i.description.as_deref()) {
+                page::prose(ui, text);
+                ui.add_space(16.0);
+            }
+            if !scene.actors.is_empty() {
+                widgets::section_label(ui, "Performers");
+                search = search.take().or(page::pills(ui, &scene.actors));
+                ui.add_space(14.0);
+            }
+            if !scene.tags.is_empty() {
+                widgets::section_label(ui, "Tags");
+                search = search.take().or(page::pills(ui, &scene.tags));
+                ui.add_space(14.0);
+            }
+            let markers = info.as_ref().map(|i| i.markers.as_slice()).unwrap_or(&[]);
+            if !markers.is_empty() {
+                widgets::section_label(ui, "Chapters");
+                ui.add_space(2.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                    for (t, name) in markers {
+                        let label = if name.is_empty() {
+                            fmt_time(*t)
+                        } else {
+                            format!("{}  {name}", fmt_time(*t))
+                        };
+                        if widgets::chip_icon(ui, Some(icons::PLAY), &label, false)
+                            .tip("Play from here")
+                            .clicked()
+                        {
+                            play_at = Some(*t);
+                        }
+                    }
+                });
+            }
+            ui.add_space(24.0);
+        });
+    if let Some(t) = play_at {
+        let mut req = request(source, &scene, Some(t));
+        if let Some(info) = &info {
+            // The page has every detail; opening needs no second fetch.
+            let mut e = scene.to_entry();
+            info.apply_to(&mut e);
+            req.entry = Some(e);
+        }
+        v.actions.push(Action::Open(req));
+    }
+    if let Some(s) = search {
+        // A performer or tag: the scenes that have it.
+        f.search = s;
+        f.group = None;
+        f.shown = PAGE;
+        f.details = None;
+    }
+    back
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scene(url: &str, title: &str, duration: f64) -> FeedScene {
+        FeedScene {
+            url: url.into(),
+            title: title.into(),
+            duration: Some(duration),
+            ..FeedScene::default()
+        }
+    }
+
+    fn view() -> FeedView {
+        let mut f = FeedView::new(SourceKind::DeoVr);
+        f.loaded(Ok(FeedLibrary {
+            groups: vec![
+                ("Recent".into(), vec!["a".into(), "b".into()]),
+                ("Scripted".into(), vec!["c".into()]),
+            ],
+            scenes: vec![
+                scene("a", "Beach", 60.0),
+                FeedScene {
+                    studio: Some("Lake Films".into()),
+                    scripted: true,
+                    ..scene("b", "Alps", 600.0)
+                },
+                FeedScene {
+                    actors: vec!["Jane".into()],
+                    rating: Some(4.5),
+                    ..scene("c", "Canyon", 30.0)
+                },
+            ],
+        }));
+        f
+    }
+
+    fn titles(f: &FeedView) -> Vec<String> {
+        f.visible().iter().map(|s| s.title.clone()).collect()
+    }
+
+    #[test]
+    fn groups_search_filters_and_orders() {
+        let mut f = view();
+        assert!(!f.loading && f.group.is_none());
+        assert_eq!(titles(&f), ["Beach", "Alps", "Canyon"]);
+        f.group = Some(1);
+        assert_eq!(titles(&f), ["Canyon"]);
+        // A search looks through every group: studios and performers too.
+        f.search = "lake".into();
+        assert_eq!(titles(&f), ["Alps"]);
+        f.search = "JANE".into();
+        assert_eq!(titles(&f), ["Canyon"]);
+        f.search.clear();
+        f.group = None;
+        f.sort = FeedSort::Title;
+        assert_eq!(titles(&f), ["Alps", "Beach", "Canyon"]);
+        f.sort = FeedSort::Longest;
+        assert_eq!(titles(&f), ["Alps", "Beach", "Canyon"]);
+        f.sort = FeedSort::Shortest;
+        assert_eq!(titles(&f), ["Canyon", "Beach", "Alps"]);
+        f.sort = FeedSort::Rating;
+        assert_eq!(titles(&f)[0], "Canyon");
+        f.sort = FeedSort::Feed;
+        f.scripted_only = true;
+        assert_eq!(titles(&f), ["Alps"]);
+    }
+
+    #[test]
+    fn details_fill_cards_and_survive_a_refresh() {
+        let mut f = view();
+        f.details = Some(Details {
+            url: "a".into(),
+            info: None,
+            loading: true,
+            error: None,
+        });
+        let info = SceneInfo {
+            title: "Beach Day".into(),
+            scripts: vec!["s.funscript".into()],
+            ..SceneInfo::default()
+        };
+        f.scene_loaded("a", Ok(info), true);
+        assert!(f.details.as_ref().unwrap().info.is_some());
+        assert!(f.scenes["a"].detailed && f.scenes["a"].scripted);
+        // A failed fetch is not retried, and the card keeps its listing.
+        f.scene_loaded("b", Err("timeout".into()), false);
+        assert!(f.scenes["b"].detailed);
+        assert_eq!(f.scenes["b"].title, "Alps");
+        assert_eq!(f.unfilled(), ["c"]);
+
+        f.loaded(Ok(FeedLibrary {
+            groups: vec![("Recent".into(), vec!["a".into()])],
+            scenes: vec![scene("a", "Beach", 60.0)],
+        }));
+        assert_eq!(f.scenes["a"].title, "Beach Day");
+        assert_eq!(f.group, Some(0), "a lone group is shown as such");
+    }
+}

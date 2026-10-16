@@ -72,6 +72,22 @@ pub struct SceneInfo {
     pub subtitles: Vec<String>,
     /// Named timestamps in seconds.
     pub markers: Vec<(f64, String)>,
+    /// Synopsis.
+    pub description: Option<String>,
+    /// Release date, Unix seconds.
+    pub released: Option<i64>,
+    /// When the server added it, Unix seconds.
+    pub added: Option<i64>,
+    /// Studio or site.
+    pub studio: Option<String>,
+    /// Performers.
+    pub actors: Vec<String>,
+    /// Categories and tags.
+    pub tags: Vec<String>,
+    /// Rating out of 5.
+    pub rating: Option<f32>,
+    /// The user's favourite on the server.
+    pub favorite: bool,
 }
 
 impl SceneInfo {
@@ -171,6 +187,34 @@ fn url_field(v: &Value, key: &str, base: &str) -> Option<String> {
     text(v, key).and_then(|u| resolve(base, &u).ok())
 }
 
+/// A date given as Unix seconds (or milliseconds) or as an ISO 8601 string.
+fn date_field(v: &Value, key: &str) -> Option<i64> {
+    match get(v, key)? {
+        Value::Number(n) => n
+            .as_f64()
+            .filter(|t| *t > 0.0)
+            .map(|t| if t > 1e11 { t / 1000.0 } else { t } as i64),
+        Value::String(s) => crate::timeutil::parse_iso8601(s),
+        _ => None,
+    }
+}
+
+/// A rating out of 5.
+fn rating_field(v: &Value, key: &str) -> Option<f32> {
+    num(v, key)
+        .filter(|r| *r > 0.0 && *r <= 5.0)
+        .map(|r| r as f32)
+}
+
+/// Names from `[{"name": ...}]` (or plain strings).
+fn names(v: &Value, key: &str) -> Vec<String> {
+    array(v, key)
+        .iter()
+        .filter_map(|x| text(x, "name").or_else(|| x.as_str().map(|s| s.trim().to_string())))
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 fn media_source(v: &Value, label: &str, base: &str) -> Option<MediaSource> {
     let url = url_field(v, "url", base)?;
     let height = uint(v, "height").or_else(|| uint(v, "resolution"));
@@ -261,6 +305,17 @@ pub fn parse_deovr_scene(v: &Value, base: &str) -> SceneInfo {
         .filter_map(|t| Some((num(t, "ts")?, text(t, "name").unwrap_or_default())))
         .collect();
     markers.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Categories are `{"tag": {"name"}}` in XBVR, `{"name"}` elsewhere.
+    let tags = array(v, "categories")
+        .iter()
+        .filter_map(|c| {
+            get(c, "tag")
+                .and_then(|t| text(t, "name"))
+                .or_else(|| text(c, "name"))
+                .or_else(|| c.as_str().map(|s| s.trim().to_string()))
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
     SceneInfo {
         title: text(v, "title").unwrap_or_default(),
         duration: num(v, "videoLength").filter(|d| *d > 0.0),
@@ -276,6 +331,16 @@ pub fn parse_deovr_scene(v: &Value, base: &str) -> SceneInfo {
             .filter_map(|s| url_field(s, "url", base))
             .collect(),
         markers,
+        description: text(v, "description"),
+        released: date_field(v, "date").or_else(|| date_field(v, "releaseDate")),
+        added: None,
+        studio: get(v, "paysite")
+            .and_then(|p| text(p, "name"))
+            .or_else(|| text(v, "studio")),
+        actors: names(v, "actors"),
+        tags,
+        rating: rating_field(v, "rating_avg").or_else(|| rating_field(v, "rating")),
+        favorite: boolean(v, "isFavorite").unwrap_or(false),
     }
 }
 
@@ -354,14 +419,20 @@ pub fn parse_heresphere_video(v: &Value, base: &str) -> SceneInfo {
             }
         }
     }
-    let mut markers: Vec<(f64, String)> = array(v, "tags")
-        .iter()
-        .filter_map(|t| {
-            let start = num(t, "start")?;
-            let name = text(t, "name")?;
-            Some((start / 1000.0, name))
-        })
-        .collect();
+    let mut markers = Vec::new();
+    let mut meta = HereSphereTags::default();
+    for t in array(v, "tags") {
+        let Some(name) = text(t, "name") else {
+            continue;
+        };
+        // Timed tags are chapters; the rest describe the video.
+        let start = num(t, "start").filter(|s| *s > 0.0);
+        let end = num(t, "end").filter(|e| *e > 0.0);
+        match (start, end) {
+            (None, None) => meta.add(&name),
+            _ => markers.push((start.unwrap_or(0.0) / 1000.0, untagged(&name).to_string())),
+        }
+    }
     markers.sort_by(|a, b| a.0.total_cmp(&b.0));
     SceneInfo {
         title: text(v, "title").unwrap_or_default(),
@@ -380,6 +451,243 @@ pub fn parse_heresphere_video(v: &Value, base: &str) -> SceneInfo {
             .filter_map(|s| url_field(s, "url", base))
             .collect(),
         markers,
+        description: text(v, "description"),
+        released: date_field(v, "dateReleased"),
+        added: date_field(v, "dateAdded"),
+        studio: meta.studio,
+        actors: meta.actors,
+        tags: meta.tags,
+        rating: rating_field(v, "rating"),
+        favorite: boolean(v, "isFavorite").unwrap_or(false),
+    }
+}
+
+/// What HereSphere's prefixed tags (`Studio:`, `Talent:`, `Category:`...)
+/// say about a video.
+#[derive(Default)]
+struct HereSphereTags {
+    studio: Option<String>,
+    actors: Vec<String>,
+    tags: Vec<String>,
+}
+
+impl HereSphereTags {
+    fn add(&mut self, tag: &str) {
+        let (prefix, value) = match tag.split_once(':') {
+            Some((p, v)) if !p.contains(' ') || p.eq_ignore_ascii_case("tag group") => {
+                (p.trim().to_ascii_lowercase(), v.trim())
+            }
+            _ => (String::new(), tag.trim()),
+        };
+        if value.is_empty() {
+            return;
+        }
+        match prefix.as_str() {
+            "studio" | "site" => {
+                self.studio.get_or_insert_with(|| value.to_string());
+            }
+            "talent" | "performer" | "actor" | "cast" => self.actors.push(value.to_string()),
+            // Computed facts (resolution, frame rate...) and groupings.
+            "feature" | "tag group" | "director" | "movie" | "group" => {}
+            _ => self.tags.push(value.to_string()),
+        }
+    }
+}
+
+/// A tag's name without its `Prefix:`.
+fn untagged(name: &str) -> &str {
+    match name.split_once(':') {
+        Some((p, v)) if !p.contains(' ') && !v.trim().is_empty() => v.trim(),
+        _ => name,
+    }
+}
+
+/// Parses a HereSphere scan (`{"scanData": [...]}`): the details of every
+/// video at once, without thumbnails or media.
+pub fn parse_heresphere_scan(v: &Value, base: &str) -> Vec<FeedScene> {
+    array(v, "scanData")
+        .iter()
+        .filter_map(|s| {
+            let url = url_field(s, "link", base)?;
+            let mut meta = HereSphereTags::default();
+            for t in array(s, "tags") {
+                if let Some(n) = text(t, "name") {
+                    meta.add(&n);
+                }
+            }
+            let title = text(s, "title").unwrap_or_else(|| last_segment(&url));
+            Some(FeedScene {
+                format: detect_from_name(&title),
+                title,
+                duration: num(s, "duration")
+                    .filter(|d| *d > 0.0)
+                    .map(|ms| ms / 1000.0),
+                released: date_field(s, "dateReleased"),
+                added: date_field(s, "dateAdded"),
+                rating: rating_field(s, "rating"),
+                favorite: boolean(s, "isFavorite").unwrap_or(false),
+                studio: meta.studio,
+                actors: meta.actors,
+                tags: meta.tags,
+                url,
+                ..FeedScene::default()
+            })
+        })
+        .collect()
+}
+
+/// A scene as a feed's grid shows it: what the listing says, completed as
+/// its details arrive ([`FeedScene::apply`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FeedScene {
+    /// Scene URL: the location to open and fetch details from.
+    pub url: String,
+    /// Title.
+    pub title: String,
+    /// Length in seconds.
+    pub duration: Option<f64>,
+    /// Poster image URL.
+    pub thumbnail_url: Option<String>,
+    /// Release date, Unix seconds.
+    pub released: Option<i64>,
+    /// When the server added it, Unix seconds.
+    pub added: Option<i64>,
+    /// Rating out of 5.
+    pub rating: Option<f32>,
+    /// The user's favourite on the server.
+    pub favorite: bool,
+    /// Studio or site.
+    pub studio: Option<String>,
+    /// Performers.
+    pub actors: Vec<String>,
+    /// Categories and tags.
+    pub tags: Vec<String>,
+    /// Has haptic scripts.
+    pub scripted: bool,
+    /// Declared projection and stereo layout.
+    pub format: Option<VideoFormat>,
+    /// The scene's own document was read (so nothing more will come).
+    pub detailed: bool,
+}
+
+impl FeedScene {
+    fn from_entry(e: &Entry) -> FeedScene {
+        FeedScene {
+            url: e.location.clone(),
+            title: e.name.clone(),
+            duration: e.duration,
+            thumbnail_url: e.thumbnail_url.clone(),
+            format: e.format,
+            scripted: !e.scripts.is_empty(),
+            ..FeedScene::default()
+        }
+    }
+
+    /// Completes the card with a scene's details.
+    pub fn apply(&mut self, info: &SceneInfo) {
+        if !info.title.is_empty() {
+            self.title = info.title.clone();
+        }
+        self.duration = info.duration.or(self.duration);
+        if info.thumbnail_url.is_some() {
+            self.thumbnail_url = info.thumbnail_url.clone();
+        }
+        self.format = info
+            .format
+            .or(self.format)
+            .or_else(|| detect_from_name(&self.title));
+        self.released = info.released.or(self.released);
+        self.added = info.added.or(self.added);
+        self.rating = info.rating.or(self.rating);
+        self.favorite |= info.favorite;
+        if info.studio.is_some() {
+            self.studio = info.studio.clone();
+        }
+        if !info.actors.is_empty() {
+            self.actors = info.actors.clone();
+        }
+        if !info.tags.is_empty() {
+            self.tags = info.tags.clone();
+        }
+        self.scripted |= !info.scripts.is_empty();
+        self.detailed = true;
+    }
+
+    /// Takes what a scan learned (titles, dates, tags) without its gaps.
+    fn merge(&mut self, scan: FeedScene) {
+        if !scan.title.is_empty() {
+            self.title = scan.title;
+        }
+        self.duration = scan.duration.or(self.duration);
+        self.released = scan.released.or(self.released);
+        self.added = scan.added.or(self.added);
+        self.rating = scan.rating.or(self.rating);
+        self.favorite |= scan.favorite;
+        self.studio = scan.studio.or(self.studio.take());
+        if !scan.actors.is_empty() {
+            self.actors = scan.actors;
+        }
+        if !scan.tags.is_empty() {
+            self.tags = scan.tags;
+        }
+        self.format = self.format.or(scan.format);
+    }
+
+    /// A browse entry to open it with.
+    pub fn to_entry(&self) -> Entry {
+        let mut e = Entry::new(self.title.clone(), self.url.clone(), EntryKind::Video);
+        e.duration = self.duration;
+        e.thumbnail_url = self.thumbnail_url.clone();
+        e.format = self.format;
+        e.modified = self.released.or(self.added);
+        e
+    }
+
+    /// Whether every word (lower case) is in the title, studio, a
+    /// performer or a tag.
+    pub fn matches(&self, words: &[String]) -> bool {
+        let hay = [
+            self.title.as_str(),
+            self.studio.as_deref().unwrap_or(""),
+            &self.actors.join(" "),
+            &self.tags.join(" "),
+        ]
+        .join(" ")
+        .to_lowercase();
+        words.iter().all(|w| hay.contains(w.as_str()))
+    }
+}
+
+/// Everything a feed lists: its scene groups and their scenes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FeedLibrary {
+    /// Groups in feed order, each with the URLs of its scenes.
+    pub groups: Vec<(String, Vec<String>)>,
+    /// Every scene once, in the order first listed.
+    pub scenes: Vec<FeedScene>,
+}
+
+impl FeedLibrary {
+    fn from_groups(groups: Vec<SceneGroup>) -> FeedLibrary {
+        let mut seen = std::collections::HashSet::new();
+        let mut scenes = Vec::new();
+        let groups = groups
+            .into_iter()
+            .map(|g| {
+                let urls = g
+                    .scenes
+                    .iter()
+                    .map(|e| {
+                        if seen.insert(e.location.clone()) {
+                            scenes.push(FeedScene::from_entry(e));
+                        }
+                        e.location.clone()
+                    })
+                    .collect();
+                (g.name, urls)
+            })
+            .collect();
+        FeedLibrary { groups, scenes }
     }
 }
 
@@ -419,6 +727,20 @@ fn group_location(feed_url: &str, name: &str) -> String {
 fn split_group(location: &str) -> Option<(&str, String)> {
     let (feed, name) = location.split_once("#group=")?;
     Some((feed, percent_decode(name)))
+}
+
+/// The scan endpoint beside a HereSphere library URL (query kept).
+fn scan_url(library: &str) -> String {
+    let (path, query) = match library.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
+        None => (library, None),
+    };
+    let mut url = format!("{}/scan", path.trim_end_matches('/'));
+    if let Some(q) = query {
+        url.push('?');
+        url.push_str(q);
+    }
+    url
 }
 
 /// True when a URL obviously points at a file rather than a scene document.
@@ -590,6 +912,12 @@ impl DeoVrSource {
         let v = self.fetch_required(scene_url)?;
         Ok(parse_deovr_scene(&v, scene_url))
     }
+
+    /// Every group and scene of the feed, from its root document (which
+    /// carries titles, lengths and posters).
+    pub fn library(&self) -> Result<FeedLibrary> {
+        Ok(FeedLibrary::from_groups(self.groups(&self.core.url)?))
+    }
 }
 
 impl Source for DeoVrSource {
@@ -703,6 +1031,30 @@ impl HereSphereSource {
     pub fn video(&self, url: &str, with_media: bool) -> Result<SceneInfo> {
         let v = self.post_required(url, Some(with_media))?;
         Ok(parse_heresphere_video(&v, url))
+    }
+
+    /// Every group and scene of the API. The library lists only scene URLs;
+    /// servers that answer a scan (`<url>/scan`) give titles, dates and tags
+    /// for all of them at once, otherwise [`Self::video`] fills each in.
+    pub fn library(&self) -> Result<FeedLibrary> {
+        let mut lib = FeedLibrary::from_groups(self.groups(&self.core.url)?);
+        match self.post(&scan_url(&self.core.url), None) {
+            Ok(Some(v)) => {
+                let mut scanned: std::collections::HashMap<String, FeedScene> =
+                    parse_heresphere_scan(&v, &self.core.url)
+                        .into_iter()
+                        .map(|s| (s.url.clone(), s))
+                        .collect();
+                for s in &mut lib.scenes {
+                    if let Some(scan) = scanned.remove(&s.url) {
+                        s.merge(scan);
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => log::debug!("no HereSphere scan at {}: {e}", redact(&self.core.url)),
+        }
+        Ok(lib)
     }
 
     /// Fills in titles and details for a group's scenes, several requests
@@ -1051,6 +1403,120 @@ mod tests {
                 ..config
             })
             .is_err()
+        );
+    }
+
+    #[test]
+    fn deovr_scene_metadata() {
+        let v = json!({
+            "title": "Beach", "description": "Sun and sand.", "date": 1_700_000_000,
+            "paysite": {"id": 3, "name": "VRStudio"},
+            "actors": [{"id": 1, "name": "Jane"}, {"id": 2, "name": "Ann"}],
+            "categories": [{"tag": {"id": 1, "name": "Outdoor"}}, {"name": "POV"}],
+            "rating_avg": 4.5, "isFavorite": true
+        });
+        let s = parse_deovr_scene(&v, "http://xbvr/deovr/1");
+        assert_eq!(s.description.as_deref(), Some("Sun and sand."));
+        assert_eq!(s.released, Some(1_700_000_000));
+        assert_eq!(s.studio.as_deref(), Some("VRStudio"));
+        assert_eq!(s.actors, ["Jane", "Ann"]);
+        assert_eq!(s.tags, ["Outdoor", "POV"]);
+        assert_eq!(s.rating, Some(4.5));
+        assert!(s.favorite);
+        // Milliseconds and ISO dates both work.
+        assert_eq!(
+            parse_deovr_scene(&json!({"date": 1_700_000_000_000_i64}), "http://h/").released,
+            Some(1_700_000_000)
+        );
+        assert!(
+            parse_deovr_scene(&json!({"date": "2024-01-12"}), "http://h/")
+                .released
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn heresphere_tags_describe_or_mark() {
+        let v = json!({
+            "title": "Beach", "dateReleased": "2023-05-01", "dateAdded": "2024-02-03",
+            "rating": 4, "isFavorite": true,
+            "tags": [
+                {"name": "Studio:VRStudio"}, {"name": "Talent:Jane"}, {"name": "Talent:Ann"},
+                {"name": "Category:Outdoor"}, {"name": "Feature:8K"}, {"name": "Tag Group:Set"},
+                {"name": "POV"}, {"name": "Intro", "start": 2000.0, "end": 9000.0},
+                {"name": "Marker:Dance", "start": 60000.0}
+            ]
+        });
+        let s = parse_heresphere_video(&v, "http://x/heresphere/1");
+        assert_eq!(s.studio.as_deref(), Some("VRStudio"));
+        assert_eq!(s.actors, ["Jane", "Ann"]);
+        assert_eq!(s.tags, ["Outdoor", "POV"]);
+        assert_eq!(
+            s.markers,
+            [(2.0, "Intro".to_string()), (60.0, "Dance".to_string())]
+        );
+        assert!(s.released.is_some() && s.added > s.released);
+        assert_eq!(s.rating, Some(4.0));
+        assert!(s.favorite);
+    }
+
+    #[test]
+    fn libraries_scans_and_cards() {
+        let base = "http://x/heresphere";
+        let g = parse_heresphere_library(
+            &json!({"library": [
+                {"name": "Recent", "list": ["/heresphere/1", "/heresphere/2"]},
+                {"name": "Favs", "list": ["/heresphere/2", "/heresphere/3"]}
+            ]}),
+            base,
+        )
+        .unwrap();
+        let mut lib = FeedLibrary::from_groups(g);
+        assert_eq!(lib.groups.len(), 2);
+        assert_eq!(
+            lib.groups[1].1,
+            ["http://x/heresphere/2", "http://x/heresphere/3"]
+        );
+        assert_eq!(lib.scenes.len(), 3, "scenes are listed once");
+        assert_eq!(lib.scenes[0].title, "1");
+
+        let scan = parse_heresphere_scan(
+            &json!({"scanData": [
+                {"link": "/heresphere/2", "title": "Lake_180_LR", "duration": 90000,
+                 "dateReleased": "2022-01-01", "isFavorite": true,
+                 "tags": [{"name": "Talent:Jane"}, {"name": "Category:Nature"}]},
+                {"title": "no link"}
+            ]}),
+            base,
+        );
+        assert_eq!(scan.len(), 1);
+        lib.scenes[1].merge(scan.into_iter().next().unwrap());
+        let s = &lib.scenes[1];
+        assert_eq!((s.title.as_str(), s.duration), ("Lake_180_LR", Some(90.0)));
+        assert!(s.favorite && s.format.is_some() && !s.detailed);
+        let words = |t: &str| vec![t.to_string()];
+        assert!(s.matches(&words("jane")) && s.matches(&words("nature")));
+        assert!(s.matches(&["lake".into(), "jane".into()]));
+        assert!(!s.matches(&words("forest")));
+
+        let mut card = lib.scenes[0].clone();
+        card.apply(&SceneInfo {
+            title: "Forest".into(),
+            thumbnail_url: Some("http://x/t.jpg".into()),
+            scripts: vec!["http://x/a.funscript".into()],
+            ..SceneInfo::default()
+        });
+        assert!(card.detailed && card.scripted);
+        assert_eq!(
+            card.to_entry().thumbnail_url.as_deref(),
+            Some("http://x/t.jpg")
+        );
+        assert_eq!(card.to_entry().location, "http://x/heresphere/1");
+
+        assert_eq!(scan_url("http://h/heresphere/"), "http://h/heresphere/scan");
+        assert_eq!(
+            scan_url("http://h/hs?apikey=1"),
+            "http://h/hs/scan?apikey=1"
         );
     }
 

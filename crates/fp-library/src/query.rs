@@ -83,6 +83,8 @@ pub struct Query {
     pub tags: Vec<String>,
     /// Only favourites.
     pub favorites_only: bool,
+    /// Only videos played at least once (the watch history).
+    pub watched_only: bool,
     /// Minimum star rating; 0 accepts unrated videos.
     pub min_rating: u8,
     /// Accepted projection families of the effective format; empty accepts
@@ -146,6 +148,9 @@ fn filter_sql(q: &Query, hidden: &Hidden) -> (String, Vec<Value>) {
     }
     if q.favorites_only {
         clauses.push("m.favorite = 1".into());
+    }
+    if q.watched_only {
+        clauses.push("m.last_played IS NOT NULL".into());
     }
     if q.min_rating > 0 {
         clauses.push("m.rating >= ?".into());
@@ -650,6 +655,15 @@ mod tests {
         assert_eq!(
             ids(Query {
                 sources: vec!["nas".into()],
+                ..Default::default()
+            }),
+            vec![c]
+        );
+        let s = lib.start_playback(c).unwrap();
+        lib.update_playback(s, 10.0, false).unwrap();
+        assert_eq!(
+            ids(Query {
+                watched_only: true,
                 ..Default::default()
             }),
             vec![c]

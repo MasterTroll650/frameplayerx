@@ -1,23 +1,27 @@
-//! Network and local sources: list, browse, add.
+//! Sources: the list, the browser each kind gets, adding one, PINs.
 
+use super::page::{self, Card};
 use super::theme::{self, Weight};
 use super::widgets::{self, Kind, Tip};
-use super::{Action, PinForm, SourceForm, View, fmt_date, fmt_size, fmt_time, icons};
-use crate::playback::OpenRequest;
+use super::{Action, Back, PinForm, Screen, SourceForm, SourcePage, View, icons};
 use egui::{Align, Align2, Color32, Layout, RichText, Sense, Vec2};
-use fp_core::source::EntryKind;
 use fp_sources::{Credentials, SourceConfig, SourceKind};
 
-fn kind_icon(kind: SourceKind) -> &'static str {
+pub(super) fn kind_icon(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::Local => icons::HARD_DRIVE,
         SourceKind::Http => icons::GLOBE,
         SourceKind::WebDav => icons::CLOUD,
         SourceKind::Dlna => icons::BROADCAST,
-        SourceKind::DeoVr | SourceKind::HereSphere | SourceKind::MediaBrowser => icons::DATABASE,
+        SourceKind::DeoVr | SourceKind::HereSphere => icons::VIRTUAL_REALITY,
+        SourceKind::MediaBrowser => icons::MONITOR_PLAY,
         SourceKind::Smb => icons::SHARE_NETWORK,
     }
 }
+
+/// What the headset itself holds, as the Sources list and Home name it.
+pub(super) const LOCAL_NAME: &str = "On this device";
+const LOCAL_DESC: &str = "Videos on the headset, its microSD card and USB drives";
 
 /// A page title with an optional line under it and actions on the right.
 fn page_header(
@@ -45,7 +49,7 @@ fn page_header(
 }
 
 /// A rounded square holding an icon, the leading mark of a list row.
-fn icon_tile(ui: &mut egui::Ui, icon: &str, size: f32, color: Color32) {
+pub(super) fn icon_tile(ui: &mut egui::Ui, icon: &str, size: f32, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(12), theme::SURFACE_3);
@@ -61,10 +65,70 @@ fn icon_tile(ui: &mut egui::Ui, icon: &str, size: f32, color: Color32) {
 /// A source's PIN state on the Sources page.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Lock {
-    /// No PIN (and the built-in sources, which can't have one).
+    /// No PIN (and the headset itself, which can't have one).
     None,
     Locked,
     Unlocked,
+}
+
+fn lock_of(v: &View, id: &str) -> Lock {
+    match v.settings.source_pins.contains_key(id) {
+        false => Lock::None,
+        true if v.state.unlocked_sources.contains(id) => Lock::Unlocked,
+        true => Lock::Locked,
+    }
+}
+
+/// One row of the Sources list.
+struct Row {
+    id: String,
+    name: String,
+    desc: String,
+    /// What Home's tile says under the name.
+    facts: String,
+    icon: &'static str,
+    /// The headset itself: no PIN, can't be removed.
+    builtin: bool,
+    lock: Lock,
+}
+
+/// The headset first, then the sources the user added.
+fn rows(v: &View) -> Vec<Row> {
+    let local = Row {
+        id: crate::services::LOCAL_HUB.into(),
+        name: LOCAL_NAME.into(),
+        desc: LOCAL_DESC.into(),
+        facts: "This headset, microSD and USB".into(),
+        icon: icons::HARD_DRIVES,
+        builtin: true,
+        lock: Lock::None,
+    };
+    std::iter::once(local)
+        .chain(v.services.source_configs.iter().map(|c| {
+            let lock = lock_of(v, c.id());
+            // A locked source's address can say what is in it.
+            let (desc, facts) = if lock == Lock::Locked {
+                (
+                    format!("{} · Locked with a PIN", c.kind().label()),
+                    "Locked with a PIN".to_string(),
+                )
+            } else {
+                (
+                    format!("{} · {}", c.kind().label(), c.describe()),
+                    c.kind().label().to_string(),
+                )
+            };
+            Row {
+                id: c.id().to_string(),
+                name: c.name().to_string(),
+                desc,
+                facts,
+                icon: kind_icon(c.kind()),
+                builtin: false,
+                lock,
+            }
+        }))
+        .collect()
 }
 
 pub fn sources(ui: &mut egui::Ui, v: &mut View) {
@@ -76,14 +140,14 @@ pub fn sources(ui: &mut egui::Ui, v: &mut View) {
         add_form(ui, v);
         return;
     }
-    if v.state.browse.is_some() {
+    if v.state.source.is_some() {
         browse(ui, v);
         return;
     }
     page_header(
         ui,
         "Sources",
-        Some("Browse network servers and drives. Videos you play are remembered in the library."),
+        Some("Browse the headset and your servers. What you watch is kept in Watch history."),
         |ui| {
             if widgets::button(ui, Some(icons::PLUS), "Add source", Kind::Primary).clicked() {
                 v.state.source_form = Some(SourceForm::default());
@@ -91,51 +155,10 @@ pub fn sources(ui: &mut egui::Ui, v: &mut View) {
         },
     );
     egui::ScrollArea::vertical().show(ui, |ui| {
-        let lock = |id: &str| match v.settings.source_pins.contains_key(id) {
-            false => Lock::None,
-            true if v.state.unlocked_sources.contains(id) => Lock::Unlocked,
-            true => Lock::Locked,
-        };
-        let all: Vec<(String, String, String, &'static str, bool, Lock)> =
-            crate::services::builtin_sources()
-                .iter()
-                .map(|c| {
-                    let icon = if c.id() == crate::services::REMOVABLE_SOURCE {
-                        icons::USB
-                    } else {
-                        icons::HARD_DRIVE
-                    };
-                    (
-                        c.id().to_string(),
-                        c.name().to_string(),
-                        c.describe(),
-                        icon,
-                        true,
-                        Lock::None,
-                    )
-                })
-                .chain(v.services.source_configs.iter().map(|c| {
-                    let lock = lock(c.id());
-                    // A locked source's address can say what is in it.
-                    let desc = if lock == Lock::Locked {
-                        format!("{} · Locked with a PIN", c.kind().label())
-                    } else {
-                        format!("{} · {}", c.kind().label(), c.describe())
-                    };
-                    (
-                        c.id().to_string(),
-                        c.name().to_string(),
-                        desc,
-                        kind_icon(c.kind()),
-                        false,
-                        lock,
-                    )
-                }))
-                .collect();
         widgets::section_label(ui, "On this device and your network");
         ui.add_space(4.0);
         widgets::card(ui, |ui| {
-            for (i, (id, name, desc, icon, builtin, lock)) in all.into_iter().enumerate() {
+            for (i, row) in rows(v).into_iter().enumerate() {
                 if i > 0 {
                     let x = ui.max_rect().x_range();
                     ui.painter().hline(
@@ -144,89 +167,178 @@ pub fn sources(ui: &mut egui::Ui, v: &mut View) {
                         egui::Stroke::new(1.0_f32, theme::STROKE),
                     );
                 }
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(16, 12))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 16.0;
-                            icon_tile(ui, icon, 52.0, theme::ACCENT_HOVER);
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.label(
-                                    RichText::new(&name)
-                                        .font(theme::font(Weight::SemiBold, 19.0))
-                                        .color(theme::TEXT),
-                                );
-                                ui.label(
-                                    RichText::new(&desc)
-                                        .font(theme::font(Weight::Regular, 15.0))
-                                        .color(theme::TEXT_2),
-                                );
-                            });
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if lock == Lock::Locked {
-                                    if widgets::button_sized(
-                                        ui,
-                                        Some(icons::LOCK),
-                                        "Unlock",
-                                        Kind::Secondary,
-                                        44.0,
-                                    )
-                                    .clicked()
-                                    {
-                                        v.state.pin_form = Some(PinForm {
-                                            source: id.clone(),
-                                            name: name.clone(),
-                                            ..Default::default()
-                                        });
-                                    }
-                                    return;
-                                }
-                                if !builtin
-                                    && widgets::icon_button(ui, icons::TRASH, 44.0, false)
-                                        .tip("Remove")
-                                        .clicked()
-                                {
-                                    v.actions.push(Action::RemoveSource(id.clone()));
-                                }
-                                if !builtin {
-                                    let (icon, tip) = if lock == Lock::Unlocked {
-                                        (icons::LOCK, "Lock, or change the PIN")
-                                    } else {
-                                        (icons::LOCK_OPEN, "Lock with a PIN")
-                                    };
-                                    if widgets::icon_button(ui, icon, 44.0, false)
-                                        .tip(tip)
-                                        .clicked()
-                                    {
-                                        v.state.pin_form = Some(PinForm {
-                                            source: id.clone(),
-                                            name: name.clone(),
-                                            set: true,
-                                            ..Default::default()
-                                        });
-                                    }
-                                }
-                                if widgets::button_sized(
-                                    ui,
-                                    Some(icons::FOLDER_OPEN),
-                                    "Browse",
-                                    Kind::Secondary,
-                                    44.0,
-                                )
-                                .clicked()
-                                {
-                                    v.actions.push(Action::Browse {
-                                        source: id.clone(),
-                                        location: None,
-                                    });
-                                }
-                            });
-                        });
-                    });
+                list_row(ui, v, row);
             }
         });
+    });
+}
+
+fn list_row(ui: &mut egui::Ui, v: &mut View, row: Row) {
+    let Row {
+        id,
+        name,
+        desc,
+        icon,
+        builtin,
+        lock,
+        ..
+    } = row;
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(16, 12))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 16.0;
+                icon_tile(ui, icon, 52.0, theme::ACCENT_HOVER);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(
+                        RichText::new(&name)
+                            .font(theme::font(Weight::SemiBold, 19.0))
+                            .color(theme::TEXT),
+                    );
+                    ui.label(
+                        RichText::new(&desc)
+                            .font(theme::font(Weight::Regular, 15.0))
+                            .color(theme::TEXT_2),
+                    );
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if lock == Lock::Locked {
+                        if widgets::button_sized(
+                            ui,
+                            Some(icons::LOCK),
+                            "Unlock",
+                            Kind::Secondary,
+                            44.0,
+                        )
+                        .clicked()
+                        {
+                            v.state.pin_form = Some(PinForm {
+                                source: id.clone(),
+                                name: name.clone(),
+                                ..Default::default()
+                            });
+                        }
+                        return;
+                    }
+                    if !builtin
+                        && widgets::icon_button(ui, icons::TRASH, 44.0, false)
+                            .tip("Remove (and forget its unwatched videos)")
+                            .clicked()
+                    {
+                        v.actions.push(Action::RemoveSource(id.clone()));
+                    }
+                    if !builtin {
+                        let (icon, tip) = if lock == Lock::Unlocked {
+                            (icons::LOCK, "Lock, or change the PIN")
+                        } else {
+                            (icons::LOCK_OPEN, "Lock with a PIN")
+                        };
+                        if widgets::icon_button(ui, icon, 44.0, false)
+                            .tip(tip)
+                            .clicked()
+                        {
+                            v.state.pin_form = Some(PinForm {
+                                source: id.clone(),
+                                name: name.clone(),
+                                set: true,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    if widgets::button_sized(
+                        ui,
+                        Some(icons::FOLDER_OPEN),
+                        "Browse",
+                        Kind::Secondary,
+                        44.0,
+                    )
+                    .clicked()
+                    {
+                        v.actions.push(Action::OpenSource {
+                            source: id.clone(),
+                            back_to: Screen::Sources,
+                        });
+                    }
+                });
+            });
+        });
+}
+
+/// The source being browsed, in the browser its kind gets.
+fn browse(ui: &mut egui::Ui, v: &mut View) {
+    let Some(mut sv) = v.state.source.take() else {
+        return;
+    };
+    let back = match &mut sv.page {
+        SourcePage::Folders(b) => super::folders::page(ui, v, &sv.name, b),
+        SourcePage::Local(l) => super::local::page(ui, v, l),
+        SourcePage::Jellyfin(j) => super::jellyfin::page(ui, v, &sv.source, &sv.name, j),
+        SourcePage::Feed(f) => super::feeds::page(ui, v, &sv.source, &sv.name, f),
+    };
+    if back {
+        match sv.back() {
+            Back::Done => {}
+            Back::Parent(a) => v.actions.push(*a),
+            Back::Leave => {
+                v.state.screen = sv.back_to;
+                if sv.back_to == Screen::Home {
+                    v.state.home = None;
+                }
+                return;
+            }
+        }
+    }
+    // Something on the page may have opened another source meanwhile.
+    if v.state.source.is_none() {
+        v.state.source = Some(sv);
+    }
+}
+
+/// Home's row of sources: each opens its browser, the last adds one.
+pub fn source_row(ui: &mut egui::Ui, v: &mut View, back_to: Screen) {
+    let rows = rows(v);
+    page::carousel(ui, "Sources", None, rows.len() + 1, |ui, i| {
+        let Some(row) = rows.get(i) else {
+            let c = page::card(
+                ui,
+                v.thumbs,
+                &Card {
+                    placeholder: icons::PLUS,
+                    tint: theme::ACCENT_HOVER,
+                    title: "Add a source",
+                    facts: "Jellyfin, XBVR, Stash, DLNA, SMB…",
+                    play: false,
+                    ..Card::default()
+                },
+            );
+            if c.open {
+                v.state.screen = Screen::Sources;
+                v.state.source = None;
+                v.state.source_form = Some(SourceForm::default());
+            }
+            return;
+        };
+        let c = page::card(
+            ui,
+            v.thumbs,
+            &Card {
+                placeholder: row.icon,
+                tint: theme::ACCENT_HOVER,
+                title: &row.name,
+                facts: &row.facts,
+                corner: (row.lock == Lock::Locked).then_some(icons::LOCK),
+                play: false,
+                ..Card::default()
+            },
+        );
+        if c.open {
+            v.actions.push(Action::OpenSource {
+                source: row.id.clone(),
+                back_to,
+            });
+        }
     });
 }
 
@@ -345,316 +457,6 @@ fn pin_form(ui: &mut egui::Ui, v: &mut View) {
     }
     if close {
         v.state.pin_form = None;
-    }
-}
-
-fn browse(ui: &mut egui::Ui, v: &mut View) {
-    let Some(b) = v.state.browse.as_ref() else {
-        return;
-    };
-    let source = b.source.clone();
-    let location = b.location.clone();
-    let name = v
-        .services
-        .opener
-        .source(&source)
-        .map(|s| s.name().to_string())
-        .unwrap_or_else(|| source.clone());
-    ui.add_space(12.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 12.0;
-        if widgets::icon_button(ui, icons::ARROW_LEFT, 48.0, false)
-            .tip("Back")
-            .clicked()
-        {
-            match v.state.browse.as_mut().and_then(|b| b.stack.pop()) {
-                Some(parent) => {
-                    if let Some(b) = v.state.browse.as_mut() {
-                        b.location = parent.clone();
-                        b.loading = true;
-                    }
-                    v.actions.push(Action::Browse {
-                        source: source.clone(),
-                        location: parent,
-                    });
-                }
-                None => v.state.browse = None,
-            }
-        }
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            ui.label(
-                RichText::new(&name)
-                    .font(theme::font(Weight::Bold, 26.0))
-                    .color(theme::TEXT),
-            );
-            if let Some(l) = &location {
-                ui.label(
-                    RichText::new(short_location(l))
-                        .font(theme::font(Weight::Regular, 15.0))
-                        .color(theme::TEXT_3),
-                );
-            }
-        });
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::button_sized(
-                ui,
-                Some(icons::PLUS),
-                "Add to library",
-                Kind::Secondary,
-                44.0,
-            )
-            .clicked()
-            {
-                v.actions.push(Action::ImportFolder {
-                    source: source.clone(),
-                    location: location.clone(),
-                });
-            }
-            if widgets::icon_button(ui, icons::ARROWS_CLOCKWISE, 44.0, false)
-                .tip("Refresh")
-                .clicked()
-            {
-                v.actions.push(Action::Browse {
-                    source: source.clone(),
-                    location: location.clone(),
-                });
-            }
-        });
-    });
-    ui.add_space(8.0);
-    sort_row(ui, v);
-    ui.add_space(6.0);
-    let Some(b) = v.state.browse.as_ref() else {
-        return;
-    };
-    if b.loading {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label(RichText::new("Loading…").color(theme::TEXT_2));
-        });
-    }
-    if let Some(e) = &b.error {
-        ui.label(RichText::new(format!("{}  {e}", icons::WARNING_CIRCLE)).color(theme::ERROR));
-    }
-    let entries = b.entries.clone();
-    let mut go: Option<String> = None;
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        if entries.is_empty() && !b.loading && b.error.is_none() {
-            ui.add_space(30.0);
-            ui.vertical_centered(|ui| {
-                ui.label(RichText::new("No videos or folders here.").color(theme::TEXT_2));
-            });
-        }
-        for e in &entries {
-            if e.kind == EntryKind::Other {
-                continue;
-            }
-            let (rect, resp) =
-                ui.allocate_exact_size(Vec2::new(ui.available_width(), 88.0), Sense::click());
-            let t = ui
-                .ctx()
-                .animate_bool_with_time(resp.id, resp.hovered(), 0.12);
-            let painter = ui.painter_at(rect);
-            painter.rect_filled(
-                rect,
-                egui::CornerRadius::same(14),
-                theme::SURFACE.gamma_multiply(t),
-            );
-            let thumb =
-                egui::Rect::from_min_size(rect.min + Vec2::new(10.0, 8.0), Vec2::new(128.0, 72.0));
-            match e.kind {
-                EntryKind::Directory => {
-                    painter.rect_filled(thumb, egui::CornerRadius::same(10), theme::SURFACE_2);
-                    painter.text(
-                        thumb.center(),
-                        Align2::CENTER_CENTER,
-                        icons::FOLDER_SIMPLE,
-                        theme::icon_fill(34.0),
-                        theme::WARN,
-                    );
-                }
-                _ => match e.thumbnail_url.as_deref().and_then(|u| v.thumbs.get(u)) {
-                    Some(tex) => super::thumbs::paint_cover_rounded(&painter, thumb, &tex, 10),
-                    None => {
-                        painter.rect_filled(thumb, egui::CornerRadius::same(10), theme::SURFACE_2);
-                        painter.text(
-                            thumb.center(),
-                            Align2::CENTER_CENTER,
-                            icons::FILM_STRIP,
-                            theme::icon(28.0),
-                            theme::TEXT_3,
-                        );
-                    }
-                },
-            }
-            let title = if e.kind == EntryKind::Directory {
-                e.name.clone()
-            } else {
-                widgets::display_title(&e.name)
-            };
-            painter.text(
-                thumb.right_center() + Vec2::new(18.0, -12.0),
-                Align2::LEFT_CENTER,
-                title,
-                theme::font(Weight::SemiBold, 18.0),
-                theme::TEXT,
-            );
-            let mut facts = Vec::new();
-            if e.kind == EntryKind::Directory {
-                facts.push("Folder".to_string());
-            }
-            if let Some(f) = e.format {
-                facts.push(widgets::format_short(&f));
-            }
-            if let Some(d) = e.duration {
-                facts.push(fmt_time(d));
-            }
-            if let Some(s) = e.size {
-                facts.push(fmt_size(s));
-            }
-            if let Some(t) = e.modified {
-                facts.push(fmt_date(t));
-            }
-            if !e.scripts.is_empty() {
-                facts.push("haptics".into());
-            }
-            painter.text(
-                thumb.right_center() + Vec2::new(18.0, 13.0),
-                Align2::LEFT_CENTER,
-                facts.join("  ·  "),
-                theme::font(Weight::Regular, 15.0),
-                theme::TEXT_2,
-            );
-            painter.text(
-                rect.right_center() - Vec2::new(24.0, 0.0),
-                Align2::CENTER_CENTER,
-                if e.kind == EntryKind::Directory {
-                    icons::CARET_RIGHT
-                } else {
-                    icons::PLAY
-                },
-                theme::icon(22.0),
-                theme::TEXT_3.lerp_to_gamma(Color32::WHITE, t),
-            );
-            if resp.clicked() {
-                match e.kind {
-                    EntryKind::Directory => go = Some(e.location.clone()),
-                    _ => {
-                        // Queue the folder's videos for next/previous.
-                        let videos: Vec<&fp_core::source::Entry> = entries
-                            .iter()
-                            .filter(|x| x.kind == EntryKind::Video)
-                            .collect();
-                        let pos = videos
-                            .iter()
-                            .position(|x| x.location == e.location)
-                            .unwrap_or(0);
-                        let list = videos
-                            .iter()
-                            .map(|x| OpenRequest {
-                                location: x.location.clone(),
-                                source_id: Some(source.clone()),
-                                entry: Some((*x).clone()),
-                                start_at: None,
-                            })
-                            .collect();
-                        v.actions.push(Action::OpenList(list, pos));
-                    }
-                }
-            }
-        }
-    });
-    if let Some(loc) = go {
-        if let Some(b) = v.state.browse.as_mut() {
-            b.stack.push(b.location.clone());
-            b.location = Some(loc.clone());
-            b.loading = true;
-        }
-        v.actions.push(Action::Browse {
-            source,
-            location: Some(loc),
-        });
-    }
-}
-
-/// Name / date / size order for the folder being browsed, remembered in
-/// settings, with the folder's counts on the right.
-fn sort_row(ui: &mut egui::Ui, v: &mut View) {
-    use fp_sources::EntrySort;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        ui.label(
-            RichText::new(icons::SORT_ASCENDING)
-                .font(theme::icon(20.0))
-                .color(theme::TEXT_3),
-        );
-        ui.add_space(4.0);
-        for (s, label) in [
-            (EntrySort::Name, "Name"),
-            (EntrySort::Newest, "Newest"),
-            (EntrySort::Oldest, "Oldest"),
-            (EntrySort::Largest, "Largest"),
-            (EntrySort::Smallest, "Smallest"),
-        ] {
-            let r = widgets::button_sized(ui, None, label, Kind::Ghost, 38.0);
-            if v.settings.browse_sort == s {
-                let bar = egui::Rect::from_center_size(
-                    egui::pos2(r.rect.center().x, r.rect.bottom() - 2.0),
-                    Vec2::new(r.rect.width() - 28.0, 2.5),
-                );
-                ui.painter()
-                    .rect_filled(bar, egui::CornerRadius::same(1), theme::ACCENT);
-            }
-            if r.clicked() && v.settings.browse_sort != s {
-                v.settings.browse_sort = s;
-                if let Some(b) = v.state.browse.as_mut() {
-                    fp_sources::sort_entries_by(&mut b.entries, s);
-                }
-            }
-        }
-        let Some(b) = v.state.browse.as_ref() else {
-            return;
-        };
-        let count = |k| b.entries.iter().filter(|e| e.kind == k).count();
-        let (folders, videos) = (count(EntryKind::Directory), count(EntryKind::Video));
-        let mut parts = Vec::new();
-        if folders > 0 {
-            parts.push(format!(
-                "{folders} folder{}",
-                if folders == 1 { "" } else { "s" }
-            ));
-        }
-        if videos > 0 {
-            parts.push(format!(
-                "{videos} video{}",
-                if videos == 1 { "" } else { "s" }
-            ));
-        }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(
-                RichText::new(parts.join("  ·  "))
-                    .font(theme::font(Weight::Medium, 15.0))
-                    .color(theme::TEXT_3),
-            );
-        });
-    });
-}
-
-fn short_location(l: &str) -> String {
-    let l = l.split('#').next().unwrap_or(l);
-    if l.chars().count() > 60 {
-        let tail: String = l
-            .chars()
-            .rev()
-            .take(57)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        format!("…{tail}")
-    } else {
-        l.to_string()
     }
 }
 
