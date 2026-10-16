@@ -76,6 +76,11 @@ impl VideoPlanes {
                     "DrmPrime frame missing DRM buffer descriptor".into(),
                 ));
             };
+            if !gpu.dmabuf_supported {
+                return Err(crate::Error::Unsupported(
+                    "GPU does not support required DMA-BUF extensions".into(),
+                ));
+            }
             if let Some(mut old) = slot.take() {
                 garbage.append(&mut old.images);
                 old.staging.destroy(gpu);

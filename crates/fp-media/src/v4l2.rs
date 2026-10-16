@@ -1243,28 +1243,15 @@ mod linux {
             })
         }
 
-        /// Desired capture format.
-        /// Supports environment override FRAMEPLAYER_V4L2_FMT=XXXX (e.g. P010 or Q10C or NV12).
+        /// Desired capture format: NV12 for 8-bit, P010 for 10-bit.
+        /// Supports environment override FRAMEPLAYER_V4L2_FMT=XXXX (e.g. Q10C or QC08).
         fn capture_format(&self) -> u32 {
             if let Ok(f) = std::env::var("FRAMEPLAYER_V4L2_FMT")
                 && let Ok(bytes) = <[u8; 4]>::try_from(f.as_bytes())
             {
                 return fourcc(&bytes);
             }
-            let cap_fmts = formats(&self.fd, BUF_TYPE_CAPTURE_MPLANE);
-            if self.ten_bit {
-                if cap_fmts.contains(&Q10C) {
-                    Q10C
-                } else if cap_fmts.contains(&P010) {
-                    P010
-                } else {
-                    NV12
-                }
-            } else if cap_fmts.contains(&QC08) {
-                QC08
-            } else {
-                NV12
-            }
+            if self.ten_bit { P010 } else { NV12 }
         }
 
         /// First source change: choose format, allocate, map and queue CAPTURE.
@@ -1455,7 +1442,8 @@ mod linux {
                 return Err(Error::Unsupported("V4L2: no capture buffers".into()));
             };
             let l = cap.layout;
-            if let Some(exp_fd) = cap.export_fds.get(index as usize) {
+            let use_dmabuf = std::env::var("FRAMEPLAYER_V4L2_DMABUF").as_deref() == Ok("1");
+            if use_dmabuf && let Some(exp_fd) = cap.export_fds.get(index as usize) {
                 // SAFETY: dup creates a new file descriptor pointing to the same open file.
                 let dup_fd = unsafe { libc::dup(exp_fd.as_raw_fd()) };
                 if dup_fd < 0 {
