@@ -595,7 +595,17 @@ fn falling_behind(stalls: u64, dropped: u64, shown: u64) -> bool {
 
 /// Whether the Frame's hardware decoder takes this stream.
 fn has_hardware_decoder(v: &StreamInfo) -> bool {
-    matches!(v.codec.as_str(), "hevc" | "h264" | "vp9") && v.bit_depth <= 8 && v.chroma() == "4:2:0"
+    let codec = v.codec.as_str();
+    let bit_depth = v.bit_depth;
+    let chroma = v.chroma();
+    if chroma != "4:2:0" {
+        return false;
+    }
+    match codec {
+        "hevc" => bit_depth <= 10,
+        "h264" | "vp9" => bit_depth <= 8,
+        _ => false,
+    }
 }
 
 /// Why a software-decoded video stutters, and what plays smoothly instead.
@@ -746,11 +756,15 @@ mod tests {
             channels: 0,
             ambisonic: false,
         };
-        let n = slow_decode_notice(&stream("hevc", 10), true, None);
+        let n = slow_decode_notice(&stream("av1", 10), true, None);
         assert!(
-            n.contains("10-bit HEVC") && n.contains("8-bit 4:2:0 H.265"),
+            n.contains("10-bit AV1") && n.contains("8-bit 4:2:0 H.265"),
             "{n}"
         );
+        let n = slow_decode_notice(&stream("hevc", 10), false, None);
+        assert!(n.contains("turn on hardware decoding"), "{n}");
+        let n = slow_decode_notice(&stream("hevc", 10), true, None);
+        assert!(n.contains("busy"), "{n}");
         let n = slow_decode_notice(&stream("av1", 8), true, None);
         assert!(n.contains("for AV1,"), "{n}");
         let busy = "V4L2 REQBUFS: Cannot allocate memory (os error 12)";

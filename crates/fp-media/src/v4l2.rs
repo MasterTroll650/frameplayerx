@@ -80,9 +80,15 @@ impl Codec {
     /// Frame needs. Generated with
     /// `ffmpeg -f lavfi -i color=c=black:s=8192x4080:r=1 -frames:v 1
     /// -pix_fmt yuv420p -c:v libx265 -profile:v main -x265-params info=0 -f hevc`.
-    pub(crate) fn primer(self) -> Option<(&'static [u8], (u32, u32))> {
+    /// The 10-bit one (`yuv420p10le`, `main10`) sets the decoder up for a
+    /// 10-bit stream, whose buffers differ from 8-bit ones.
+    pub(crate) fn primer(self, ten_bit: bool) -> Option<(&'static [u8], (u32, u32))> {
         match self {
             Codec::H264 => None,
+            Codec::Hevc if ten_bit => Some((
+                include_bytes!("../assets/primer_8192x4080_10bit.hevc"),
+                (8192, 4080),
+            )),
             Codec::Hevc => Some((
                 include_bytes!("../assets/primer_8192x4080.hevc"),
                 (8192, 4080),
@@ -781,26 +787,20 @@ mod linux {
         Ok(unsafe { OwnedFd::from_raw_fd(exp.fd) })
     }
 
-    /// Whether `fd` is a multi-planar M2M decoder for `codec` with NV12/Q10C out.
-    fn suitable(fd: &OwnedFd, codec: Codec, ten_bit: bool) -> bool {
+    /// Whether `fd` is a multi-planar M2M decoder for `codec` with NV12 out.
+    fn suitable(fd: &OwnedFd, codec: Codec) -> bool {
         let Some(caps) = query_caps(fd) else {
             return false;
-        };
-        let cap_fmts = formats(fd, BUF_TYPE_CAPTURE_MPLANE);
-        let cap_ok = if ten_bit {
-            cap_fmts.contains(&Q10C) || cap_fmts.contains(&P010)
-        } else {
-            cap_fmts.contains(&NV12) || cap_fmts.contains(&QC08)
         };
         caps & CAP_VIDEO_M2M_MPLANE != 0
             && caps & CAP_STREAMING != 0
             && formats(fd, BUF_TYPE_OUTPUT_MPLANE).contains(&codec.fourcc())
-            && cap_ok
+            && formats(fd, BUF_TYPE_CAPTURE_MPLANE).contains(&NV12)
     }
 
     /// `/dev/video-dec0` (the Frame's decoder), else the first `/dev/video*`
     /// M2M device decoding `codec`. `FRAMEPLAYER_V4L2_DEVICE` overrides.
-    fn find_device(codec: Codec, ten_bit: bool) -> Result<(String, OwnedFd)> {
+    fn find_device(codec: Codec) -> Result<(String, OwnedFd)> {
         let mut paths: Vec<String> = Vec::new();
         if let Ok(p) = std::env::var("FRAMEPLAYER_V4L2_DEVICE") {
             paths.push(p);
@@ -822,18 +822,13 @@ mod linux {
         }
         for p in paths {
             if let Ok(fd) = open_node(&p)
-                && suitable(&fd, codec, ten_bit)
+                && suitable(&fd, codec)
             {
                 return Ok((p, fd));
             }
         }
         Err(Error::Unsupported(format!(
-            "no V4L2 decoder for {codec:?} with {} output",
-            if ten_bit {
-                "10-bit (Q10C/P010)"
-            } else {
-                "8-bit (NV12/QC08)"
-            }
+            "no V4L2 decoder for {codec:?} with NV12 output"
         )))
     }
 
@@ -874,7 +869,7 @@ mod linux {
                 ));
             }
             let stream_size = (p.width as u32, p.height as u32);
-            let (device, fd) = find_device(codec, ten_bit)?;
+            let (device, fd) = find_device(codec)?;
             let mut dec = V4l2Decoder {
                 out_bufs: Vec::new(),
                 cap: None,
@@ -916,7 +911,7 @@ mod linux {
             let mut t = BUF_TYPE_OUTPUT_MPLANE as i32;
             ioctl(&dec.fd, VIDIOC_STREAMON, &mut t).map_err(|e| err("STREAMON output", e))?;
             if dec.primed
-                && let Some((primer, _)) = codec.primer()
+                && let Some((primer, _)) = codec.primer(ten_bit)
             {
                 dec.queue_bitstream(primer, 0)?;
             }
@@ -995,7 +990,7 @@ mod linux {
                     // and open CAPTURE through the primer, if one fits.
                     let Some((_, primer)) = self
                         .codec
-                        .primer()
+                        .primer(self.ten_bit)
                         .filter(|(_, size)| primer_matches((w, h), *size))
                     else {
                         return Err(err("REQBUFS output", e));
@@ -1248,17 +1243,34 @@ mod linux {
             })
         }
 
-        /// First source change: choose format, allocate, map and queue CAPTURE.
-        fn setup_capture(&mut self) -> Result<()> {
-            let mut f = self.g_fmt_capture()?;
+        /// Desired capture format.
+        /// Supports environment override FRAMEPLAYER_V4L2_FMT=XXXX (e.g. P010 or Q10C or NV12).
+        fn capture_format(&self) -> u32 {
+            if let Ok(f) = std::env::var("FRAMEPLAYER_V4L2_FMT")
+                && let Ok(bytes) = <[u8; 4]>::try_from(f.as_bytes())
+            {
+                return fourcc(&bytes);
+            }
             let cap_fmts = formats(&self.fd, BUF_TYPE_CAPTURE_MPLANE);
-            let target_fmt = if self.ten_bit {
-                if cap_fmts.contains(&Q10C) { Q10C } else { P010 }
+            if self.ten_bit {
+                if cap_fmts.contains(&Q10C) {
+                    Q10C
+                } else if cap_fmts.contains(&P010) {
+                    P010
+                } else {
+                    NV12
+                }
             } else if cap_fmts.contains(&QC08) {
                 QC08
             } else {
                 NV12
-            };
+            }
+        }
+
+        /// First source change: choose format, allocate, map and queue CAPTURE.
+        fn setup_capture(&mut self) -> Result<()> {
+            let mut f = self.g_fmt_capture()?;
+            let target_fmt = self.capture_format();
             if f.pixelformat() != target_fmt {
                 f.set_pixelformat(target_fmt);
                 ioctl(&self.fd, VIDIOC_S_FMT, &mut f).map_err(|e| err("S_FMT capture", e))?;
@@ -1372,7 +1384,13 @@ mod linux {
         /// they fit (no admission check), else reallocate.
         fn change_resolution(&mut self) -> Result<()> {
             self.drc_pending = false;
-            let f = self.g_fmt_capture()?;
+            let mut f = self.g_fmt_capture()?;
+            let want = self.capture_format();
+            if f.pixelformat() != want {
+                f.set_pixelformat(want);
+                ioctl(&self.fd, VIDIOC_S_FMT, &mut f).map_err(|e| err("S_FMT capture", e))?;
+                f = self.g_fmt_capture()?;
+            }
             let min = self.min_capture_buffers();
             let (allocated_for, count, smallest) = self
                 .cap
@@ -1518,7 +1536,11 @@ mod linux {
                 f.data[1] = dst.add(y_len);
                 f.linesize[0] = l.stride as i32;
                 f.linesize[1] = l.stride as i32;
-                f.format = ff::AV_PIX_FMT_NV12;
+                f.format = if self.ten_bit {
+                    ff::AV_PIX_FMT_P010LE
+                } else {
+                    ff::AV_PIX_FMT_NV12
+                };
                 f.width = l.width as i32;
                 f.height = l.height as i32;
                 f.pts = pts;
@@ -1760,7 +1782,7 @@ mod tests {
 
     #[test]
     fn primer_only_for_streams_with_its_buffers() {
-        let primer = Codec::Hevc.primer().unwrap().1;
+        let primer = Codec::Hevc.primer(false).unwrap().1;
         assert_eq!(primer, (8192, 4080));
         assert!(primer_matches((8192, 4096), primer));
         assert!(primer_matches((8192, 4088), primer));
@@ -1771,7 +1793,8 @@ mod tests {
         assert!(!primer_matches((8192, 4320), primer));
         assert!(!primer_matches((7680, 4096), primer));
         assert!(!primer_matches((8192, 8192), primer));
-        assert!(Codec::H264.primer().is_none());
+        assert!(Codec::H264.primer(false).is_none());
+        assert!(Codec::H264.primer(true).is_none());
     }
 
     #[test]
@@ -1817,16 +1840,20 @@ mod tests {
 
     #[test]
     fn primers_match_their_codecs() {
-        let (h, _) = Codec::Hevc.primer().unwrap();
-        assert!(h.starts_with(&[0, 0, 0, 1, 0x40, 0x01]), "HEVC VPS first");
-        // VPS, SPS, PPS, one IDR slice; no SEI.
-        let nal_types: Vec<u8> = h
-            .windows(4)
-            .filter(|w| w[..3] == [0, 0, 1])
-            .map(|w| (w[3] >> 1) & 0x3f)
-            .collect();
-        assert_eq!(nal_types, [32, 33, 34, 20]);
-        assert!(h.len() < 16 * 1024);
+        for ten_bit in [false, true] {
+            let (h, size) = Codec::Hevc.primer(ten_bit).unwrap();
+            assert_eq!(size, (8192, 4080));
+            assert!(h.starts_with(&[0, 0, 0, 1, 0x40, 0x01]), "HEVC VPS first");
+            // VPS, SPS, PPS, one IDR slice; no SEI.
+            let nal_types: Vec<u8> = h
+                .windows(4)
+                .filter(|w| w[..3] == [0, 0, 1])
+                .map(|w| (w[3] >> 1) & 0x3f)
+                .collect();
+            assert_eq!(nal_types, [32, 33, 34, 20]);
+            assert!(h.len() < 16 * 1024);
+        }
+        assert_ne!(Codec::Hevc.primer(false), Codec::Hevc.primer(true));
         assert_eq!(Codec::Hevc.fourcc(), fourcc(b"HEVC"));
         assert_eq!(macroblocks(8192, 4096), 131_072);
         assert_eq!(macroblocks(1920, 1080), 120 * 68);

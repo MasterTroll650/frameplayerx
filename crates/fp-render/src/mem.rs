@@ -251,6 +251,12 @@ impl Image {
                 "invalid or already consumed dma-buf fd".into(),
             ));
         }
+        for plane in &drm_desc.planes[1..] {
+            let pfd = plane.fd.load(std::sync::atomic::Ordering::SeqCst);
+            if pfd == raw_fd {
+                plane.fd.store(-1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
 
         // 6. Import memory via VkImportMemoryFdInfoKHR
         #[cfg(target_os = "linux")]
