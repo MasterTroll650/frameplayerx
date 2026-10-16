@@ -392,11 +392,7 @@ impl Library {
         }
 
         // 3. Compare with the database and write changes.
-        let prefix = format!(
-            "{}{}",
-            path_string(&root).trim_end_matches(['/', '\\']),
-            std::path::MAIN_SEPARATOR
-        );
+        let prefix = format!("{}/", path_string(&root).trim_end_matches('/'));
         let known: HashMap<String, Known> = self.with(|c| {
             let mut stmt = c.prepare(
                 "SELECT location, source_id, size, mtime, missing, scripts, subtitles FROM media
@@ -481,7 +477,7 @@ impl Library {
                 loc == u
                     || loc
                         .strip_prefix(u.as_str())
-                        .is_some_and(|r| r.starts_with('/') || r.starts_with('\\'))
+                        .is_some_and(|r| r.starts_with('/'))
             })
         };
         let gone: Vec<&String> = known
@@ -592,20 +588,10 @@ mod tests {
         touch(&root.join("scene_180_lr.en.srt"), b"1");
         touch(&root.join("Scene_180_LR_es.vtt"), b"1");
         touch(&root.join("notes.txt"), b"x");
-        touch(
-            &root.join("sub").join("deeper").join("Trip_360.MKV"),
-            b"video2",
-        );
-        touch(&root.join("sub").join("Other.mp4"), b"video3");
-        touch(&root.join(".hidden").join("secret.mp4"), b"no");
-        touch(
-            &root
-                .join("steamapps")
-                .join("common")
-                .join("Game")
-                .join("intro.mp4"),
-            b"no",
-        );
+        touch(&root.join("sub/deeper/Trip_360.MKV"), b"video2");
+        touch(&root.join("sub/Other.mp4"), b"video3");
+        touch(&root.join(".hidden/secret.mp4"), b"no");
+        touch(&root.join("steamapps/common/Game/intro.mp4"), b"no");
         touch(&root.join("._Scene_180_LR.mp4"), b"appledouble");
         let interactive = tmp.path().join("Interactive");
         touch(&interactive.join("Other.funscript"), b"{}");
@@ -659,7 +645,7 @@ mod tests {
         assert!(scene.mtime.is_some());
 
         let other = lib
-            .get_by_location(&loc(&root.join("sub").join("Other.mp4")))
+            .get_by_location(&loc(&root.join("sub/Other.mp4")))
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -670,7 +656,7 @@ mod tests {
             ]
         );
         let trip = lib
-            .get_by_location(&loc(&root.join("sub").join("deeper").join("Trip_360.MKV")))
+            .get_by_location(&loc(&root.join("sub/deeper/Trip_360.MKV")))
             .unwrap()
             .unwrap();
         assert!(trip.scripts.is_empty());
@@ -683,17 +669,14 @@ mod tests {
         let root = tmp.path().join("media");
         touch(&root.join("a.mp4"), b"aaaa");
         touch(&root.join("b.mp4"), b"bbbb");
-        touch(&root.join("dir").join("c.mp4"), b"cccc");
+        touch(&root.join("dir/c.mp4"), b"cccc");
         let lib = Library::open_in_memory().unwrap();
         let o = opts(None);
         let r1 = lib.scan_folder(&root, "local", &o, |_| {}).unwrap();
         assert_eq!(r1.added, 3);
 
-        let loc = |p: &Path| p.to_str().unwrap().to_string();
-        let b = lib
-            .get_by_location(&loc(&root.join("b.mp4")))
-            .unwrap()
-            .unwrap();
+        let loc = |n: &str| root.join(n).to_str().unwrap().to_string();
+        let b = lib.get_by_location(&loc("b.mp4")).unwrap().unwrap();
         lib.set_rating(b.id, 4).unwrap();
         lib.set_tags(b.id, &["keep"]).unwrap();
 
@@ -706,7 +689,7 @@ mod tests {
 
         // Modify a, add a script to c, remove b, add d.
         touch(&root.join("a.mp4"), b"aaaaaaaa");
-        touch(&root.join("dir").join("c.funscript"), b"{}");
+        touch(&root.join("dir/c.funscript"), b"{}");
         fs::remove_file(root.join("b.mp4")).unwrap();
         touch(&root.join("d.webm"), b"d");
         let r3 = lib.scan_folder(&root, "local", &o, |_| {}).unwrap();
@@ -714,15 +697,9 @@ mod tests {
             (r3.added, r3.updated, r3.unchanged, r3.missing),
             (1, 2, 0, 1)
         );
-        let a = lib
-            .get_by_location(&loc(&root.join("a.mp4")))
-            .unwrap()
-            .unwrap();
+        let a = lib.get_by_location(&loc("a.mp4")).unwrap().unwrap();
         assert_eq!(a.size, Some(8));
-        let c = lib
-            .get_by_location(&loc(&root.join("dir").join("c.mp4")))
-            .unwrap()
-            .unwrap();
+        let c = lib.get_by_location(&loc("dir/c.mp4")).unwrap().unwrap();
         assert_eq!(c.scripts.len(), 1);
         let b2 = lib.get(b.id).unwrap().unwrap();
         assert!(b2.missing);
@@ -744,7 +721,7 @@ mod tests {
         // Rows of other sources or outside the root are left alone.
         lib.upsert(&MediaUpsert::new("/elsewhere/x.mp4", "local"))
             .unwrap();
-        lib.upsert(&MediaUpsert::new(loc(&root.join("foreign.mp4")), "nas"))
+        lib.upsert(&MediaUpsert::new(loc("foreign.mp4"), "nas"))
             .unwrap();
         let r6 = lib.scan_folder(&root, "local", &o, |_| {}).unwrap();
         assert_eq!(r6.missing, 0);
@@ -769,7 +746,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("m");
         touch(&root.join("a.mp4"), b"a");
-        touch(&root.join("ab").join("b.mp4"), b"b");
+        touch(&root.join("ab/b.mp4"), b"b");
         let lib = Library::open_in_memory().unwrap();
         lib.scan_folder(&root, "local", &opts(None), |_| {})
             .unwrap();

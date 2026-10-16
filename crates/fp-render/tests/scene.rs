@@ -3,6 +3,7 @@
 
 use fp_core::format::{Projection, StereoLayout, VideoFormat};
 use fp_core::view::ViewSettings;
+use fp_media::PixelLayout;
 use fp_render::capture::OffscreenEyes;
 use fp_render::math::{Fov, projection, view};
 use fp_render::{EyeView, Gpu, QuadDraw, QuadTexture, Renderer, VideoParams};
@@ -335,6 +336,76 @@ fn brightness_and_saturation_controls() {
         "brighter {cb:?} vs {ca:?}"
     );
     assert!(cm[0].abs_diff(cm[2]) <= 2, "desaturated {cm:?}");
+    e.destroy(&r);
+}
+
+#[test]
+fn every_upload_layout_renders_like_i420() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    let p = params(
+        Projection::EQUIRECT_360,
+        StereoLayout::Mono,
+        ViewSettings::default(),
+    );
+    // 200 pixels wide: every layout's rows get padded, so a stride or plane
+    // offset taken wrong shows up as well as a wrong matrix.
+    let (w, h) = (200u32, 100u32);
+    type Paint<'a> = &'a dyn Fn(u32, u32) -> [u8; 3];
+    let mut draw = |paint: Paint, layout, full_range| {
+        let rgba: Vec<u8> = (0..w * h)
+            .flat_map(|i| {
+                let [r, g, b] = paint(i % w, i / w);
+                [r, g, b, 255]
+            })
+            .collect();
+        let f = fp_media::VideoFrame::from_rgba_as(w, h, &rgba, layout, full_range).expect("frame");
+        let [l, _] = render(&mut r, &mut e, Some(&Arc::new(f)), &p, &[]);
+        l
+    };
+    let layouts = [
+        PixelLayout::I420 { bits: 10 },
+        PixelLayout::Nv12,
+        PixelLayout::P010,
+    ];
+    let solid = |c: [u8; 3]| move |_: u32, _: u32| c;
+    let gradient = |x: u32, y: u32| {
+        let (r, g) = ((x * 255 / w) as u8, (y * 255 / h) as u8);
+        [r, g, 255 - r]
+    };
+    let paints: [(&str, Paint); 5] = [
+        ("red", &solid([230, 20, 20])),
+        ("green", &solid([20, 200, 40])),
+        ("blue", &solid([30, 40, 220])),
+        ("grey", &solid([100, 120, 140])),
+        ("gradient", &gradient),
+    ];
+    for (name, paint) in paints {
+        let want = draw(paint, PixelLayout::I420 { bits: 8 }, true);
+        for layout in layouts {
+            for full_range in [true, false] {
+                // Quantisation and swscale's 10-bit chroma filtering move
+                // gradients by a few levels; a wrong stride, plane offset or
+                // matrix moves them by tens.
+                let got = draw(paint, layout, full_range);
+                let (worst, at) = got
+                    .iter()
+                    .zip(&want)
+                    .enumerate()
+                    .map(|(i, (g, w))| (g.abs_diff(*w), i / 4))
+                    .max()
+                    .unwrap();
+                assert!(
+                    worst <= 6,
+                    "{name} as {layout:?} full_range={full_range}: off by {worst} at pixel \
+                     {at}: {:?}, I420 gives {:?}",
+                    &got[at * 4..at * 4 + 3],
+                    &want[at * 4..at * 4 + 3]
+                );
+            }
+        }
+    }
     e.destroy(&r);
 }
 

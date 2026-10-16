@@ -59,6 +59,11 @@ impl VideoPlanes {
         frame: &VideoFrame,
         garbage: &mut Vec<Image>,
     ) -> Result<bool> {
+        let Some(formats) = plane_formats(frame.layout) else {
+            return Err(crate::Error::Unsupported(
+                "unsupported frame layout for upload".into(),
+            ));
+        };
         if frame.width == 0 || frame.height == 0 {
             return Ok(false);
         }
@@ -68,66 +73,6 @@ impl VideoPlanes {
         {
             return Ok(false);
         }
-
-        // Zero-copy DRM DMA-BUF import path
-        if frame.layout == PixelLayout::DrmPrime {
-            let Some(drm_desc) = &frame.drm_desc else {
-                return Err(crate::Error::Unsupported(
-                    "DrmPrime frame missing DRM buffer descriptor".into(),
-                ));
-            };
-            if !gpu.dmabuf_supported {
-                return Err(crate::Error::Unsupported(
-                    "GPU does not support required DMA-BUF extensions".into(),
-                ));
-            }
-            if let Some(mut old) = slot.take() {
-                garbage.append(&mut old.images);
-                old.staging.destroy(gpu);
-            }
-            let img = Image::from_drm_dma_buf(gpu, frame.width, frame.height, drm_desc)?;
-            // Transition plane images from UNDEFINED to SHADER_READ_ONLY_OPTIMAL
-            mem::barrier(
-                gpu,
-                cmd,
-                img.image,
-                mem::range(0, 1),
-                vk::ImageLayout::UNDEFINED,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                mem::TOP,
-                mem::SHADER_READ,
-            );
-            let dummy_staging = Buffer::new(
-                gpu,
-                16,
-                vk::BufferUsageFlags::TRANSFER_SRC,
-                MemoryLocation::CpuToGpu,
-                "video staging dummy",
-            )?;
-            let bits = match drm_desc.drm_fourcc {
-                fp_media::DRM_FORMAT_Q10C | fp_media::DRM_FORMAT_P010 => 10,
-                _ => 8,
-            };
-            *slot = Some(VideoPlanes {
-                images: vec![img],
-                desc: FrameDesc {
-                    width: frame.width,
-                    height: frame.height,
-                    layout: frame.layout,
-                    color: frame.color,
-                    bits,
-                },
-                key: Some(frame_key(frame)),
-                staging: dummy_staging,
-            });
-            return Ok(true);
-        }
-
-        let Some(formats) = plane_formats(frame.layout) else {
-            return Err(crate::Error::Unsupported(
-                "unsupported frame layout for upload".into(),
-            ));
-        };
         let planes = frame.planes();
         if planes.is_empty() {
             return Ok(false);
@@ -167,12 +112,6 @@ impl VideoPlanes {
                 MemoryLocation::CpuToGpu,
                 "video staging",
             )?;
-            let bits = match frame.layout {
-                PixelLayout::I420 { bits } => bits,
-                PixelLayout::Nv12 => 8,
-                PixelLayout::P010 => 10,
-                PixelLayout::DrmPrime => 8,
-            };
             *slot = Some(VideoPlanes {
                 images,
                 desc: FrameDesc {
@@ -180,7 +119,6 @@ impl VideoPlanes {
                     height: frame.height,
                     layout: frame.layout,
                     color: frame.color,
-                    bits,
                 },
                 key: None,
                 staging,

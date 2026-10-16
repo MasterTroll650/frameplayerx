@@ -1,3 +1,5 @@
+# Normalise line endings in the repository; Git detects binaries.
+* text=auto
 # Patches and shell scripts must keep LF endings (git apply / bash on Linux).
 *.patch -text
 *.sh text eol=lf

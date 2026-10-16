@@ -18,53 +18,6 @@ pub enum PixelLayout {
     DrmPrime,
 }
 
-pub const DRM_FORMAT_MOD_VENDOR_QCOM: u64 = 0x05;
-pub const DRM_FORMAT_MOD_QCOM_COMPRESSED: u64 = (DRM_FORMAT_MOD_VENDOR_QCOM << 56) | 1;
-pub const DRM_FORMAT_MOD_LINEAR: u64 = 0;
-
-pub const DRM_FORMAT_NV12: u32 = fourcc(b"NV12");
-pub const DRM_FORMAT_P010: u32 = fourcc(b"P010");
-pub const DRM_FORMAT_Q10C: u32 = fourcc(b"Q10C");
-pub const DRM_FORMAT_QC08: u32 = fourcc(b"QC08");
-
-pub const fn fourcc(c: &[u8; 4]) -> u32 {
-    (c[0] as u32) | ((c[1] as u32) << 8) | ((c[2] as u32) << 16) | ((c[3] as u32) << 24)
-}
-
-/// Single plane description for a DRM buffer.
-#[derive(Debug)]
-pub struct DrmPlaneDesc {
-    /// File descriptor of the dma-buf.
-    pub fd: std::sync::atomic::AtomicI32,
-    /// Offset in bytes from buffer start.
-    pub offset: u64,
-    /// Row stride in bytes.
-    pub stride: u32,
-}
-
-impl DrmPlaneDesc {
-    pub fn new(fd: i32, offset: u64, stride: u32) -> Self {
-        Self {
-            fd: std::sync::atomic::AtomicI32::new(fd),
-            offset,
-            stride,
-        }
-    }
-}
-
-/// Description of exported DMA-BUF memory for zero-copy GPU import.
-#[derive(Debug)]
-pub struct DrmBufferDesc {
-    /// DRM format modifier (e.g. DRM_FORMAT_MOD_QCOM_COMPRESSED or DRM_FORMAT_MOD_LINEAR).
-    pub modifier: u64,
-    /// DRM pixel format FourCC code (e.g. DRM_FORMAT_NV12 or DRM_FORMAT_Q10C).
-    pub drm_fourcc: u32,
-    /// Planes (e.g. Y and UV planes for bi-planar formats).
-    pub planes: Vec<DrmPlaneDesc>,
-    /// Total buffer size in bytes.
-    pub size: u64,
-}
-
 impl PixelLayout {
     pub fn bytes_per_sample(&self) -> u32 {
         match self {
@@ -118,8 +71,6 @@ pub struct VideoFrame {
     /// Unique per decoded frame in this process, for upload caching.
     pub id: u64,
     frame: *mut ff::AVFrame,
-    /// DMA-BUF descriptors for zero-copy GPU import.
-    pub drm_desc: Option<DrmBufferDesc>,
 }
 
 static NEXT_FRAME_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -135,22 +86,8 @@ unsafe impl Sync for VideoFrame {}
 
 impl Drop for VideoFrame {
     fn drop(&mut self) {
-        if !self.frame.is_null() {
-            // SAFETY: we own this reference.
-            unsafe { ff::av_frame_free(&mut self.frame) };
-        }
-        #[cfg(target_os = "linux")]
-        if let Some(desc) = &self.drm_desc {
-            let mut closed = Vec::new();
-            for plane in &desc.planes {
-                let fd = plane.fd.swap(-1, std::sync::atomic::Ordering::SeqCst);
-                if fd >= 0 && !closed.contains(&fd) {
-                    closed.push(fd);
-                    // SAFETY: valid unimported descriptor owned by this frame.
-                    unsafe { libc::close(fd) };
-                }
-            }
-        }
+        // SAFETY: we own this reference.
+        unsafe { ff::av_frame_free(&mut self.frame) };
     }
 }
 
@@ -222,11 +159,35 @@ impl VideoFrame {
     /// Builds a frame from tightly packed RGBA pixels (photos decoded in Rust,
     /// test images). Converted to full-range BT.709 I420.
     pub fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<VideoFrame> {
+        Self::from_rgba_as(width, height, rgba, PixelLayout::I420 { bits: 8 }, true)
+    }
+
+    /// Like [`VideoFrame::from_rgba`], converted to BT.709 in `layout` (any
+    /// but `DrmPrime`), full or limited range: frames shaped like the hardware
+    /// decoders' (NV12, P010) for tests.
+    pub fn from_rgba_as(
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        layout: PixelLayout,
+        full_range: bool,
+    ) -> Result<VideoFrame> {
         if width == 0 || height == 0 || rgba.len() < (width * height * 4) as usize {
             return Err(Error::Unsupported(
                 "RGBA buffer does not match its size".into(),
             ));
         }
+        let format = match layout {
+            PixelLayout::I420 { bits: 8 } => ff::AV_PIX_FMT_YUV420P,
+            PixelLayout::I420 { bits: 10 } => ff::AV_PIX_FMT_YUV420P10LE,
+            PixelLayout::Nv12 => ff::AV_PIX_FMT_NV12,
+            PixelLayout::P010 => ff::AV_PIX_FMT_P010LE,
+            _ => {
+                return Err(Error::Unsupported(format!(
+                    "no RGBA conversion to {layout:?}"
+                )));
+            }
+        };
         let (w, h) = (width as i32, height as i32);
         // SAFETY: a fresh frame is allocated with av_frame_get_buffer and
         // filled by swscale from the caller's buffer, which holds w*h*4 bytes.
@@ -237,7 +198,7 @@ impl VideoFrame {
                 ff::AV_PIX_FMT_RGBA,
                 w,
                 h,
-                ff::AV_PIX_FMT_YUV420P,
+                format,
                 (ff::SWS_BICUBIC | ff::SWS_ACCURATE_RND | ff::SWS_FULL_CHR_H_INP) as i32,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -247,13 +208,26 @@ impl VideoFrame {
                 return Err(Error::Unsupported("swscale RGBA -> YUV".into()));
             }
             let coeffs = ff::sws_getCoefficients(ff::SWS_CS_ITU709 as i32);
-            ff::sws_setColorspaceDetails(ctx, coeffs, 1, coeffs, 1, 0, 1 << 16, 1 << 16);
+            ff::sws_setColorspaceDetails(
+                ctx,
+                coeffs,
+                1,
+                coeffs,
+                full_range as i32,
+                0,
+                1 << 16,
+                1 << 16,
+            );
             let mut dst = ff::av_frame_alloc();
-            (*dst).format = ff::AV_PIX_FMT_YUV420P;
+            (*dst).format = format;
             (*dst).width = w;
             (*dst).height = h;
             (*dst).colorspace = ff::AVCOL_SPC_BT709;
-            (*dst).color_range = ff::AVCOL_RANGE_JPEG;
+            (*dst).color_range = if full_range {
+                ff::AVCOL_RANGE_JPEG
+            } else {
+                ff::AVCOL_RANGE_MPEG
+            };
             (*dst).color_trc = ff::AVCOL_TRC_BT709;
             (*dst).color_primaries = ff::AVCOL_PRI_BT709;
             if ff::av_frame_get_buffer(dst, 0) < 0 {
@@ -284,43 +258,18 @@ impl VideoFrame {
                 duration: 0.0,
                 width,
                 height,
-                layout: PixelLayout::I420 { bits: 8 },
+                layout,
                 color,
                 serial: 0,
                 id: next_id(),
                 frame: dst,
-                drm_desc: None,
             })
-        }
-    }
-
-    /// Creates a zero-copy frame backed by DRM DMA-BUFs.
-    pub fn from_drm(
-        width: u32,
-        height: u32,
-        color: ColorInfo,
-        pts: f64,
-        duration: f64,
-        serial: u64,
-        drm_desc: DrmBufferDesc,
-    ) -> VideoFrame {
-        VideoFrame {
-            pts,
-            duration,
-            width,
-            height,
-            layout: PixelLayout::DrmPrime,
-            color,
-            serial,
-            id: next_id(),
-            frame: std::ptr::null_mut(),
-            drm_desc: Some(drm_desc),
         }
     }
 
     /// DMA-BUF description for zero-copy import, when the layout is DrmPrime.
     pub fn drm_descriptor(&self) -> Option<&ff::AVDRMFrameDescriptor> {
-        if self.layout != PixelLayout::DrmPrime || self.frame.is_null() {
+        if self.layout != PixelLayout::DrmPrime {
             return None;
         }
         // SAFETY: for DRM_PRIME frames data[0] points at the descriptor.
@@ -416,11 +365,10 @@ impl FrameConverter {
             return Err(Error::Unsupported("invalid frame dimensions".into()));
         }
 
-        // If the frame is in hardware format, transfer to system memory.
+        // If the frame is in hardware or DRM_PRIME format, transfer to system memory
         unsafe {
             let desc = ff::av_pix_fmt_desc_get(f.format);
-            let is_hw = (f.format == ff::AV_PIX_FMT_DRM_PRIME
-                && (!f.hw_frames_ctx.is_null() || !f.data[0].is_null()))
+            let is_hw = f.format == ff::AV_PIX_FMT_DRM_PRIME
                 || (!desc.is_null() && ((*desc).flags & ff::AV_PIX_FMT_FLAG_HWACCEL as u64 != 0))
                 || !f.hw_frames_ctx.is_null();
             if is_hw {
@@ -441,7 +389,6 @@ impl FrameConverter {
             ff::AV_PIX_FMT_YUV420P10LE => Some(PixelLayout::I420 { bits: 10 }),
             ff::AV_PIX_FMT_NV12 => Some(PixelLayout::Nv12),
             ff::AV_PIX_FMT_P010LE => Some(PixelLayout::P010),
-            ff::AV_PIX_FMT_DRM_PRIME => Some(PixelLayout::DrmPrime),
             _ => None,
         };
         let color = color_info(f);
@@ -457,7 +404,6 @@ impl FrameConverter {
                 serial,
                 id: next_id(),
                 frame: src,
-                drm_desc: None,
             });
         }
         // Anything else: convert to 8- or 10-bit I420.
@@ -539,7 +485,6 @@ impl FrameConverter {
                 serial,
                 id: next_id(),
                 frame: dst,
-                drm_desc: None,
             })
         }
     }

@@ -82,8 +82,6 @@ pub struct Gpu {
     pub queue: vk::Queue,
     pub queue_family: u32,
     pub allocator: ManuallyDrop<Mutex<Allocator>>,
-    pub mem_props: vk::PhysicalDeviceMemoryProperties,
-    pub dmabuf_supported: bool,
     pub device_name: String,
     pub driver: String,
 }
@@ -125,36 +123,6 @@ impl Gpu {
                 .map(|c| c.to_string_lossy().into_owned())
                 .unwrap_or_default()
         );
-        let mem_props = unsafe { instance.get_physical_device_memory_properties(pdev) };
-        let supported_exts =
-            unsafe { instance.enumerate_device_extension_properties(pdev) }.unwrap_or_default();
-        let desired_exts: &[&std::ffi::CStr] = &[
-            c"VK_KHR_external_memory",
-            c"VK_KHR_external_memory_fd",
-            c"VK_EXT_external_memory_dma_buf",
-            c"VK_EXT_image_drm_format_modifier",
-        ];
-        let mut enabled_ext_ptrs = Vec::new();
-        let mut has_drm_mod = false;
-        let mut has_ext_mem = false;
-        for desired in desired_exts {
-            let is_supported = supported_exts.iter().any(|ext| {
-                // SAFETY: Vulkan extension_name is a null-terminated C string array.
-                unsafe { std::ffi::CStr::from_ptr(ext.extension_name.as_ptr()) == *desired }
-            });
-            if is_supported {
-                enabled_ext_ptrs.push(desired.as_ptr());
-                if *desired == c"VK_EXT_image_drm_format_modifier" {
-                    has_drm_mod = true;
-                }
-                if *desired == c"VK_KHR_external_memory_fd"
-                    || *desired == c"VK_EXT_external_memory_dma_buf"
-                {
-                    has_ext_mem = true;
-                }
-            }
-        }
-        let dmabuf_supported = has_drm_mod && has_ext_mem;
         let queue_family = graphics_queue(&instance, pdev)
             .ok_or_else(|| Error::Unsupported("no graphics queue".into()))?;
         let prio = [1.0f32];
@@ -166,7 +134,6 @@ impl Gpu {
             .synchronization2(true);
         let dci = vk::DeviceCreateInfo::default()
             .queue_create_infos(&qci)
-            .enabled_extension_names(&enabled_ext_ptrs)
             .push_next(&mut f13);
         let raw_dev = creator.create_device(&instance, pdev, &dci)?;
         // SAFETY: raw_dev was created from this instance.
@@ -182,14 +149,7 @@ impl Gpu {
             allocation_sizes: Default::default(),
         })
         .map_err(|e| Error::Alloc(e.to_string()))?;
-        log::info!(
-            "GPU: {device_name} ({driver}) [DMA-BUF import: {}]",
-            if dmabuf_supported {
-                "supported"
-            } else {
-                "not supported"
-            }
-        );
+        log::info!("GPU: {device_name} ({driver})");
         Ok(Gpu {
             entry,
             instance,
@@ -198,37 +158,9 @@ impl Gpu {
             queue,
             queue_family,
             allocator: ManuallyDrop::new(Mutex::new(allocator)),
-            mem_props,
-            dmabuf_supported,
             device_name,
             driver,
         })
-    }
-
-    pub fn find_memory_type(
-        &self,
-        type_filter: u32,
-        properties: vk::MemoryPropertyFlags,
-    ) -> Option<u32> {
-        for (i, mem_type) in self.mem_props.memory_types
-            [..self.mem_props.memory_type_count as usize]
-            .iter()
-            .enumerate()
-        {
-            if (type_filter & (1 << i)) != 0 && (mem_type.property_flags & properties) == properties
-            {
-                return Some(i as u32);
-            }
-        }
-        for (i, _) in self.mem_props.memory_types[..self.mem_props.memory_type_count as usize]
-            .iter()
-            .enumerate()
-        {
-            if (type_filter & (1 << i)) != 0 {
-                return Some(i as u32);
-            }
-        }
-        None
     }
 
     /// Headless device for tests and tools.

@@ -142,7 +142,9 @@ fn candidates(
         format,
         ff::AV_PIX_FMT_YUV420P10LE | ff::AV_PIX_FMT_YUV420P10BE
     );
-    if video && hw == HwDecode::Auto && (eight_bit || ten_bit) {
+    // The hardware decodes HEVC Main10, but not 10-bit H.264.
+    let native_ten_bit = ten_bit && codec == ff::AV_CODEC_ID_HEVC;
+    if video && hw == HwDecode::Auto && (eight_bit || native_ten_bit) {
         if native && crate::v4l2::Codec::from_ffmpeg(codec).is_some() {
             c.push(Candidate::NativeV4l2);
         }
@@ -577,15 +579,6 @@ impl Decoder {
         Ok(Some(true))
     }
 
-    /// Returns the DRM buffer descriptor of the last frame decoded by the native V4L2 decoder.
-    pub fn last_drm_desc(&mut self) -> Option<crate::frame::DrmBufferDesc> {
-        #[cfg(target_os = "linux")]
-        if let Some(n) = self.native.as_mut() {
-            return n.dec.last_drm_desc();
-        }
-        None
-    }
-
     /// A flag that, once set, cuts the native decoder's waits for the
     /// device short (the player sets it when closing).
     pub(crate) fn set_interrupt(&mut self, flag: Arc<AtomicBool>) {
@@ -695,10 +688,15 @@ mod tests {
             candidates(true, hevc, yuv420, HwDecode::Auto, true),
             vec![NativeV4l2, Named(c"hevc_v4l2m2m", true), Default]
         );
-        // 10-bit uses native V4L2 (Q10C/P010), bypassing 8-bit-only FFmpeg wrappers.
+        // 10-bit HEVC uses native V4L2 (P010), bypassing 8-bit-only FFmpeg wrappers.
         assert_eq!(
             candidates(true, hevc, yuv420p10, HwDecode::Auto, true),
             vec![NativeV4l2, Default]
+        );
+        // 10-bit H.264 goes straight to software.
+        assert_eq!(
+            candidates(true, ff::AV_CODEC_ID_H264, yuv420p10, HwDecode::Auto, true),
+            vec![Default]
         );
         // After the native decoder fails (or with it disabled), 10-bit bypasses 8-bit-only wrappers.
         assert_eq!(

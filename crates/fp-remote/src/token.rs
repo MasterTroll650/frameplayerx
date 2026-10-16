@@ -3,7 +3,6 @@
 use crate::RemoteError;
 use std::fs;
 use std::io::Write;
-#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
@@ -42,7 +41,6 @@ pub fn load_or_create(path: &Path) -> Result<String, RemoteError> {
     match fs::read_to_string(path) {
         Ok(s) if valid_token(s.trim()) => {
             // Tighten permissions left loose by hand edits or old versions.
-            #[cfg(unix)]
             if let Ok(meta) = fs::metadata(path)
                 && meta.permissions().mode() & 0o077 != 0
             {
@@ -73,13 +71,14 @@ pub fn store(path: &Path, token: &str) -> Result<(), RemoteError> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = std::path::PathBuf::from(tmp);
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut f = options.open(&tmp).map_err(err)?;
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .map_err(err)?;
     // The file may have pre-existed with other permissions.
-    #[cfg(unix)]
     f.set_permissions(fs::Permissions::from_mode(0o600))
         .map_err(err)?;
     f.write_all(token.as_bytes()).map_err(err)?;
@@ -125,23 +124,19 @@ mod tests {
     #[test]
     fn persists_with_owner_only_permissions() {
         let dir = std::env::temp_dir().join(format!("fp-remote-token-{}", std::process::id()));
-        let path = dir.join("sub").join("remote-token");
+        let path = dir.join("sub/remote-token");
         let _ = fs::remove_dir_all(&dir);
         let t1 = load_or_create(&path).unwrap();
         let t2 = load_or_create(&path).unwrap();
         assert_eq!(t1, t2);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o600);
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
 
-            // Loosened permissions are tightened again; garbage is replaced.
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-            assert_eq!(load_or_create(&path).unwrap(), t1);
-            let mode = fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o600);
-        }
+        // Loosened permissions are tightened again; garbage is replaced.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(load_or_create(&path).unwrap(), t1);
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
         fs::write(&path, "short").unwrap();
         let t3 = load_or_create(&path).unwrap();
         assert_ne!(t3, t1);

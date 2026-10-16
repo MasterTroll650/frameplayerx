@@ -6,33 +6,20 @@
 //!   --out DIR     report directory (default: ~/frameplayer-probe)
 //!   --json        also print the JSON report to stdout
 
-#[cfg(target_os = "linux")]
 mod drm;
-#[cfg(target_os = "linux")]
 mod libs;
-#[cfg(target_os = "linux")]
 mod system;
-#[cfg(target_os = "linux")]
 mod util;
-#[cfg(target_os = "linux")]
 mod v4l2;
-#[cfg(target_os = "linux")]
 mod verdict;
-#[cfg(target_os = "linux")]
 mod vk;
-#[cfg(target_os = "linux")]
 mod xr;
-#[cfg(target_os = "linux")]
 mod xr_loader;
 
-#[cfg(target_os = "linux")]
 use serde::Serialize;
-#[cfg(target_os = "linux")]
 use std::fmt::Write as _;
-#[cfg(target_os = "linux")]
 use std::path::PathBuf;
 
-#[cfg(target_os = "linux")]
 #[derive(Serialize)]
 pub struct Report {
     pub probe_version: &'static str,
@@ -46,14 +33,12 @@ pub struct Report {
     pub xr: xr::XrReport,
 }
 
-#[cfg(target_os = "linux")]
 struct Args {
     session: bool,
     out: PathBuf,
     json: bool,
 }
 
-#[cfg(target_os = "linux")]
 fn parse_args() -> Result<Args, String> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     let mut a = Args {
@@ -86,7 +71,6 @@ fn parse_args() -> Result<Args, String> {
     Ok(a)
 }
 
-#[cfg(target_os = "linux")]
 fn main() {
     let args = match parse_args() {
         Ok(a) => a,
@@ -128,12 +112,6 @@ fn main() {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-fn main() {
-    eprintln!("frame-probe is only supported on Linux (Steam Frame)");
-}
-
-#[cfg(target_os = "linux")]
 fn write_files(
     dir: &std::path::Path,
     ts: u64,
@@ -148,7 +126,6 @@ fn write_files(
     Ok((j, t))
 }
 
-#[cfg(target_os = "linux")]
 fn render_text(r: &Report) -> String {
     let mut s = String::new();
     let os = r

@@ -33,8 +33,6 @@
 //! pooled `AVFrame`s, so the rest of the pipeline sees ordinary NV12 frames
 //! and the CAPTURE buffers go straight back to the decoder.
 
-#![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
-
 /// Bitstream (OUTPUT) buffers to request.
 pub(crate) const OUTPUT_BUFFERS: u32 = 6;
 /// Decoded-picture (CAPTURE) buffers to request (at least the driver minimum).
@@ -178,12 +176,14 @@ pub(crate) struct Nv12Layout {
 
 impl Nv12Layout {
     /// From the CAPTURE format (`fmt_height` is the buffer's luma height,
-    /// already aligned by the driver) and the visible (compose) size.
+    /// already aligned by the driver) and the visible (compose) size, with
+    /// `sample_bytes` bytes per sample (1 for NV12, 2 for P010).
     pub(crate) fn new(
         stride: usize,
         fmt_height: u32,
         visible: (u32, u32),
         sizeimage: usize,
+        sample_bytes: usize,
     ) -> Option<Nv12Layout> {
         let (width, height) = visible;
         let luma_height = fmt_height.max(height).next_multiple_of(32);
@@ -193,7 +193,8 @@ impl Nv12Layout {
             stride,
             uv_offset: stride * luma_height as usize,
         };
-        (width > 0 && height > 0 && stride >= width as usize && l.end() <= sizeimage).then_some(l)
+        (width > 0 && height > 0 && stride >= width as usize * sample_bytes && l.end() <= sizeimage)
+            .then_some(l)
     }
 
     /// Bytes from the start of the buffer to the end of the visible chroma.
@@ -525,19 +526,6 @@ mod sys {
     pub const VIDIOC_G_SELECTION: u64 = iowr::<Selection>(94);
     pub const VIDIOC_DECODER_CMD: u64 = iowr::<DecoderCmd>(96);
 
-    #[repr(C)]
-    #[derive(Default)]
-    pub struct ExportBuffer {
-        pub type_: u32,
-        pub index: u32,
-        pub plane: u32,
-        pub flags: u32,
-        pub fd: i32,
-        pub reserved: [u32; 11],
-    }
-
-    pub const VIDIOC_EXPBUF: u64 = iowr::<ExportBuffer>(16);
-
     // The kernel's sizes; the ioctl numbers encode them.
     const _: () = assert!(std::mem::size_of::<Capability>() == 104);
     const _: () = assert!(std::mem::size_of::<FmtDesc>() == 64);
@@ -550,7 +538,6 @@ mod sys {
     const _: () = assert!(std::mem::size_of::<DecoderCmd>() == 72);
     const _: () = assert!(std::mem::size_of::<Control>() == 8);
     const _: () = assert!(std::mem::size_of::<Selection>() == 64);
-    const _: () = assert!(std::mem::size_of::<ExportBuffer>() == 64);
 
     // Known values from videodev2.h, as a check on the encoding.
     const _: () = assert!(VIDIOC_QUERYCAP == 0x8068_5600);
@@ -575,8 +562,6 @@ mod linux {
     use std::time::{Duration, Instant};
 
     const NV12: u32 = fourcc(b"NV12");
-    const Q10C: u32 = fourcc(b"Q10C");
-    const QC08: u32 = fourcc(b"QC08");
     const P010: u32 = fourcc(b"P010");
     /// Give up when the device makes no progress for this long.
     const STALL: Duration = Duration::from_secs(5);
@@ -653,7 +638,6 @@ mod linux {
 
     struct Capture {
         bufs: Vec<Mapping>,
-        export_fds: Vec<OwnedFd>,
         /// Coded size (CAPTURE format) the buffers were allocated for.
         allocated_for: (u32, u32),
         layout: Nv12Layout,
@@ -679,7 +663,6 @@ mod linux {
         codec: Codec,
         stream_size: (u32, u32),
         ten_bit: bool,
-        last_drm: Option<crate::frame::DrmBufferDesc>,
         /// The primer trick is active (declared OUTPUT size was lowered).
         primed: bool,
         bsf: *mut ff::AVBSFContext,
@@ -774,22 +757,6 @@ mod linux {
         Ok(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 
-    fn export_buf(fd: &OwnedFd, index: u32, plane: u32) -> std::io::Result<OwnedFd> {
-        let mut exp = ExportBuffer {
-            type_: BUF_TYPE_CAPTURE_MPLANE,
-            index,
-            plane,
-            flags: libc::O_CLOEXEC as u32 | libc::O_RDONLY as u32,
-            ..Default::default()
-        };
-        ioctl(fd, VIDIOC_EXPBUF, &mut exp)?;
-        if exp.fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: exp.fd is a newly created file descriptor returned by the kernel.
-        Ok(unsafe { OwnedFd::from_raw_fd(exp.fd) })
-    }
-
     /// Whether `fd` is a multi-planar M2M decoder for `codec` with NV12 out.
     fn suitable(fd: &OwnedFd, codec: Codec) -> bool {
         let Some(caps) = query_caps(fd) else {
@@ -881,7 +848,6 @@ mod linux {
                 codec,
                 stream_size,
                 ten_bit,
-                last_drm: None,
                 primed: false,
                 bsf: std::ptr::null_mut(),
                 out_free: Vec::new(),
@@ -1211,19 +1177,11 @@ mod linux {
         /// The CAPTURE layout for format `f` (visible size from COMPOSE).
         fn layout(&self, f: &Format) -> Result<Nv12Layout> {
             let pixfmt = f.pixelformat();
-            let use_dmabuf = std::env::var("FRAMEPLAYER_V4L2_DMABUF").as_deref() == Ok("1");
-            let valid = pixfmt == NV12
-                || pixfmt == P010
-                || (use_dmabuf && (pixfmt == QC08 || pixfmt == Q10C));
-            if !valid || f.num_planes() != 1 {
+            if (pixfmt != NV12 && pixfmt != P010) || f.num_planes() != 1 {
                 return Err(Error::Unsupported(format!(
-                    "V4L2 capture format {} is unsupported{}",
-                    fourcc_str(f.pixelformat()),
-                    if (pixfmt == QC08 || pixfmt == Q10C) && !use_dmabuf {
-                        " (compressed UBWC format cannot be read via MMAP; requires zero-copy DMA-BUF)"
-                    } else {
-                        ""
-                    }
+                    "V4L2 capture format {} with {} planes",
+                    fourcc_str(pixfmt),
+                    f.num_planes()
                 )));
             }
             let mut s = Selection {
@@ -1235,57 +1193,68 @@ mod linux {
                 Ok(()) if s.width > 0 && s.height > 0 => (s.width, s.height),
                 _ => (f.width(), f.height()),
             };
+            let sample_bytes = if pixfmt == P010 { 2 } else { 1 };
             let stride = if f.bytesperline(0) > 0 {
                 f.bytesperline(0) as usize
-            } else if pixfmt == Q10C || pixfmt == P010 {
-                (f.width() * 2).next_multiple_of(128) as usize
             } else {
-                f.width().next_multiple_of(128) as usize
+                (f.width() as usize * sample_bytes).next_multiple_of(128)
             };
-            Nv12Layout::new(stride, f.height(), visible, f.sizeimage(0) as usize).ok_or_else(|| {
+            Nv12Layout::new(
+                stride,
+                f.height(),
+                visible,
+                f.sizeimage(0) as usize,
+                sample_bytes,
+            )
+            .ok_or_else(|| {
                 Error::Unsupported(format!(
-                    "V4L2 capture layout {}x{} stride {} size {}",
+                    "V4L2 capture layout {} {}x{} (coded {}x{}) stride {} size {}",
+                    fourcc_str(pixfmt),
                     visible.0,
                     visible.1,
+                    f.width(),
+                    f.height(),
                     stride,
                     f.sizeimage(0)
                 ))
             })
         }
 
-        /// Desired capture format: NV12 for 8-bit, P010 (if supported) or NV12 for 10-bit.
-        /// Supports environment override FRAMEPLAYER_V4L2_FMT=XXXX (e.g. Q10C or QC08).
-        fn capture_format(&self) -> u32 {
-            if let Ok(f) = std::env::var("FRAMEPLAYER_V4L2_FMT")
-                && let Ok(bytes) = <[u8; 4]>::try_from(f.as_bytes())
-            {
-                return fourcc(&bytes);
+        /// The CAPTURE format: NV12 for 8-bit, P010 for 10-bit. A 10-bit
+        /// stream decoded into NV12 would be misread, so without P010 the
+        /// stream goes to software.
+        fn capture_format(&self) -> Result<u32> {
+            if !self.ten_bit {
+                return Ok(NV12);
             }
-            let use_dmabuf = std::env::var("FRAMEPLAYER_V4L2_DMABUF").as_deref() == Ok("1");
             let cap_fmts = formats(&self.fd, BUF_TYPE_CAPTURE_MPLANE);
-            if self.ten_bit {
-                if cap_fmts.contains(&P010) {
-                    P010
-                } else if use_dmabuf && cap_fmts.contains(&Q10C) {
-                    Q10C
-                } else {
-                    NV12
-                }
-            } else if use_dmabuf && cap_fmts.contains(&QC08) {
-                QC08
-            } else {
-                NV12
+            if cap_fmts.contains(&P010) {
+                return Ok(P010);
             }
+            let listed: Vec<String> = cap_fmts.iter().map(|&f| fourcc_str(f)).collect();
+            Err(Error::Unsupported(format!(
+                "V4L2 offers no P010 capture for a 10-bit stream (has {})",
+                listed.join(", ")
+            )))
         }
 
         /// First source change: choose format, allocate, map and queue CAPTURE.
         fn setup_capture(&mut self) -> Result<()> {
             let mut f = self.g_fmt_capture()?;
-            let target_fmt = self.capture_format();
+            let target_fmt = self.capture_format()?;
             if f.pixelformat() != target_fmt {
                 f.set_pixelformat(target_fmt);
                 ioctl(&self.fd, VIDIOC_S_FMT, &mut f).map_err(|e| err("S_FMT capture", e))?;
                 f = self.g_fmt_capture()?;
+            }
+            // S_FMT may substitute another format: reading its buffers as the
+            // one we asked for gives garbage.
+            if f.pixelformat() != target_fmt {
+                return Err(Error::Unsupported(format!(
+                    "V4L2 capture: asked for {}, driver chose {}",
+                    fourcc_str(target_fmt),
+                    fourcc_str(f.pixelformat())
+                )));
             }
             let layout = self.layout(&f)?;
             let min = self.min_capture_buffers();
@@ -1297,8 +1266,6 @@ mod linux {
             };
             ioctl(&self.fd, VIDIOC_REQBUFS, &mut r).map_err(|e| err("REQBUFS capture", e))?;
             let mut bufs = Vec::new();
-            let mut export_fds = Vec::new();
-            let use_dmabuf = std::env::var("FRAMEPLAYER_V4L2_DMABUF").as_deref() == Ok("1");
             for i in 0..r.count {
                 let mut planes = [Plane::default(); 1];
                 let mut b = Buffer::new(BUF_TYPE_CAPTURE_MPLANE, i, &mut planes);
@@ -1312,19 +1279,10 @@ mod linux {
                     )
                     .map_err(|e| err("mmap capture", e))?,
                 );
-                if use_dmabuf {
-                    match export_buf(&self.fd, i, 0) {
-                        Ok(exp_fd) => export_fds.push(exp_fd),
-                        Err(e) => {
-                            log::warn!("VIDIOC_EXPBUF capture buffer {i}: {e}");
-                        }
-                    }
-                }
             }
             let pixelformat = f.pixelformat();
             self.cap = Some(Capture {
                 bufs,
-                export_fds,
                 allocated_for: (f.width(), f.height()),
                 layout,
                 pixelformat,
@@ -1414,9 +1372,9 @@ mod linux {
             let need = f.sizeimage(0) as usize;
             let new_format = (f.width(), f.height());
             let current_fmt = self.cap.as_ref().map(|c| c.pixelformat).unwrap_or(0);
-            if (f.pixelformat() == NV12
-                || f.pixelformat() == P010
-                || f.pixelformat() == current_fmt)
+            // A different pixel format goes through setup_capture, which
+            // picks and checks the format again.
+            if f.pixelformat() == current_fmt
                 && can_reuse_capture(allocated_for, count, smallest, new_format, min, need)
             {
                 let layout = self.layout(&f)?;
@@ -1453,7 +1411,7 @@ mod linux {
             self.setup_capture()
         }
 
-        /// Copies a decoded picture into a pooled NV12 `AVFrame` or exports DMA-BUF.
+        /// Copies a decoded picture into a pooled NV12 or P010 `AVFrame`.
         fn export(
             &mut self,
             index: u32,
@@ -1465,57 +1423,6 @@ mod linux {
                 return Err(Error::Unsupported("V4L2: no capture buffers".into()));
             };
             let l = cap.layout;
-            let use_dmabuf = std::env::var("FRAMEPLAYER_V4L2_DMABUF").as_deref() == Ok("1");
-            if use_dmabuf && let Some(exp_fd) = cap.export_fds.get(index as usize) {
-                // SAFETY: dup creates a new file descriptor pointing to the same open file.
-                let dup_fd = unsafe { libc::dup(exp_fd.as_raw_fd()) };
-                if dup_fd < 0 {
-                    return Err(std::io::Error::last_os_error().into());
-                }
-                let (modifier, drm_fourcc) = match cap.pixelformat {
-                    Q10C => (
-                        crate::frame::DRM_FORMAT_MOD_QCOM_COMPRESSED,
-                        crate::frame::DRM_FORMAT_Q10C,
-                    ),
-                    QC08 => (
-                        crate::frame::DRM_FORMAT_MOD_QCOM_COMPRESSED,
-                        crate::frame::DRM_FORMAT_QC08,
-                    ),
-                    P010 => (
-                        crate::frame::DRM_FORMAT_MOD_LINEAR,
-                        crate::frame::DRM_FORMAT_P010,
-                    ),
-                    _ => (
-                        crate::frame::DRM_FORMAT_MOD_LINEAR,
-                        crate::frame::DRM_FORMAT_NV12,
-                    ),
-                };
-                let planes = vec![
-                    crate::frame::DrmPlaneDesc::new(dup_fd, 0, l.stride as u32),
-                    crate::frame::DrmPlaneDesc::new(dup_fd, l.uv_offset as u64, l.stride as u32),
-                ];
-                let desc = crate::frame::DrmBufferDesc {
-                    modifier,
-                    drm_fourcc,
-                    planes,
-                    size: cap.bufs[index as usize].len as u64,
-                };
-                self.last_drm = Some(desc);
-                // SAFETY: frame is a valid empty AVFrame we fill with DRM_PRIME metadata.
-                unsafe {
-                    ff::av_frame_unref(frame);
-                    let f = &mut *frame;
-                    f.format = ff::AV_PIX_FMT_DRM_PRIME;
-                    f.width = l.width as i32;
-                    f.height = l.height as i32;
-                    f.pts = pts;
-                    f.best_effort_timestamp = pts;
-                    f.duration = duration;
-                    (f.color_range, f.colorspace, f.color_trc, f.color_primaries) = self.color;
-                }
-                return Ok(());
-            }
-
             let src = &cap.bufs[index as usize];
             let size = l.copy_size();
             if l.end() > src.len {
@@ -1707,10 +1614,6 @@ mod linux {
             self.stop_sent = false;
             self.finished = false;
         }
-
-        pub(crate) fn last_drm_desc(&mut self) -> Option<crate::frame::DrmBufferDesc> {
-            self.last_drm.take()
-        }
     }
 }
 
@@ -1810,17 +1713,25 @@ mod tests {
     #[test]
     fn nv12_layout_from_driver_format() {
         // What iris reports for an 8192x4080 picture.
-        let l = Nv12Layout::new(8192, 4096, (8192, 4080), 50_331_648).unwrap();
+        let l = Nv12Layout::new(8192, 4096, (8192, 4080), 50_331_648, 1).unwrap();
         assert_eq!(l.uv_offset, 8192 * 4096);
         assert_eq!(l.end(), 8192 * 4096 + 8192 * 2040);
         assert_eq!(l.copy_size(), 8192 * (4080 + 2040));
         // A buffer too small for the picture is rejected.
-        assert!(Nv12Layout::new(8192, 4096, (8192, 4096), 1 << 20).is_none());
+        assert!(Nv12Layout::new(8192, 4096, (8192, 4096), 1 << 20, 1).is_none());
         // Stride narrower than the picture is rejected.
-        assert!(Nv12Layout::new(1024, 1088, (1920, 1080), 1 << 24).is_none());
+        assert!(Nv12Layout::new(1024, 1088, (1920, 1080), 1 << 24, 1).is_none());
         // Odd heights round the chroma up.
-        let l = Nv12Layout::new(128, 64, (100, 51), 128 * 96).unwrap();
+        let l = Nv12Layout::new(128, 64, (100, 51), 128 * 96, 1).unwrap();
         assert_eq!(l.end(), 128 * 64 + 128 * 26);
+        // P010 (two bytes a sample) at 3840x2160: rows of ALIGN(2 * 3840, 256)
+        // bytes, chroma after ALIGN(2160, 32) rows.
+        let l = Nv12Layout::new(7680, 2176, (3840, 2160), 7680 * (2176 + 1088), 2).unwrap();
+        assert_eq!(l.uv_offset, 7680 * 2176);
+        assert_eq!(l.copy_size(), 7680 * (2160 + 1080));
+        // A P010 stride counted in pixels rather than bytes would read every
+        // row half-wide and the chroma out of the luma: rejected.
+        assert!(Nv12Layout::new(3840, 2176, (3840, 2160), 1 << 25, 2).is_none());
     }
 
     #[test]
