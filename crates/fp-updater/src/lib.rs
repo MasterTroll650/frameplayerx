@@ -5,7 +5,8 @@
 //! 1. [`check`] fetches the release manifest (`manifest.json`) and its
 //!    detached ed25519 signature (`manifest.json.sig`), verifies the
 //!    signature against [`RELEASE_PUBLIC_KEY`], and compares versions with
-//!    semver for the user's [`Channel`].
+//!    semver for the user's [`Channel`]. [`check_channel`] finds that
+//!    manifest among FramePlayer's GitHub releases.
 //! 2. [`download`] streams the zip to disk with resume (HTTP `Range`) and
 //!    verifies size and SHA-256 from the signed manifest.
 //! 3. [`install`] extracts into a staging directory beside the install
@@ -19,6 +20,7 @@
 pub mod client;
 pub mod error;
 pub mod framedrop;
+pub mod github;
 pub mod install;
 pub mod manifest;
 pub mod url;
@@ -42,6 +44,12 @@ pub use semver::Version;
 /// expected at the same URL plus `.sig`.
 pub const DEFAULT_MANIFEST_URL: &str =
     "https://github.com/remotesojourner/frameplayer/releases/latest/download/manifest.json";
+
+/// GitHub's list of the most recent releases, pre-releases included. The
+/// beta channel picks the highest version here, since `releases/latest`
+/// skips pre-releases.
+pub const RELEASES_API_URL: &str =
+    "https://api.github.com/repos/remotesojourner/frameplayer/releases?per_page=10";
 
 /// The ed25519 public key release manifests are signed with.
 ///
@@ -75,6 +83,20 @@ pub fn parse_version(s: &str) -> Result<Version> {
 pub fn check(url: &str, current_version: &str, channel: Channel) -> Result<Option<Update>> {
     let current = parse_version(current_version)?;
     Updater::new()?.check(url, &current, channel)
+}
+
+/// Checks FramePlayer's GitHub releases for an update on `channel`: stable
+/// reads the latest stable release ([`DEFAULT_MANIFEST_URL`]), beta the
+/// highest version among recent releases, stable or pre-release
+/// ([`RELEASES_API_URL`]). Otherwise as [`check`].
+pub fn check_channel(current_version: &str, channel: Channel) -> Result<Option<Update>> {
+    let current = parse_version(current_version)?;
+    let updater = Updater::new()?;
+    let url = match channel {
+        Channel::Stable => DEFAULT_MANIFEST_URL.to_string(),
+        Channel::Beta => updater.newest_manifest_url(RELEASES_API_URL)?,
+    };
+    updater.check(&url, &current, channel)
 }
 
 /// Downloads `update` into the directory `dest` with resume and SHA-256

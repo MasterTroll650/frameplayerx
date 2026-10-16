@@ -709,11 +709,27 @@ fn updates(ui: &mut egui::Ui, v: &mut View) {
             None,
             &mut v.settings.check_updates,
         );
-        r.row("Channel", Some("Beta gets new versions first."), |ui| {
+        let beta_build = env!("CARGO_PKG_VERSION").contains('-');
+        let about = match (v.settings.update_channel == "beta", beta_build) {
+            (true, _) => "Gets test versions too, before they are released.",
+            (false, false) => "Only finished releases.",
+            (false, true) => {
+                "Only finished releases: this test version stays until a newer one is out."
+            }
+        };
+        r.row("Channel", Some(about), |ui| {
             for c in ["beta", "stable"] {
                 let label = if c == "beta" { "Beta" } else { "Stable" };
-                if widgets::chip(ui, label, v.settings.update_channel == c).clicked() {
+                if widgets::chip(ui, label, v.settings.update_channel == c).clicked()
+                    && v.settings.update_channel != c
+                {
                     v.settings.update_channel = c.into();
+                    // What's on offer depends on the channel: ask again.
+                    if fp_updater::RELEASE_PUBLIC_KEY.is_some()
+                        && !matches!(v.state.update, U::Downloading { .. } | U::Installed { .. })
+                    {
+                        v.actions.push(Action::CheckUpdates);
+                    }
                 }
             }
         });

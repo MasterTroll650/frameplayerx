@@ -80,7 +80,10 @@ enum Job {
         crate::settings::HapticDeviceConfig,
         Result<Box<dyn fp_haptics::Device>, String>,
     ),
-    Update(UpdateStatus, Option<Box<fp_updater::Update>>),
+    /// Download and install progress.
+    Update(UpdateStatus),
+    /// The result of update check number `.0`.
+    UpdateChecked(u64, UpdateStatus, Option<Box<fp_updater::Update>>),
     Mounted(String, Result<std::path::PathBuf, String>),
     QuickConnectInitiated(Result<fp_sources::QuickConnectState, String>),
     QuickConnectPolled(Result<Option<(String, String)>, String>),
@@ -125,6 +128,9 @@ pub struct App {
     queue_pos: usize,
     last_status: Option<PlaybackStatus>,
     update: Option<fp_updater::Update>,
+    /// Counts update checks, so a check for a channel the user has since
+    /// left is dropped.
+    update_check: u64,
     /// Removable drives seen at the last check, and when that was.
     mounts: Vec<std::path::PathBuf>,
     mounts_checked: Instant,
@@ -206,6 +212,7 @@ impl App {
             queue_pos: 0,
             last_status: None,
             update: None,
+            update_check: 0,
             mounts: crate::services::removable_mounts(),
             // In the past, so the first check (and mount) runs at once.
             mounts_checked: Instant::now()
@@ -627,29 +634,26 @@ impl App {
 
     fn check_updates(&mut self) {
         self.ui.update = UpdateStatus::Checking;
-        // A prerelease build follows the beta track: on "stable" it would never
-        // see the next alpha and would report up to date forever.
-        let prerelease = env!("CARGO_PKG_VERSION").contains('-');
-        let channel = if self.settings.update_channel == "beta" || prerelease {
+        self.update = None;
+        self.update_check += 1;
+        let seq = self.update_check;
+        let channel = if self.settings.update_channel == "beta" {
             fp_updater::Channel::Beta
         } else {
             fp_updater::Channel::Stable
         };
         self.jobs.spawn("update-check", move || {
-            match fp_updater::check(
-                fp_updater::DEFAULT_MANIFEST_URL,
-                env!("CARGO_PKG_VERSION"),
-                channel,
-            ) {
-                Ok(Some(u)) => Job::Update(
+            match fp_updater::check_channel(env!("CARGO_PKG_VERSION"), channel) {
+                Ok(Some(u)) => Job::UpdateChecked(
+                    seq,
                     UpdateStatus::Available {
                         version: u.version.to_string(),
                         notes: u.notes.clone(),
                     },
                     Some(Box::new(u)),
                 ),
-                Ok(None) => Job::Update(UpdateStatus::UpToDate, None),
-                Err(e) => Job::Update(UpdateStatus::Failed(e.to_string()), None),
+                Ok(None) => Job::UpdateChecked(seq, UpdateStatus::UpToDate, None),
+                Err(e) => Job::UpdateChecked(seq, UpdateStatus::Failed(e.to_string()), None),
             }
         });
     }
@@ -674,10 +678,8 @@ impl App {
                         |done, total| {
                             if last.elapsed() > Duration::from_millis(250) {
                                 last = Instant::now();
-                                let _ = tx.send(Job::Update(
-                                    UpdateStatus::Downloading { done, total },
-                                    None,
-                                ));
+                                let _ =
+                                    tx.send(Job::Update(UpdateStatus::Downloading { done, total }));
                             }
                         },
                         &cancel,
@@ -690,13 +692,10 @@ impl App {
                         .map_err(|e| e.to_string())
                 });
             match r {
-                Ok(v) => Job::Update(
-                    UpdateStatus::Installed {
-                        version: v.to_string(),
-                    },
-                    None,
-                ),
-                Err(e) => Job::Update(UpdateStatus::Failed(e), None),
+                Ok(v) => Job::Update(UpdateStatus::Installed {
+                    version: v.to_string(),
+                }),
+                Err(e) => Job::Update(UpdateStatus::Failed(e)),
             }
         });
     }
@@ -801,11 +800,12 @@ impl App {
                         self.ui.toast(format!("Couldn't open the drive: {e}"));
                     }
                 },
-                Job::Update(status, update) => {
-                    if let Some(u) = update {
-                        self.update = Some(*u);
+                Job::Update(status) => self.ui.update = status,
+                Job::UpdateChecked(seq, status, update) => {
+                    if seq == self.update_check {
+                        self.update = update.map(|u| *u);
+                        self.ui.update = status;
                     }
-                    self.ui.update = status;
                 }
                 Job::QuickConnectInitiated(r) => {
                     if let Some(f) = self.ui.source_form.as_mut() {

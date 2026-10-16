@@ -39,7 +39,9 @@ adds **FramePlayer** to the Steam library with artwork. Add
 **By hand.** Copy the zip to the headset, unzip it into your home folder
 and add `~/frameplayer/frameplayer.sh` to Steam as a non-Steam game.
 
-FramePlayer then updates itself from the Settings › Updates page.
+FramePlayer then updates itself from the Settings › Updates page. The
+**Stable** channel gets finished releases only; **Beta** also gets test
+versions before they are released.
 
 ## Where your videos can be
 
@@ -135,6 +137,11 @@ to 8-bit 4:2:0 HEVC once on a PC and they play smoothly.
 for it (Steam's own streaming uses it too). "The hardware decoder can't
 play this HEVC" means it tried and refused the file; frameplayer.log says
 why.
+
+The pill next to the format on the control bar says which decoder plays
+the video: HW, or SW in amber, with the codec and bit depth. Hover it, or
+open Adjust → Format → Video stream, to see why a video isn't decoded in
+hardware.
 
 To check a file: `ffprobe -v error -select_streams v:0 -show_entries
 stream=codec_name,profile,pix_fmt video.mp4` (`Main 10` / `yuv420p10le`

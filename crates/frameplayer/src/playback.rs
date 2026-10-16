@@ -598,14 +598,9 @@ fn has_hardware_decoder(v: &StreamInfo) -> bool {
     matches!(v.codec.as_str(), "hevc" | "h264" | "vp9") && v.bit_depth <= 8 && v.chroma() == "4:2:0"
 }
 
-/// Why a software-decoded video stutters, and what plays smoothly instead.
-/// `hardware_on` is the hardware decoding setting; `hardware_error` why the
-/// hardware decoder, when tried, is not decoding.
-pub(crate) fn slow_decode_notice(
-    v: &StreamInfo,
-    hardware_on: bool,
-    hardware_error: Option<&str>,
-) -> String {
+/// The stream's codec, with its bit depth and chroma when the hardware
+/// decoder lacks them ("10-bit HEVC", "4:2:2 HEVC").
+fn stream_desc(v: &StreamInfo) -> String {
     let codec = match v.codec.as_str() {
         "hevc" => "HEVC".to_string(),
         "h264" => "H.264".to_string(),
@@ -615,12 +610,40 @@ pub(crate) fn slow_decode_notice(
     };
     // The hardware decodes 8-bit 4:2:0 only: say which of the two it isn't.
     let chroma = v.chroma();
-    let desc = match (v.bit_depth > 8, chroma != "4:2:0") {
+    match (v.bit_depth > 8, chroma != "4:2:0") {
         (true, true) => format!("{}-bit {chroma} {codec}", v.bit_depth),
         (true, false) => format!("{}-bit {codec}", v.bit_depth),
         (false, true) => format!("{chroma} {codec}"),
         (false, false) => codec,
-    };
+    }
+}
+
+/// Why a video decodes in software, for the stream info: the hardware
+/// decoder's error when it was tried, else why it wasn't.
+pub(crate) fn software_reason(
+    v: &StreamInfo,
+    hardware_on: bool,
+    hardware_error: Option<&str>,
+) -> String {
+    match hardware_error {
+        Some(e) => e.to_string(),
+        None if !has_hardware_decoder(v) => {
+            format!("no hardware decoding for {}", stream_desc(v))
+        }
+        None if !hardware_on => "hardware decoding is off in Settings".to_string(),
+        None => "hardware decoder not tried".to_string(),
+    }
+}
+
+/// Why a software-decoded video stutters, and what plays smoothly instead.
+/// `hardware_on` is the hardware decoding setting; `hardware_error` why the
+/// hardware decoder, when tried, is not decoding.
+pub(crate) fn slow_decode_notice(
+    v: &StreamInfo,
+    hardware_on: bool,
+    hardware_error: Option<&str>,
+) -> String {
+    let desc = stream_desc(v);
     if !has_hardware_decoder(v) {
         return format!(
             "No hardware decoding for {desc}, so it stutters. 8-bit 4:2:0 H.265 plays smoothly"
@@ -766,5 +789,15 @@ mod tests {
         let refused = "V4L2: stream size unknown";
         let n = slow_decode_notice(&stream("hevc", 8), true, Some(refused));
         assert!(n.contains("can't play this HEVC (8192x4096)"), "{n}");
+
+        // The stream info's reason: the error when tried, else why not.
+        let r = software_reason(&stream("hevc", 10), true, None);
+        assert_eq!(r, "no hardware decoding for 10-bit HEVC");
+        let r = software_reason(&stream("hevc", 10), false, None);
+        assert_eq!(r, "no hardware decoding for 10-bit HEVC");
+        let r = software_reason(&stream("hevc", 8), false, None);
+        assert_eq!(r, "hardware decoding is off in Settings");
+        let r = software_reason(&stream("hevc", 8), true, Some(busy));
+        assert_eq!(r, busy);
     }
 }

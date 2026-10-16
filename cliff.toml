@@ -1,7 +1,12 @@
 # git-cliff configuration — https://git-cliff.org
 # Generates categorised release notes from conventional commits.
-# CI uses `git cliff --bumped-version` to calculate the next SemVer and
+# CI uses `git cliff --bumped-version` to calculate the next stable SemVer
+# (a beta appends -beta.N to it) and
 # `git cliff --unreleased --strip header` for the GitHub Release body.
+#
+# Versions count from the last stable tag (vX.Y.Z) only: beta tags are
+# ignored, so they don't bump themselves (beta.1 -> beta.2) or hide the
+# commits a stable release needs to list.
 
 [changelog]
 body = """
@@ -36,7 +41,7 @@ commit_parsers = [
     # Catch-all: commits not following any convention still appear.
     { message = ".*", group = "📦 Other" },
 ]
-tag_pattern = "v[0-9].*"
+tag_pattern = '^v[0-9]+\.[0-9]+\.[0-9]+$'
 
 [bump]
 initial_tag = "v0.4.0"

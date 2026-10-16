@@ -159,11 +159,35 @@ impl VideoFrame {
     /// Builds a frame from tightly packed RGBA pixels (photos decoded in Rust,
     /// test images). Converted to full-range BT.709 I420.
     pub fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<VideoFrame> {
+        Self::from_rgba_as(width, height, rgba, PixelLayout::I420 { bits: 8 }, true)
+    }
+
+    /// Like [`VideoFrame::from_rgba`], converted to BT.709 in `layout` (any
+    /// but `DrmPrime`), full or limited range: frames shaped like the hardware
+    /// decoders' (NV12, P010) for tests.
+    pub fn from_rgba_as(
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        layout: PixelLayout,
+        full_range: bool,
+    ) -> Result<VideoFrame> {
         if width == 0 || height == 0 || rgba.len() < (width * height * 4) as usize {
             return Err(Error::Unsupported(
                 "RGBA buffer does not match its size".into(),
             ));
         }
+        let format = match layout {
+            PixelLayout::I420 { bits: 8 } => ff::AV_PIX_FMT_YUV420P,
+            PixelLayout::I420 { bits: 10 } => ff::AV_PIX_FMT_YUV420P10LE,
+            PixelLayout::Nv12 => ff::AV_PIX_FMT_NV12,
+            PixelLayout::P010 => ff::AV_PIX_FMT_P010LE,
+            _ => {
+                return Err(Error::Unsupported(format!(
+                    "no RGBA conversion to {layout:?}"
+                )));
+            }
+        };
         let (w, h) = (width as i32, height as i32);
         // SAFETY: a fresh frame is allocated with av_frame_get_buffer and
         // filled by swscale from the caller's buffer, which holds w*h*4 bytes.
@@ -174,7 +198,7 @@ impl VideoFrame {
                 ff::AV_PIX_FMT_RGBA,
                 w,
                 h,
-                ff::AV_PIX_FMT_YUV420P,
+                format,
                 (ff::SWS_BICUBIC | ff::SWS_ACCURATE_RND | ff::SWS_FULL_CHR_H_INP) as i32,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -184,13 +208,26 @@ impl VideoFrame {
                 return Err(Error::Unsupported("swscale RGBA -> YUV".into()));
             }
             let coeffs = ff::sws_getCoefficients(ff::SWS_CS_ITU709 as i32);
-            ff::sws_setColorspaceDetails(ctx, coeffs, 1, coeffs, 1, 0, 1 << 16, 1 << 16);
+            ff::sws_setColorspaceDetails(
+                ctx,
+                coeffs,
+                1,
+                coeffs,
+                full_range as i32,
+                0,
+                1 << 16,
+                1 << 16,
+            );
             let mut dst = ff::av_frame_alloc();
-            (*dst).format = ff::AV_PIX_FMT_YUV420P;
+            (*dst).format = format;
             (*dst).width = w;
             (*dst).height = h;
             (*dst).colorspace = ff::AVCOL_SPC_BT709;
-            (*dst).color_range = ff::AVCOL_RANGE_JPEG;
+            (*dst).color_range = if full_range {
+                ff::AVCOL_RANGE_JPEG
+            } else {
+                ff::AVCOL_RANGE_MPEG
+            };
             (*dst).color_trc = ff::AVCOL_TRC_BT709;
             (*dst).color_primaries = ff::AVCOL_PRI_BT709;
             if ff::av_frame_get_buffer(dst, 0) < 0 {
@@ -221,7 +258,7 @@ impl VideoFrame {
                 duration: 0.0,
                 width,
                 height,
-                layout: PixelLayout::I420 { bits: 8 },
+                layout,
                 color,
                 serial: 0,
                 id: next_id(),

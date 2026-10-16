@@ -65,9 +65,23 @@ XR_RUNTIME_JSON=/usr/share/openxr/1/openxr_monado.json \
    `crates/fp-updater/src/lib.rs` (`RELEASE_PUBLIC_KEY`), and store the
    whole `.key` file as the `FP_RELEASE_KEY` repository secret. Keep the key
    offline otherwise.
-2. Bump `version` in `crates/frameplayer/Cargo.toml`, tag `vX.Y.Z`, push.
-   CI builds, packages, signs `manifest.json` and publishes the GitHub
-   release with the zip, `manifest.json(.sig)` and `framedrop.json`.
+2. Stable: push (or merge) to `main`. Beta: run the `ci` workflow on any
+   other branch from the Actions tab (Run workflow). CI calculates the
+   version, stamps it into `crates/frameplayer/Cargo.toml`, builds,
+   packages, signs `manifest.json` and publishes the GitHub release with
+   the zip, `manifest.json(.sig)` and `framedrop.json`.
+
+   - `main` gets the next stable `X.Y.Z` from the conventional commits
+     since the last stable tag (`git cliff --bumped-version`): a breaking
+     change (`feat!:`, `BREAKING CHANGE:`) bumps X, a `feat` bumps Y,
+     anything else bumps Z. Beta tags don't count. With no stable tag yet
+     it is `v0.4.0` (`initial_tag` in `cliff.toml`).
+   - Other branches get that version as `X.Y.Z-beta.N` (N one above the
+     highest existing beta of it, and always above the latest stable),
+     published as a GitHub pre-release that never becomes "latest".
+     FramePlayer offers it on the Beta update channel only.
+   - Pushing a `vX.Y.Z` or `vX.Y.Z-anything` tag releases exactly that
+     version (pre-release if it has a `-`).
 
 Until a key exists, in-app updates and `frameplayer-install` without
 `--zip` refuse to install (they never accept unsigned manifests).

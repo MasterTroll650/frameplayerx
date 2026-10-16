@@ -111,7 +111,12 @@ impl Default for Settings {
             remote: RemoteConfig::default(),
             haptics: HapticsSettings::default(),
             haptic_devices: Vec::new(),
-            update_channel: "stable".into(),
+            // A beta build keeps getting betas until the user picks Stable.
+            update_channel: if env!("CARGO_PKG_VERSION").contains('-') {
+                "beta".into()
+            } else {
+                "stable".into()
+            },
             check_updates: true,
             ui_scale: 1.0,
             controls: crate::bindings::Bindings::default(),

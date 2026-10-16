@@ -5,23 +5,26 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  # Run from the Actions tab: on main it publishes a stable release, on any
+  # other branch a beta (a GitHub pre-release). The version is calculated
+  # either way.
   workflow_dispatch:
-    inputs:
-      release:
-        description: "Release tag override, e.g. v0.5.0 (leave empty for git-cliff auto-calculation)"
-        required: false
-        type: string
-        default: ""
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # main: the next stable version, which git-cliff calculates from the
+  # conventional commits since the last stable tag (see cliff.toml). Other
+  # branches and pull requests: that version as a beta, X.Y.Z-beta.N, with
+  # N one above the highest existing beta of X.Y.Z. A pushed v* tag is used
+  # as it is.
   version:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.calc.outputs.version }}
       tag: ${{ steps.calc.outputs.tag }}
+      prerelease: ${{ steps.calc.outputs.prerelease }}
       is_release: ${{ steps.calc.outputs.is_release }}
     steps:
       - uses: actions/checkout@v4
@@ -33,24 +36,47 @@ jobs:
       - name: Calculate version
         id: calc
         run: |
-          if [ -n "${{ inputs.release }}" ]; then
-            raw="${{ inputs.release }}"
-            ver="${raw#v}"
-          elif [ "${{ startsWith(github.ref, 'refs/tags/v') }}" = "true" ]; then
+          is_release=false
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             ver="${GITHUB_REF_NAME#v}"
+            is_release=true
           else
             ver=$(git cliff --bumped-version)
+            ver="${ver#v}"
+            if [ "$GITHUB_REF" = refs/heads/main ]; then
+              # git-cliff repeats the last version when nothing came since.
+              if git rev-parse -q --verify "refs/tags/v$ver" > /dev/null; then
+                echo "::warning::v$ver already exists and nothing was committed since: no release"
+              else
+                is_release=true
+              fi
+            else
+              # A beta must sort above every stable release, also when the
+              # branch has nothing new or was cut before the latest one.
+              latest=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+              latest="${latest#v}"
+              if [ -n "$latest" ] && [ "$(printf '%s\n' "$latest" "$ver" | sort -V | head -1)" = "$ver" ]; then
+                IFS=. read -r major minor patch <<< "$latest"
+                ver="$major.$minor.$((patch + 1))"
+              fi
+              n=$(git tag -l "v$ver-beta.*" | sed -n "s/^v$ver-beta\.\([0-9]\+\)$/\1/p" | sort -n | tail -1)
+              ver="$ver-beta.$((${n:-0} + 1))"
+              if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+                is_release=true
+              fi
+            fi
           fi
-          ver="${ver#v}"
-          echo "Calculated version: $ver"
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "tag=v$ver" >> "$GITHUB_OUTPUT"
-
-          if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ startsWith(github.ref, 'refs/tags/v') }}" = "true" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-          fi
+          case "$ver" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          echo "Version $ver, pre-release: $prerelease, release: $is_release"
+          {
+            echo "version=$ver"
+            echo "tag=v$ver"
+            echo "prerelease=$prerelease"
+            echo "is_release=$is_release"
+          } >> "$GITHUB_OUTPUT"
 
   check:
     needs: [version]
@@ -157,8 +183,13 @@ jobs:
     if: needs.version.outputs.is_release == 'true'
     needs: [version, check, installer]
     runs-on: ubuntu-24.04
+    # One at a time, so two runs can't publish the same version.
+    concurrency: release
     permissions:
       contents: write
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -173,6 +204,16 @@ jobs:
         with:
           path: src
           fetch-depth: 0
+      - name: Check the tag is free
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          # Another run may have published this version since it was
+          # calculated; a re-run of this one finds it on this commit.
+          at=$(git -C src ls-remote origin "refs/tags/$TAG" | cut -f1)
+          if [ -n "$at" ] && [ "$at" != "$GITHUB_SHA" ]; then
+            echo "::error::$TAG already exists on $at; run the workflow again for the next version"
+            exit 1
+          fi
       - uses: taiki-e/install-action@v2
         with:
           tool: git-cliff
@@ -181,7 +222,15 @@ jobs:
           cd src
           git cliff --bump --unreleased --strip header --output ../dist/RELEASE_NOTES.md || true
           if [ ! -s ../dist/RELEASE_NOTES.md ]; then
-            echo "Release ${{ needs.version.outputs.tag }}" > ../dist/RELEASE_NOTES.md
+            echo "Release $TAG" > ../dist/RELEASE_NOTES.md
+          fi
+          if [ "$PRERELEASE" = true ]; then
+            {
+              echo "Beta built from \`$GITHUB_REF_NAME\` (${GITHUB_SHA::7}). FramePlayer offers it on the Beta channel only (Settings › Updates). Changes since the last stable release:"
+              echo
+              cat ../dist/RELEASE_NOTES.md
+            } > ../dist/notes.md
+            mv ../dist/notes.md ../dist/RELEASE_NOTES.md
           fi
       - uses: dtolnay/rust-toolchain@stable
       - name: Sign the update manifest
@@ -203,6 +252,10 @@ jobs:
           tag_name: ${{ needs.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
           body_path: dist/RELEASE_NOTES.md
+          prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
+          # releases/latest, which stable FramePlayer and frameplayer-install
+          # read, must never point at a beta.
+          make_latest: ${{ needs.version.outputs.prerelease == 'true' && 'false' || 'true' }}
           files: |
             dist/frameplayer-*.zip
             dist/manifest.json
