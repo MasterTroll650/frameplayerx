@@ -623,7 +623,6 @@ pub(crate) fn slow_decode_notice(
         "vp9" => "VP9".to_string(),
         c => c.to_uppercase(),
     };
-    // The hardware decodes 8-bit 4:2:0 only: say which of the two it isn't.
     let chroma = v.chroma();
     let desc = match (v.bit_depth > 8, chroma != "4:2:0") {
         (true, true) => format!("{}-bit {chroma} {codec}", v.bit_depth),
@@ -632,12 +631,12 @@ pub(crate) fn slow_decode_notice(
         (false, false) => codec,
     };
     if !has_hardware_decoder(v) {
-        return format!(
-            "No hardware decoding for {desc}, so it stutters. 8-bit 4:2:0 H.265 plays smoothly"
-        );
+        return format!("Falling back to software decoder: {desc} is unsupported by hardware");
     }
     if !hardware_on {
-        return format!("{desc} in software stutters: turn on hardware decoding in Settings");
+        return format!(
+            "Falling back to software decoder: hardware decoding is turned off in Settings"
+        );
     }
     // Out of decoder memory or sessions: other apps (Steam's streaming
     // among them) hold the hardware decoder.
@@ -646,10 +645,10 @@ pub(crate) fn slow_decode_notice(
         e.contains("memory") || e.contains("busy") || e.contains("no free")
     });
     if busy {
-        format!("Hardware decoder busy: {desc} in software stutters")
+        format!("Hardware decoder busy: falling back to software decoder for {desc}")
     } else {
         format!(
-            "The hardware decoder can't play this {desc} ({}x{}), so it stutters in software",
+            "Falling back to software decoder: hardware cannot decode this {desc} ({}x{})",
             v.width, v.height
         )
     }
@@ -758,15 +757,18 @@ mod tests {
         };
         let n = slow_decode_notice(&stream("av1", 10), true, None);
         assert!(
-            n.contains("10-bit AV1") && n.contains("8-bit 4:2:0 H.265"),
+            n.contains("Falling back to software decoder") && n.contains("10-bit AV1"),
             "{n}"
         );
         let n = slow_decode_notice(&stream("hevc", 10), false, None);
-        assert!(n.contains("turn on hardware decoding"), "{n}");
+        assert!(n.contains("turned off in Settings"), "{n}");
         let n = slow_decode_notice(&stream("hevc", 10), true, None);
         assert!(n.contains("busy"), "{n}");
         let n = slow_decode_notice(&stream("av1", 8), true, None);
-        assert!(n.contains("for AV1,"), "{n}");
+        assert!(
+            n.contains("Falling back to software decoder") && n.contains("AV1"),
+            "{n}"
+        );
         let busy = "V4L2 REQBUFS: Cannot allocate memory (os error 12)";
         let n = slow_decode_notice(&stream("hevc", 8), true, Some(busy));
         assert!(n.contains("busy"), "{n}");
@@ -774,11 +776,14 @@ mod tests {
         let mut s422 = stream("hevc", 8);
         s422.pixel_format = "yuv422p".into();
         let n = slow_decode_notice(&s422, true, None);
-        assert!(n.contains("for 4:2:2 HEVC"), "{n}");
+        assert!(n.contains("4:2:2 HEVC"), "{n}");
         let n = slow_decode_notice(&stream("hevc", 8), false, None);
-        assert!(n.contains("turn on hardware decoding"), "{n}");
+        assert!(n.contains("turned off in Settings"), "{n}");
         let refused = "V4L2: stream size unknown";
         let n = slow_decode_notice(&stream("hevc", 8), true, Some(refused));
-        assert!(n.contains("can't play this HEVC (8192x4096)"), "{n}");
+        assert!(
+            n.contains("hardware cannot decode this HEVC (8192x4096)"),
+            "{n}"
+        );
     }
 }

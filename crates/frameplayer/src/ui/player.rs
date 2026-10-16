@@ -83,6 +83,18 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
                     v.state.adjust_open = !showing;
                     v.state.adjust_tab = 0;
                 }
+                if let Some(video) = pb.player.info().video_stream() {
+                    let st = pb.player.stats();
+                    let (badge_text, tooltip) = stream_info_labels(video, &st);
+                    if stream_pill(ui, &badge_text, st.hardware)
+                        .tip(&tooltip)
+                        .clicked()
+                    {
+                        let showing = v.state.adjust_open && v.state.adjust_tab == 0;
+                        v.state.adjust_open = !showing;
+                        v.state.adjust_tab = 0;
+                    }
+                }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     let message = match pb.player.error() {
                         Some(e) => Some((e, theme::ERROR)),
@@ -313,6 +325,76 @@ fn format_pill(ui: &mut egui::Ui, text: &str) -> egui::Response {
         },
     );
     let fg = theme::TEXT_2.lerp_to_gamma(theme::TEXT, t);
+    ui.painter().galley(rect.center() - g.size() / 2.0, g, fg);
+    resp
+}
+
+/// Short summary label and detailed tooltip for a video stream.
+fn stream_info_labels(v: &fp_media::StreamInfo, st: &fp_media::Stats) -> (String, String) {
+    let codec = match v.codec.as_str() {
+        "hevc" => "HEVC",
+        "h264" => "H.264",
+        "av1" => "AV1",
+        "vp9" => "VP9",
+        c => c,
+    };
+    let hw = if st.hardware { "HW" } else { "SW" };
+    let bits = if v.bit_depth > 8 {
+        format!(" {}-bit", v.bit_depth)
+    } else {
+        String::new()
+    };
+    let badge_text = format!("{hw} · {codec}{bits}");
+
+    let decoder = if st.hardware {
+        format!("Decoder: Hardware ({})", st.video_decoder)
+    } else if let Some(err) = &st.hardware_error {
+        format!("Decoder: Software ({}) — fallback: {err}", st.video_decoder)
+    } else {
+        format!("Decoder: Software ({})", st.video_decoder)
+    };
+    let chroma = v.chroma();
+    let pixel = if v.pixel_format.is_empty() {
+        format!("{}-bit {chroma}", v.bit_depth)
+    } else {
+        format!("{} ({}-bit {chroma})", v.pixel_format, v.bit_depth)
+    };
+    let tooltip = format!(
+        "{decoder}\nFormat: {codec} · {pixel}\nResolution: {}×{} @ {:.2} fps",
+        v.width, v.height, v.fps
+    );
+    (badge_text, tooltip)
+}
+
+/// A small raised pill naming the video stream format and decoder (HW / SW).
+fn stream_pill(ui: &mut egui::Ui, text: &str, hardware: bool) -> egui::Response {
+    let text_color = if hardware {
+        theme::TEXT_2
+    } else {
+        theme::WARN.gamma_multiply(0.9)
+    };
+    let g = ui.painter().layout_no_wrap(
+        text.to_string(),
+        theme::font(Weight::SemiBold, 14.0),
+        text_color,
+    );
+    let (rect, resp) = ui.allocate_exact_size(g.size() + Vec2::new(20.0, 10.0), Sense::click());
+    let t = ui
+        .ctx()
+        .animate_bool_with_time(resp.id, resp.hovered(), 0.12);
+    depth::raised(
+        ui.painter(),
+        rect,
+        8.0,
+        depth::Raised {
+            top: Color32::from_rgb(46, 54, 65).lerp_to_gamma(Color32::from_rgb(62, 72, 86), t),
+            bottom: Color32::from_rgb(33, 40, 49).lerp_to_gamma(Color32::from_rgb(44, 52, 63), t),
+            light: Color32::from_white_alpha(26),
+            lift: 0.3,
+            glow: None,
+        },
+    );
+    let fg = text_color.lerp_to_gamma(theme::TEXT, t);
     ui.painter().galley(rect.center() - g.size() / 2.0, g, fg);
     resp
 }
@@ -610,6 +692,62 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                                     "",
                                     2,
                                 );
+                            });
+                        }
+                        if let Some(video) = pb.player.info().video_stream() {
+                            ui.add_space(6.0);
+                            widgets::section_label(ui, "Video stream");
+                            widgets::rows(ui, |r| {
+                                let st = pb.player.stats();
+                                let decoder_text = if st.hardware {
+                                    format!("Hardware ({})", st.video_decoder)
+                                } else if let Some(err) = &st.hardware_error {
+                                    format!("Software (fallback: {err})")
+                                } else {
+                                    format!("Software ({})", st.video_decoder)
+                                };
+                                r.row("Decoder", None, |ui| {
+                                    ui.label(RichText::new(decoder_text).color(if st.hardware {
+                                        theme::TEXT
+                                    } else {
+                                        theme::WARN
+                                    }));
+                                });
+                                let codec_name = match video.codec.as_str() {
+                                    "hevc" => "HEVC (H.265)".to_string(),
+                                    "h264" => "H.264 (AVC)".to_string(),
+                                    "av1" => "AV1".to_string(),
+                                    "vp9" => "VP9".to_string(),
+                                    c => c.to_uppercase(),
+                                };
+                                let format_desc = if video.bit_depth > 8 {
+                                    format!(
+                                        "{codec_name} {}-bit ({})",
+                                        video.bit_depth,
+                                        video.chroma()
+                                    )
+                                } else {
+                                    format!("{codec_name} 8-bit ({})", video.chroma())
+                                };
+                                r.row("Format", None, |ui| {
+                                    ui.label(RichText::new(format_desc).color(theme::TEXT_2));
+                                });
+                                r.row("Resolution", None, |ui| {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{} × {} @ {:.2} fps",
+                                            video.width, video.height, video.fps
+                                        ))
+                                        .color(theme::TEXT_2),
+                                    );
+                                });
+                                if !video.pixel_format.is_empty() {
+                                    r.row("Pixel format", None, |ui| {
+                                        ui.label(
+                                            RichText::new(&video.pixel_format).color(theme::TEXT_2),
+                                        );
+                                    });
+                                }
                             });
                         }
                     }
