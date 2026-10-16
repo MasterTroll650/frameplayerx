@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 253 46" width="253" height="46">
+  <!-- FrameDrop's own "Install with FrameDrop" button (framedropvr.com/docs)
+       redrawn as an image: GitHub strips the inline styles and the SVG of
+       their HTML snippet. Same colours, border, padding, icon and label. -->
+  <rect x="0.5" y="0.5" width="252" height="45" fill="#080809" stroke="#e6b54a"/>
+  <svg x="11" y="9" width="28" height="28" viewBox="24 11 40 40" fill="none">
+    <path d="M58 23V48H26V42" stroke="#e6b54a" stroke-width="2.5" stroke-linejoin="miter"/>
+    <path d="M56 16H41" stroke="#c41e3a" stroke-width="2.5"/>
+    <path d="M41 16H26V20" stroke="#cb3c3d" stroke-width="2.5" stroke-linejoin="miter"/>
+    <path d="M26 20V26" stroke="#d25d41" stroke-width="2.5"/>
+    <path d="M26 26V32" stroke="#d97c44" stroke-width="2.5"/>
+    <path d="M26 32V37" stroke="#df9747" stroke-width="2.5"/>
+    <path d="M26 37V42" stroke="#e3a949" stroke-width="2.5"/>
+    <rect x="55" y="13" width="6" height="6" fill="#c41e3a"/>
+  </svg>
+  <text x="49" y="27.6" fill="#e6b54a" font-size="13" font-weight="600" textLength="188" lengthAdjust="spacing"
+        font-family="'JetBrains Mono', 'DejaVu Sans Mono', Consolas, Menlo, ui-monospace, monospace">INSTALL WITH FRAMEDROP</text>
+</svg>

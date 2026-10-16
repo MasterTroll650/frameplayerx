@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 266 38" width="266" height="38">
+  <!-- Frame Control's "Install with Frame Control" button
+       (github.com/saphid/steam-frame, docs/web-install.md) as an image for
+       the README: same blue, white semibold label and corners. The label is
+       centred, so wider fallback fonts still fit. -->
+  <rect width="266" height="38" rx="4" fill="#1a9fff"/>
+  <text x="133" y="24.4" fill="#ffffff" font-size="15" font-weight="600" text-anchor="middle"
+        font-family="-apple-system, 'Segoe UI', 'Noto Sans', 'DejaVu Sans', Helvetica, Arial, sans-serif">Install with Frame Control</text>
+</svg>

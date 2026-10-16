@@ -52,8 +52,11 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 
      <a href="https://github.com/remotesojourner/frameplayerx/releases/latest/download/Install-FramePlayerX.desktop"><img src="assets/install-button.svg" alt="Download the installer: Install-FramePlayerX.desktop" width="300" /></a>
 
-   - **With Frame Control or FrameDrop**: turn on Developer Mode (Steam Settings › System › Developer Mode), pair [Frame Control](https://github.com/saphid/steam-frame) or FrameDrop, and open the install link on the [release page](https://github.com/remotesojourner/frameplayerx/releases/latest).
-   - **From a PC**: turn on Developer Mode, download `frameplayerx-install` for your PC from the [release page](https://github.com/remotesojourner/frameplayerx/releases/latest), then:
+   - **With FrameDrop or Frame Control, from a PC**: turn on Developer Mode (Steam Settings › System › Developer Mode) and pair the headset once with [FrameDrop](https://framedropvr.com) or [Frame Control](https://github.com/saphid/steam-frame). Then, in your PC's browser, press the button and the app installs the latest release on the headset:
+
+     <a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fremotesojourner%2Fframeplayerx%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="assets/framedrop-button.svg" alt="Install with FrameDrop" width="253" /></a>
+     <a href="https://remotesojourner.github.io/frameplayerx/frame-control.html"><img src="assets/frame-control-button.svg" alt="Install with Frame Control" width="266" /></a>
+   - **With `frameplayerx-install`, from a PC**: turn on Developer Mode, download `frameplayerx-install` for your PC from the [release page](https://github.com/remotesojourner/frameplayerx/releases/latest), then:
 
      ```bash
      frameplayerx-install pair 192.168.0.68    # once, with the headset's IP address

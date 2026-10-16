@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 const SEARCH_DELAY: Duration = Duration::from_millis(600);
 /// Items per page of a grid.
 const PAGE: usize = 60;
+/// Matches shown per section of a search.
+const SEARCH_LIMIT: usize = 50;
 /// Height of the banners of series and details pages.
 const BANNER: f32 = 320.0;
 
@@ -40,7 +42,17 @@ pub enum Body {
         /// When the search text last changed.
         typed: Option<Instant>,
     },
-    /// A library, collection, folder or search, a page at a time.
+    /// What a search of the server found, a row per kind (films, series,
+    /// collections, other videos), as Jellyfin shows it.
+    Search {
+        /// The search field, in the header.
+        search: String,
+        typed: Option<Instant>,
+        /// What the results are for.
+        asked: String,
+        results: Vec<(&'static str, Vec<MbItem>)>,
+    },
+    /// A library, collection or folder, a page at a time.
     Grid {
         title: String,
         query: MbQuery,
@@ -63,6 +75,8 @@ pub enum Body {
 #[derive(Clone, Debug)]
 pub enum Load {
     Home,
+    /// The titles matching the text.
+    Search(String),
     /// A page of a listing; past the first it adds to what is shown.
     Grid(MbQuery),
     /// A series with its seasons and one season's episodes (`season`, else
@@ -90,6 +104,10 @@ pub enum Mark {
 /// A server's answer to a [`Load`].
 pub enum Loaded {
     Home(MbHome),
+    Search {
+        text: String,
+        results: Vec<(&'static str, Vec<MbItem>)>,
+    },
     Grid {
         page: MbPage,
         append: bool,
@@ -109,6 +127,10 @@ pub enum Loaded {
 pub fn run(src: &MediaBrowserSource, load: &Load) -> fp_sources::Result<Loaded> {
     Ok(match load {
         Load::Home => Loaded::Home(src.home()?),
+        Load::Search(text) => Loaded::Search {
+            text: text.clone(),
+            results: src.search(text, SEARCH_LIMIT)?,
+        },
         Load::Grid(q) => Loaded::Grid {
             page: src.items(q)?,
             append: q.start > 0,
@@ -172,6 +194,10 @@ impl JellyfinView {
         p.error = None;
         match (&mut p.body, loaded) {
             (Body::Home { home, .. }, Loaded::Home(h)) => *home = Some(h),
+            (Body::Search { asked, results, .. }, Loaded::Search { text, results: r }) => {
+                *asked = text;
+                *results = r;
+            }
             (Body::Grid { items, total, .. }, Loaded::Grid { page, append }) => {
                 if append {
                     items.extend(page.items);
@@ -214,6 +240,7 @@ impl JellyfinView {
         p.loading = true;
         let load = match &p.body {
             Body::Home { .. } => Load::Home,
+            Body::Search { asked, .. } => Load::Search(asked.clone()),
             Body::Grid { query, items, .. } => Load::Grid(MbQuery {
                 start: 0,
                 limit: items.len().max(PAGE),
@@ -257,6 +284,10 @@ impl JellyfinView {
                         set(i);
                     }
                 }
+                Body::Search { results, .. } => results
+                    .iter_mut()
+                    .flat_map(|(_, items)| items.iter_mut())
+                    .for_each(set),
                 Body::Grid { items, .. } => items.iter_mut().for_each(set),
                 Body::Series {
                     series,
@@ -307,7 +338,7 @@ pub fn page(
         refresh = widgets::icon_button(ui, icons::ARROWS_CLOCKWISE, 44.0, false)
             .tip("Refresh")
             .clicked();
-        if let Body::Home { search, typed, .. } = &mut p.body
+        if let Body::Home { search, typed, .. } | Body::Search { search, typed, .. } = &mut p.body
             && page::search_field(ui, search, "Search this server", 220.0)
         {
             *typed = Some(Instant::now());
@@ -327,6 +358,7 @@ pub fn page(
         return true;
     };
     page::status(ui, p.loading && !has_content(&p.body), p.error.as_deref());
+    let loading = p.loading;
     let mut go: Option<Go> = None;
     egui::ScrollArea::vertical()
         .auto_shrink(false)
@@ -349,6 +381,12 @@ pub fn page(
                         home.as_ref().and_then(|h| home_rows(ui, v, h))
                     }
                 }
+                Body::Search {
+                    search,
+                    typed,
+                    asked,
+                    results,
+                } => search_results(ui, v, search, typed, asked, results, loading),
                 Body::Grid {
                     query,
                     items,
@@ -417,21 +455,17 @@ pub fn page(
         }
         Some(Go::Search(text)) => {
             let seq = v.state.next_seq();
-            let query = MbQuery {
-                limit: PAGE,
-                ..MbQuery::search(&text)
-            };
-            ask(v, seq, Load::Grid(query.clone()));
+            let text = text.trim().to_string();
+            ask(v, seq, Load::Search(text.clone()));
             j.pages.push(Page {
                 seq,
                 loading: true,
                 error: None,
-                body: Body::Grid {
-                    title: "Search".into(),
-                    query,
-                    items: Vec::new(),
-                    total: 0,
+                body: Body::Search {
+                    search: text.clone(),
                     typed: None,
+                    asked: text,
+                    results: Vec::new(),
                 },
             });
         }
@@ -503,9 +537,7 @@ fn trail(pages: &[Page]) -> String {
         .iter()
         .filter_map(|p| match &p.body {
             Body::Home { .. } => None,
-            Body::Grid { query, .. } if query.parent.is_none() => {
-                Some(format!("Search \"{}\"", query.search.trim()))
-            }
+            Body::Search { asked, .. } => Some(format!("Search \"{asked}\"")),
             Body::Grid { title, .. } => Some(title.clone()),
             Body::Series { series, .. } => Some(series.name.clone()),
             Body::Item { item } => Some(item.name.clone()),
@@ -521,6 +553,7 @@ fn trail(pages: &[Page]) -> String {
 fn has_content(body: &Body) -> bool {
     match body {
         Body::Home { home, .. } => home.is_some(),
+        Body::Search { results, .. } => !results.is_empty(),
         Body::Grid { items, .. } => !items.is_empty(),
         Body::Series { episodes, .. } => !episodes.is_empty(),
         Body::Item { .. } => true,
@@ -673,6 +706,45 @@ fn home_rows(ui: &mut egui::Ui, v: &mut View, h: &MbHome) -> Option<Go> {
             icons::MONITOR_PLAY,
             "No video libraries",
             "This account sees no film, TV or video libraries on the server.",
+            |_| {},
+        );
+    }
+    go
+}
+
+/// Search results, a row per kind. Typing in the header's search field
+/// searches again on this page.
+fn search_results(
+    ui: &mut egui::Ui,
+    v: &mut View,
+    search: &str,
+    typed: &mut Option<Instant>,
+    asked: &str,
+    results: &[(&'static str, Vec<MbItem>)],
+    loading: bool,
+) -> Option<Go> {
+    if let Some(t) = *typed {
+        if t.elapsed() >= SEARCH_DELAY {
+            *typed = None;
+            let text = search.trim();
+            if !text.is_empty() && text != asked {
+                return Some(Go::Reload(Load::Search(text.to_string())));
+            }
+        } else {
+            ui.ctx().request_repaint_after(SEARCH_DELAY);
+        }
+    }
+    ui.add_space(6.0);
+    let mut go = None;
+    for (section, items) in results {
+        go = go.or(item_row(ui, v, section, items, false));
+    }
+    if results.is_empty() && !loading {
+        page::empty_state(
+            ui,
+            icons::MAGNIFYING_GLASS,
+            "Nothing found",
+            &format!("No film, series, collection or video on this server is called \"{asked}\"."),
             |_| {},
         );
     }
@@ -1279,6 +1351,49 @@ mod tests {
             panic!()
         };
         assert!(h.resume[0].played);
+    }
+
+    #[test]
+    fn search_pages_show_rows_by_kind() {
+        let mut j = JellyfinView::new(1);
+        j.pages.push(Page {
+            seq: 2,
+            loading: true,
+            error: None,
+            body: Body::Search {
+                search: "alien".into(),
+                typed: None,
+                asked: "alien".into(),
+                results: vec![],
+            },
+        });
+        assert!(!has_content(&j.pages[1].body));
+        j.loaded(
+            2,
+            Ok(Loaded::Search {
+                text: "aliens".into(),
+                results: vec![
+                    ("Movies", vec![item("m1", MbKind::Movie)]),
+                    ("Shows", vec![item("s1", MbKind::Series)]),
+                ],
+            }),
+        );
+        let Body::Search { asked, results, .. } = &j.pages[1].body else {
+            panic!()
+        };
+        assert_eq!(asked, "aliens");
+        assert_eq!(results.len(), 2);
+        assert_eq!(trail(&j.pages), "Search \"aliens\"");
+
+        // Marks show in the results; a reload searches again.
+        j.mark("s1", Mark::Favorite, true);
+        let Body::Search { results, .. } = &j.pages[1].body else {
+            panic!()
+        };
+        assert!(results[1].1[0].favorite);
+        let (seq, load) = j.reload().unwrap();
+        assert_eq!(seq, 2);
+        assert!(matches!(load, Load::Search(t) if t == "aliens"));
     }
 
     #[test]

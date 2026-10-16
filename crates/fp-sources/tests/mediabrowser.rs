@@ -171,6 +171,51 @@ fn mediabrowser_full_lifecycle_browse_stream_and_progress() {
 }
 
 #[test]
+fn mediabrowser_search_finds_titles_by_kind_not_episodes() {
+    let json = [("Content-Type", "application/json")];
+    let server = TestServer::start(move |req: &Req| match req.path() {
+        "/Users/AuthenticateByName" => resp(
+            200,
+            r#"{"AccessToken":"t","User":{"Id":"u1","Name":"alice"}}"#,
+            &json,
+        ),
+        "/Users/u1/Items" => {
+            // One request per section, with no order: the server ranks.
+            assert!(req.url.contains("SearchTerm=alien&"), "{}", req.url);
+            assert!(!req.url.contains("SortBy"), "{}", req.url);
+            assert!(!req.url.contains("Episode"), "{}", req.url);
+            let body = if req.url.contains("IncludeItemTypes=Movie&") {
+                r#"{"Items":[{"Id":"m1","Name":"Alien","Type":"Movie"},
+                             {"Id":"m2","Name":"Aliens","Type":"Movie"}]}"#
+            } else if req.url.contains("IncludeItemTypes=Series&") {
+                r#"{"Items":[{"Id":"s1","Name":"Alien: Earth","Type":"Series"}]}"#
+            } else {
+                r#"{"Items":[]}"#
+            };
+            resp(200, body, &json)
+        }
+        _ => resp(404, "", &[]),
+    });
+    let mb = fp_sources::MediaBrowserSource::new(&mediabrowser_config(
+        server.url(""),
+        Some(Credentials::new("alice", "secret123")),
+    ))
+    .unwrap();
+    let found = mb.search(" alien ", 50).unwrap();
+    let sections: Vec<(&str, Vec<&str>)> = found
+        .iter()
+        .map(|(s, items)| (*s, items.iter().map(|i| i.name.as_str()).collect()))
+        .collect();
+    assert_eq!(
+        sections,
+        [
+            ("Movies", vec!["Alien", "Aliens"]),
+            ("Shows", vec!["Alien: Earth"])
+        ]
+    );
+}
+
+#[test]
 fn mediabrowser_quick_connect_flow() {
     let server = TestServer::start(|req: &Req| match req.path() {
         "/QuickConnect/Enabled" => resp(200, "true", &[("Content-Type", "application/json")]),

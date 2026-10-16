@@ -321,26 +321,6 @@ impl MbQuery {
         }
     }
 
-    /// A search of the whole server for films, series and videos.
-    pub fn search(text: &str) -> MbQuery {
-        MbQuery {
-            types: [
-                "Movie",
-                "Series",
-                "Episode",
-                "Video",
-                "MusicVideo",
-                "BoxSet",
-            ]
-            .iter()
-            .map(|t| t.to_string())
-            .collect(),
-            recursive: true,
-            search: text.to_string(),
-            ..MbQuery::default()
-        }
-    }
-
     /// Path and query string of `/Users/{user}/Items` for this listing.
     pub(crate) fn path(&self, user: &str) -> String {
         let mut q = format!(
@@ -371,6 +351,29 @@ impl MbQuery {
         }
         q
     }
+}
+
+/// What a search of the whole server looks through, a section each, as
+/// Jellyfin's own search shows it: the titles of films, series, collections
+/// and other videos. Episodes are left out; a series is found by its name.
+pub const SEARCH_SECTIONS: [(&str, &[&str]); 4] = [
+    ("Movies", &["Movie"]),
+    ("Shows", &["Series"]),
+    ("Collections", &["BoxSet"]),
+    ("Videos", &["Video", "MusicVideo"]),
+];
+
+/// Path and query string of one section of a search. It asks for no order,
+/// as Jellyfin's web client doesn't, so the server ranks the matches itself:
+/// exact and leading matches first.
+pub(crate) fn search_path(user: &str, text: &str, types: &[&str], limit: usize) -> String {
+    format!(
+        "/Users/{user}/Items?SearchTerm={}&IncludeItemTypes={}&Recursive=true&Limit={}\
+         &Fields={LIST_FIELDS}&{IMAGES}&EnableTotalRecordCount=false",
+        encode_form_value(text.trim()),
+        types.join(","),
+        limit.max(1),
+    )
 }
 
 /// One page of a listing.
@@ -633,6 +636,22 @@ impl MediaBrowserSource {
         let v = self.api_get_json(&path)?;
         parse_item(&v, &self.base_url)
             .ok_or_else(|| crate::Error::NotFound(format!("item {id} on {}", self.name)))
+    }
+
+    /// The titles matching `text`, by section ([`SEARCH_SECTIONS`]), best
+    /// matches first and at most `limit` a section. Sections without a
+    /// match are left out.
+    pub fn search(&self, text: &str, limit: usize) -> Result<Vec<(&'static str, Vec<MbItem>)>> {
+        let user = self.user()?;
+        let mut found = Vec::new();
+        for (section, types) in SEARCH_SECTIONS {
+            let v = self.api_get_json(&search_path(&user, text, types, limit))?;
+            let items = parse_list(&v, &self.base_url);
+            if !items.is_empty() {
+                found.push((section, items));
+            }
+        }
+        Ok(found)
     }
 
     /// Partly watched films and episodes, most recent first.
@@ -910,8 +929,29 @@ mod tests {
         }
         let all = MbQuery::default().path("u1");
         assert!(!all.contains("ParentId") && !all.contains("Filters") && !all.contains("Search"));
-        let s = MbQuery::search("x");
-        assert!(s.recursive && s.types.contains(&"Episode".to_string()));
+    }
+
+    #[test]
+    fn search_looks_for_titles_ranked_by_the_server() {
+        let p = search_path("u1", " blade runner ", &["Video", "MusicVideo"], 50);
+        assert!(
+            p.starts_with("/Users/u1/Items?SearchTerm=blade%20runner&"),
+            "{p}"
+        );
+        for part in [
+            "IncludeItemTypes=Video,MusicVideo",
+            "Recursive=true",
+            "Limit=50",
+        ] {
+            assert!(p.contains(part), "{part} missing from {p}");
+        }
+        assert!(!p.contains("SortBy"), "the server ranks the matches: {p}");
+        let types: Vec<&str> = SEARCH_SECTIONS
+            .iter()
+            .flat_map(|(_, t)| t.iter().copied())
+            .collect();
+        assert!(types.contains(&"Movie") && types.contains(&"Series"));
+        assert!(!types.contains(&"Episode"));
     }
 
     #[test]

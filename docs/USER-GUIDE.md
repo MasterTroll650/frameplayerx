@@ -41,9 +41,23 @@ The other two ways need **Developer Mode** on, and the headset paired once
 with your PC by `frameplayerx-install pair` (below), Frame Control,
 FrameDrop or Valve's SteamOS Devkit Client.
 
-**One click (Frame Control / FrameDrop).** Open the install link from the
-release page. It points the tool at `framedrop.json`, which downloads the
-release, checks its SHA-256 and unpacks it into `~/frameplayerx`.
+**With FrameDrop or Frame Control, from a PC.** With the app running on
+your PC and the headset paired, press the button in your PC's browser:
+
+<a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fremotesojourner%2Fframeplayerx%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="../assets/framedrop-button.svg" alt="Install with FrameDrop" width="253" /></a>
+<a href="https://remotesojourner.github.io/frameplayerx/frame-control.html"><img src="../assets/frame-control-button.svg" alt="Install with Frame Control" width="266" /></a>
+
+GitHub doesn't keep links that open apps, so the Frame Control button opens a
+small page that opens Frame Control. If that doesn't work, paste this link
+into the browser's address bar instead:
+
+```
+frame-control://install?manifest=https%3A%2F%2Fgithub.com%2Fremotesojourner%2Fframeplayerx%2Freleases%2Flatest%2Fdownload%2Fframeplayerx.json
+```
+
+Either app reads the release's manifest (`framedrop.json` or
+`frameplayerx.json`), downloads the latest release, checks its SHA-256 and
+unpacks it into `~/frameplayerx`.
 
 **From a PC with the installer.** Download `frameplayerx-install` for your
 PC from the release page and run it:
@@ -177,7 +191,7 @@ videos, except those you watched or marked.
 | Source | What browsing it offers |
 |---|---|
 | On this device | **Videos**: everything found on the headset, its cards and drives, with search, format filters and sorting. **Folders**: the home folder and the drives as folders |
-| Jellyfin / Emby | Your libraries, *Continue watching*, *Next up* and the latest additions; poster grids searched, sorted and filtered by the server (unwatched, in progress, favorites); series by season and episode; details with the story, cast and genres. Watched marks, favorites and resume points are the server's, and what you watch is reported back to it |
+| Jellyfin / Emby | Your libraries, *Continue watching*, *Next up* and the latest additions; a search of the whole server by title, as Jellyfin's own search shows it: a row each of movies, shows, collections and other videos, best matches first (episodes are found through their show); poster grids searched, sorted and filtered by the server (unwatched, in progress, favorites); series by season and episode; details with the story, cast and genres. Watched marks, favorites and resume points are the server's, and what you watch is reported back to it |
 | DeoVR feed / HereSphere API (XBVR, Stash) | The server's scene groups as chips over a grid of scenes; search across titles, studios, performers and tags; order by title, date, rating or length; *Scripted* and *Favorites* filters. ⋯ opens a scene's details: description, performers and tags (tap one to see its other scenes), and chapters to start from |
 | SMB, WebDAV, HTTP folders, DLNA, local folders | Folders and files: search the folder you are in, order by name, date or size, *Play all* |
 
