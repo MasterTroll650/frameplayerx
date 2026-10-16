@@ -204,7 +204,13 @@ impl MediaUpsert {
             )));
         }
         let mut u = MediaUpsert::new(entry.location.clone(), source_id);
-        let title = stem_of(&entry.name).trim();
+        // A file name loses its extension; a title ("Dr. Strangelove") stays.
+        let title = if fp_core::source::is_video_name(&entry.name) {
+            stem_of(&entry.name)
+        } else {
+            &entry.name
+        }
+        .trim();
         if !title.is_empty() {
             u.title = title.to_string();
         }
@@ -1098,12 +1104,60 @@ impl Library {
         })
     }
 
-    /// Deletes the whole watch history (resume positions and play counts are
-    /// kept).
-    pub fn clear_history(&self) -> Result<()> {
-        self.with(|c| {
-            c.execute("DELETE FROM history", [])?;
+    /// Takes a video out of the watch history: its sessions, last playback,
+    /// resume position and play count go. Ratings, favourites, tags,
+    /// bookmarks and adjustments are kept.
+    pub fn remove_from_history(&self, id: MediaId) -> Result<()> {
+        self.in_tx(|c| {
+            let n = c.execute(
+                "UPDATE media SET last_played = NULL, resume_position = 0, play_count = 0
+                 WHERE id = ?1",
+                [id.0],
+            )?;
+            affected(n, id)?;
+            c.execute("DELETE FROM history WHERE media_id = ?1", [id.0])?;
             Ok(())
+        })
+    }
+
+    /// Deletes the whole watch history: every session, and every video's
+    /// last playback, resume position and play count. Ratings, favourites,
+    /// tags, bookmarks and adjustments are kept.
+    pub fn clear_history(&self) -> Result<()> {
+        self.in_tx(|c| {
+            c.execute("DELETE FROM history", [])?;
+            c.execute(
+                "UPDATE media SET last_played = NULL, resume_position = 0, play_count = 0",
+                [],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Deletes videos that were never played and carry nothing the user
+    /// set (favourite, rating, tags, format, adjustments, keyframes,
+    /// bookmarks, playlists): what browsing or importing a network source
+    /// left behind. With `source_id`, only that source's; without, those of
+    /// every network source (local files stay: the folder scan keeps them).
+    /// Returns how many were deleted.
+    pub fn forget_unwatched(&self, source_id: Option<&str>) -> Result<usize> {
+        self.in_tx(|c| {
+            let n = c.execute(
+                "DELETE FROM media WHERE id IN (
+                     SELECT m.id FROM media m
+                     WHERE m.last_played IS NULL AND m.favorite = 0 AND m.rating = 0
+                       AND m.user_format IS NULL AND m.view_settings IS NULL
+                       AND COALESCE(json_array_length(m.keyframes, '$.frames'), 0) = 0
+                       AND NOT EXISTS (SELECT 1 FROM media_tags t WHERE t.media_id = m.id)
+                       AND NOT EXISTS (SELECT 1 FROM markers k
+                                       WHERE k.media_id = m.id AND k.from_source = 0)
+                       AND NOT EXISTS (SELECT 1 FROM playlist_items p WHERE p.media_id = m.id)
+                       AND NOT EXISTS (SELECT 1 FROM history h WHERE h.media_id = m.id)
+                       AND ((?1 IS NULL AND m.location NOT LIKE '/%') OR m.source_id = ?1))",
+                [source_id],
+            )?;
+            prune_tags(c)?;
+            Ok(n)
         })
     }
 
@@ -1367,6 +1421,10 @@ mod tests {
         let r = lib.get(out.id).unwrap().unwrap();
         assert_eq!(r.title, "Trip");
         assert_eq!(r.source_id, "xbvr");
+        // A title from a server keeps its dots.
+        let titled = Entry::new("Dr. Strangelove", "mb:http://jf#item=1", EntryKind::Video);
+        let id = lib.upsert_entry("jf", &titled).unwrap().id;
+        assert_eq!(lib.get(id).unwrap().unwrap().title, "Dr. Strangelove");
         assert_eq!(r.detected.evidence, Evidence::Metadata);
         assert_eq!(r.duration, Some(1200.0));
         assert_eq!(r.thumbnail_url.as_deref(), Some("http://srv/t.jpg"));
@@ -1584,8 +1642,66 @@ mod tests {
         assert_eq!(h[0].id, s2);
         assert!(h.iter().all(|e| e.completed));
         assert!(lib.update_playback(SessionId(999), 1.0, false).is_err());
+        lib.set_favorite(a, true).unwrap();
         lib.clear_history().unwrap();
         assert!(lib.history(10).unwrap().is_empty());
+        let r = lib.get(a).unwrap().unwrap();
+        assert_eq!((r.last_played, r.play_count, r.favorite), (None, 0, true));
+    }
+
+    #[test]
+    fn removing_one_video_from_history() {
+        let lib = lib();
+        let mut u = MediaUpsert::new("/a.mp4", "local");
+        u.duration = Some(100.0);
+        let a = lib.upsert(&u).unwrap().id;
+        let b = add(&lib, "/b.mp4");
+        for id in [a, b] {
+            let s = lib.start_playback(id).unwrap();
+            lib.update_playback(s, 40.0, false).unwrap();
+        }
+        lib.set_rating(a, 4).unwrap();
+        lib.remove_from_history(a).unwrap();
+        let r = lib.get(a).unwrap().unwrap();
+        assert_eq!((r.last_played, r.resume_position, r.rating), (None, 0.0, 4));
+        let watched: Vec<MediaId> = lib
+            .search(&crate::Query {
+                watched_only: true,
+                ..Default::default()
+            })
+            .unwrap()
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(watched, vec![b]);
+        assert!(lib.history(10).unwrap().iter().all(|h| h.media_id == b));
+        assert!(lib.remove_from_history(MediaId(999)).is_err());
+    }
+
+    #[test]
+    fn forgetting_unwatched_network_videos() {
+        let lib = lib();
+        let local = add(&lib, "/v/local.mp4");
+        let up = |loc: &str, src: &str| lib.upsert(&MediaUpsert::new(loc, src)).unwrap().id;
+        let plain = up("smb://nas/v/plain.mp4", "nas");
+        let watched = up("smb://nas/v/watched.mp4", "nas");
+        let fav = up("smb://nas/v/fav.mp4", "nas");
+        let tagged = up("http://feed/1", "feed");
+        let marked = up("http://feed/2", "feed");
+        let other = up("http://feed/3", "feed");
+        lib.start_playback(watched).unwrap();
+        lib.set_favorite(fav, true).unwrap();
+        lib.set_tags(tagged, &["keep"]).unwrap();
+        lib.add_marker(marked, 3.0, "mine").unwrap();
+
+        assert_eq!(lib.forget_unwatched(Some("nas")).unwrap(), 1);
+        assert!(lib.get(plain).unwrap().is_none());
+        assert!(lib.get(other).unwrap().is_some());
+        assert_eq!(lib.forget_unwatched(None).unwrap(), 1);
+        assert!(lib.get(other).unwrap().is_none());
+        for id in [local, watched, fav, tagged, marked] {
+            assert!(lib.get(id).unwrap().is_some(), "{id} was deleted");
+        }
     }
 
     #[test]

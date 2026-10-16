@@ -46,12 +46,13 @@ pub use config::{
 };
 pub use dlna::{DlnaDevice, DlnaSource, SsdpResponse, discover};
 pub use error::{Error, Result};
-pub use feed::{DeoVrSource, HereSphereSource, MediaSource, SceneInfo};
+pub use feed::{DeoVrSource, FeedLibrary, FeedScene, HereSphereSource, MediaSource, SceneInfo};
 pub use http::{HttpClient, HttpFile, HttpOptions};
 pub use httpdir::HttpDirSource;
 pub use local::LocalSource;
 pub use mediabrowser::{
-    MediaBrowserSource, QuickConnectState, quick_connect_initiate_url, quick_connect_poll_url,
+    MbFilter, MbHome, MbItem, MbKind, MbPage, MbQuery, MbSort, MediaBrowserSource,
+    QuickConnectState, quick_connect_initiate_url, quick_connect_poll_url,
 };
 pub use sidecar::{ScriptFile, Sidecars, SubtitleFile, match_sidecars};
 pub use smb::SmbSource;
@@ -61,12 +62,24 @@ use fp_core::source::{ByteSource, Entry, EntryKind, is_video_name};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+/// Gives a [`Source`] as [`std::any::Any`]; implemented for every type.
+pub trait AsAny {
+    /// `self` as `Any`.
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+impl<T: std::any::Any> AsAny for T {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// A place media can be browsed and read from.
 ///
 /// Locations are opaque strings produced by the source itself (in
 /// [`Entry::location`]); pass them back unchanged. Implementations block and
 /// may be called from any thread.
-pub trait Source: Send + Sync {
+pub trait Source: AsAny + Send + Sync {
     /// Stable identifier (from the configuration).
     fn id(&self) -> &str;
 
@@ -103,6 +116,14 @@ pub trait Source: Send + Sync {
     /// same folder when the source can list it.
     fn sidecars(&self, video: &Entry) -> Result<Sidecars> {
         sidecars_from_folder(self, video)
+    }
+}
+
+impl dyn Source {
+    /// The source as its concrete type, to reach what only that kind offers
+    /// (a Jellyfin server's catalog, a feed's scene groups).
+    pub fn downcast_ref<T: Source + 'static>(&self) -> Option<&T> {
+        self.as_any().downcast_ref()
     }
 }
 

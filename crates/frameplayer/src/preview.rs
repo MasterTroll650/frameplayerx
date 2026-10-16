@@ -206,7 +206,7 @@ impl Sim {
                 use crate::ui::{Screen, SettingsTab};
                 let screen = match parts.get(1).copied().unwrap_or("home") {
                     "home" => Screen::Home,
-                    "library" => Screen::Library,
+                    "history" => Screen::History,
                     "sources" => Screen::Sources,
                     "settings" => Screen::Settings,
                     other => return Err(format!("no screen {other:?}").into()),
@@ -215,6 +215,8 @@ impl Sim {
                 ui.screen = screen;
                 ui.details = None;
                 ui.remap_open = None;
+                // As the tab does: Sources shows the list, not a source.
+                ui.source = None;
                 if let Some(tab) = parts.get(2) {
                     ui.settings_tab = match *tab {
                         "playback" => SettingsTab::Playback,
@@ -400,18 +402,37 @@ impl Sim {
                 let sort: fp_sources::EntrySort = serde_json::from_str(&format!("\"{name}\""))
                     .map_err(|_| format!("no browse order {name:?}"))?;
                 self.app.settings.browse_sort = sort;
-                if let Some(b) = self.app.ui.browse.as_mut() {
+                if let Some(b) = self.app.ui.folder_mut() {
                     fp_sources::sort_entries_by(&mut b.entries, sort);
                 }
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
-            // Adds a source's folder to the library: `import SOURCE [LOCATION]`.
-            Some("import") => {
-                let source = parts.get(1).ok_or("import needs a source")?.to_string();
-                let location = parts.get(2).map(|l| l.to_string());
-                self.app
-                    .apply(crate::ui::Action::ImportFolder { source, location });
+            // Opens a source in its own browser, as Home's row does:
+            // `open-source SOURCE` (`on-device` for the headset itself).
+            Some("open-source") => {
+                let source = parts
+                    .get(1)
+                    .ok_or("open-source needs a source")?
+                    .to_string();
+                self.app.apply(crate::ui::Action::OpenSource {
+                    source,
+                    back_to: crate::ui::Screen::Home,
+                });
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // The Folders tab of the headset's own page: `local-folders`.
+            Some("local-folders") => {
+                if let Some(crate::ui::SourceView {
+                    page: crate::ui::SourcePage::Local(l),
+                    ..
+                }) = self.app.ui.source.as_mut()
+                {
+                    l.folders = true;
+                }
+                self.app.repaint_all();
+                self.run_frames(3)?;
             }
             // Gives a source a PIN, which locks it: `lock SOURCE PIN`.
             Some("lock") => {

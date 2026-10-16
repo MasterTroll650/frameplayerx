@@ -9,13 +9,16 @@ use std::sync::Arc;
 
 const MAX_TEXTURES: usize = 240;
 const MAX_WIDTH: u32 = 480;
+/// Width of the decodes banners across the page use.
+const WIDE_WIDTH: u32 = 1280;
 
 pub struct Thumbs {
     textures: HashMap<String, TextureHandle>,
     order: VecDeque<String>,
     pending: HashSet<String>,
     failed: HashSet<String>,
-    req: Sender<String>,
+    /// (texture key, path or URL, width)
+    req: Sender<(String, String, u32)>,
     done: Receiver<(String, Option<ColorImage>)>,
 }
 
@@ -38,7 +41,7 @@ pub fn decode(bytes: &[u8], max_width: u32) -> Option<ColorImage> {
 impl Thumbs {
     /// `key`s are local paths or URLs.
     pub fn new(opener: Arc<Opener>) -> Thumbs {
-        let (req, rx) = unbounded::<String>();
+        let (req, rx) = unbounded::<(String, String, u32)>();
         let (tx, done) = unbounded();
         for i in 0..3 {
             let rx = rx.clone();
@@ -47,11 +50,11 @@ impl Thumbs {
             let _ = std::thread::Builder::new()
                 .name(format!("fp-thumbs-{i}"))
                 .spawn(move || {
-                    for key in rx.iter() {
+                    for (key, url, width) in rx.iter() {
                         let img = opener
-                            .fetch(&key, 16 << 20)
+                            .fetch(&url, 16 << 20)
                             .ok()
-                            .and_then(|b| decode(&b, MAX_WIDTH));
+                            .and_then(|b| decode(&b, width));
                         if tx.send((key, img)).is_err() {
                             break;
                         }
@@ -95,6 +98,18 @@ impl Thumbs {
 
     /// The texture for `key`, requesting it when missing.
     pub fn get(&mut self, key: &str) -> Option<TextureHandle> {
+        self.lookup(key, key, MAX_WIDTH)
+    }
+
+    /// A larger decode of `key` for a banner across the page; the small
+    /// one (when there is one) until it is ready.
+    pub fn get_wide(&mut self, key: &str) -> Option<TextureHandle> {
+        self.lookup(&format!("{key}#wide"), key, WIDE_WIDTH)
+            .or_else(|| self.textures.get(key).cloned())
+    }
+
+    /// The texture under `key`, decoding `url` at `width` when missing.
+    fn lookup(&mut self, key: &str, url: &str, width: u32) -> Option<TextureHandle> {
         if let Some(t) = self.textures.get(key) {
             // Refresh LRU position.
             if let Some(pos) = self.order.iter().position(|k| k == key)
@@ -107,7 +122,7 @@ impl Thumbs {
         }
         if !self.pending.contains(key) && !self.failed.contains(key) {
             self.pending.insert(key.to_string());
-            let _ = self.req.send(key.to_string());
+            let _ = self.req.send((key.to_string(), url.to_string(), width));
         }
         None
     }

@@ -55,6 +55,59 @@ pub struct Playback {
     pub notice: Option<String>,
     /// Last decoding check: when, and the player's stall and frame counts.
     decode_check: (Instant, u64, u64, u64),
+    /// The Jellyfin/Emby server the video came from, told how far it got.
+    server: Option<ServerReport>,
+}
+
+/// How often a Jellyfin/Emby server hears where playback is.
+const SERVER_REPORT: Duration = Duration::from_secs(10);
+
+/// Tells the Jellyfin/Emby server a video came from what is being watched,
+/// so its resume points, watched marks and "next up" follow playback on the
+/// headset. Each report goes out on a thread of its own: a slow server must
+/// not hold up the frame loop.
+struct ServerReport {
+    source: std::sync::Arc<dyn fp_sources::Source>,
+    item: String,
+    last: Instant,
+}
+
+impl ServerReport {
+    /// For a video opened from a Jellyfin/Emby server.
+    fn new(opener: &Opener, source_id: Option<&str>, location: &str) -> Option<ServerReport> {
+        if !location.starts_with("mb:") {
+            return None;
+        }
+        let source = opener.source(source_id?)?;
+        source.downcast_ref::<fp_sources::MediaBrowserSource>()?;
+        Some(ServerReport {
+            source,
+            item: location.to_string(),
+            last: Instant::now(),
+        })
+    }
+
+    fn send(
+        &self,
+        report: impl FnOnce(&fp_sources::MediaBrowserSource, &str) -> fp_sources::Result<()>
+        + Send
+        + 'static,
+    ) {
+        let source = self.source.clone();
+        let item = self.item.clone();
+        let sent = std::thread::Builder::new()
+            .name("fp-report".into())
+            .spawn(move || {
+                if let Some(mb) = source.downcast_ref::<fp_sources::MediaBrowserSource>()
+                    && let Err(e) = report(mb, &item)
+                {
+                    log::debug!("reporting playback of {item}: {e}");
+                }
+            });
+        if let Err(e) = sent {
+            log::warn!("cannot start a playback report: {e}");
+        }
+    }
 }
 
 /// The result of opening on a background thread.
@@ -320,6 +373,10 @@ pub fn open(
     let record_id = record.as_ref().map(|r| r.id);
     let session = record_id.and_then(|id| library.start_playback(id).ok());
     let script_count = scripts.len();
+    let server = ServerReport::new(opener, req.source_id.as_deref(), &location);
+    if let Some(s) = &server {
+        s.send(|mb, item| mb.report_playback_start(item));
+    }
     Ok(Opened {
         playback: Playback {
             player,
@@ -344,6 +401,7 @@ pub fn open(
             last_save: Instant::now(),
             notice: None,
             decode_check: (Instant::now(), 0, 0, 0),
+            server,
         },
         scripts,
     })
@@ -385,6 +443,14 @@ impl Playback {
             && let Err(e) = library.update_playback(s, self.player.position(), finished)
         {
             log::warn!("saving progress: {e}");
+        }
+        // Closing tells the server it stopped instead (see `close`).
+        if let Some(s) = self.server.as_mut().filter(|_| !force)
+            && s.last.elapsed() >= SERVER_REPORT
+        {
+            s.last = Instant::now();
+            let (position, paused) = (self.player.position(), self.player.is_paused());
+            s.send(move |mb, item| mb.report_playback_progress(item, position, paused));
         }
     }
 
@@ -522,6 +588,11 @@ impl Playback {
     pub fn close(mut self, library: &Library) {
         self.save_progress(library, true);
         self.save_key(library, true);
+        if let Some(s) = &self.server {
+            // Near the end, the server counts it as watched.
+            let position = self.player.position();
+            s.send(move |mb, item| mb.report_playback_stopped(item, position));
+        }
         let player = self.player;
         let closing = std::thread::Builder::new()
             .name("fp-close".into())

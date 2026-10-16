@@ -447,8 +447,17 @@ fn library(ui: &mut egui::Ui, v: &mut View) {
             }
         });
         r.row(
+            "Forget unwatched network videos",
+            Some("What browsing or adding a server's folders left behind. Watched videos, favorites and ratings stay."),
+            |ui| {
+                if widgets::button_sized(ui, None, "Clean up", Kind::Secondary, 44.0).clicked() {
+                    v.actions.push(Action::ForgetUnwatched);
+                }
+            },
+        );
+        r.row(
             "Clear watch history",
-            Some("Positions and play counts."),
+            Some("Everything watched, with positions and play counts. Favorites and ratings stay."),
             |ui| {
                 if widgets::button_sized(ui, None, "Clear", Kind::Danger, 44.0).clicked() {
                     v.actions.push(Action::ClearHistory);

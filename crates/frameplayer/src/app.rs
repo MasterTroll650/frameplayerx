@@ -5,7 +5,9 @@ use crate::jobs::Jobs;
 use crate::playback::{self, OpenRequest, Opened, Playback};
 use crate::services::Services;
 use crate::settings::Settings;
-use crate::ui::{self, Action, Browse, UiState, UpdateStatus, View};
+use crate::ui::{
+    self, Action, Browse, Screen, SourcePage, SourceView, UiState, UpdateStatus, View,
+};
 use crate::world::{Panel, Pointer, anchor_from_head, place, place_around, turned_with_picture};
 use fp_core::PlaybackStatus;
 use fp_core::format::Projection;
@@ -74,7 +76,25 @@ enum Job {
     },
     Status(String),
     ScanDone(String),
-    Imported(Result<usize, String>),
+    Jellyfin {
+        source: String,
+        seq: u64,
+        result: Box<Result<ui::jellyfin::Loaded, String>>,
+    },
+    FeedLibrary {
+        source: String,
+        result: Result<fp_sources::FeedLibrary, String>,
+    },
+    /// A scene's details: for its page (`full`, with media) or a card.
+    FeedScene {
+        source: String,
+        url: String,
+        full: bool,
+        result: Box<Result<fp_sources::SceneInfo, String>>,
+    },
+    Toast(String),
+    /// Nothing to show (a server took a change).
+    Done,
     Dlna(Result<Vec<fp_sources::DlnaDevice>, String>),
     Device(
         crate::settings::HapticDeviceConfig,
@@ -136,6 +156,10 @@ pub struct App {
     mounts_checked: Instant,
     /// Drives FramePlayer has tried to mount since they were inserted.
     mount_tried: Vec<String>,
+    /// Feed scenes (source, URL) waiting for their details, and how many
+    /// are being fetched.
+    feed_queue: std::collections::VecDeque<(String, String)>,
+    feed_busy: usize,
     quit: bool,
 }
 
@@ -219,6 +243,8 @@ impl App {
                 .checked_sub(Duration::from_secs(60))
                 .unwrap_or_else(Instant::now),
             mount_tried: Vec::new(),
+            feed_queue: Default::default(),
+            feed_busy: 0,
             quit: false,
         };
         app.offsets = app.settings.panel_offsets;
@@ -445,7 +471,7 @@ impl App {
 
     /// Asks for the PIN of a locked source.
     fn ask_pin(&mut self, source: &str) {
-        self.ui.browse = None;
+        self.ui.source = None;
         self.ui.screen = ui::Screen::Sources;
         self.show_browser = true;
         self.ui_visible = true;
@@ -529,7 +555,7 @@ impl App {
             self.services.library.set_hidden(hidden);
             self.ui.invalidate();
             // A folder being browsed may hold what is hidden now.
-            if let Some(b) = self.ui.browse.as_ref() {
+            if let Some(b) = self.ui.folder_mut() {
                 let (source, location) = (b.source.clone(), b.location.clone());
                 self.browse(source, location);
             }
@@ -545,13 +571,21 @@ impl App {
             self.ui.toast("That source is not available");
             return;
         };
-        let b = self.ui.browse.get_or_insert_with(Browse::default);
-        if b.source != source {
-            *b = Browse {
+        // Into the listing on screen, else a folder page of its own.
+        if !self.ui.folder_mut().is_some_and(|b| b.source == source) {
+            self.ui.source = Some(SourceView {
                 source: source.clone(),
-                ..Default::default()
-            };
+                name: src.name().to_string(),
+                back_to: Screen::Sources,
+                page: SourcePage::Folders(Browse {
+                    source: source.clone(),
+                    ..Default::default()
+                }),
+            });
         }
+        let Some(b) = self.ui.folder_mut() else {
+            return;
+        };
         b.location = location.clone();
         b.loading = true;
         b.error = None;
@@ -584,44 +618,147 @@ impl App {
         });
     }
 
-    fn import(&mut self, source: String, location: Option<String>) {
+    /// Opens a source in the browser its kind gets: the headset's videos
+    /// and folders, a Jellyfin/Emby client, a feed's scenes, or folders.
+    fn open_source(&mut self, source: String, back_to: Screen) {
+        self.ui.details = None;
+        self.ui.pin_form = None;
+        self.ui.source_form = None;
+        self.ui.screen = Screen::Sources;
+        if source == crate::services::LOCAL_HUB {
+            self.ui.source = Some(SourceView {
+                source,
+                name: "On this device".into(),
+                back_to,
+                page: SourcePage::Local(Default::default()),
+            });
+            return;
+        }
         if let Some(lock) = self.lock_on(&source) {
             self.ask_pin(&lock);
             return;
         }
+        let Some(kind) = self
+            .services
+            .source_configs
+            .iter()
+            .find(|c| c.id() == source)
+            .map(|c| c.kind())
+        else {
+            self.ui.toast("That source is not available");
+            return;
+        };
+        let name = self.source_name(&source);
+        self.feed_queue.clear();
+        let view = |page| SourceView {
+            source: source.clone(),
+            name: name.clone(),
+            back_to,
+            page,
+        };
+        match kind {
+            fp_sources::SourceKind::MediaBrowser => {
+                let seq = self.ui.next_seq();
+                let j = ui::jellyfin::JellyfinView::new(seq);
+                self.ui.source = Some(view(SourcePage::Jellyfin(j)));
+                self.apply(Action::Jellyfin {
+                    source,
+                    seq,
+                    load: ui::jellyfin::Load::Home,
+                });
+            }
+            fp_sources::SourceKind::DeoVr | fp_sources::SourceKind::HereSphere => {
+                let f = ui::feeds::FeedView::new(kind);
+                self.ui.source = Some(view(SourcePage::Feed(f)));
+                self.apply(Action::FeedLoad { source });
+            }
+            _ => {
+                self.ui.source = Some(view(SourcePage::Folders(Browse {
+                    source: source.clone(),
+                    ..Default::default()
+                })));
+                self.browse(source, None);
+            }
+        }
+    }
+
+    /// Fetches waiting feed scenes' details, a few at a time.
+    fn pump_feed(&mut self) {
+        const WORKERS: usize = 6;
+        let current = match self.ui.source.as_ref() {
+            Some(SourceView {
+                source,
+                page: SourcePage::Feed(_),
+                ..
+            }) => source.clone(),
+            _ => {
+                self.feed_queue.clear();
+                return;
+            }
+        };
+        while self.feed_busy < WORKERS {
+            let Some((source, url)) = self.feed_queue.pop_front() else {
+                break;
+            };
+            if source != current {
+                continue;
+            }
+            let Some(src) = self.services.opener.source(&source) else {
+                continue;
+            };
+            self.feed_busy += 1;
+            self.jobs.spawn("feed-scene", move || {
+                let result = scene_details(src.as_ref(), &url, false);
+                Job::FeedScene {
+                    source,
+                    url,
+                    full: false,
+                    result: Box::new(result),
+                }
+            });
+        }
+    }
+
+    /// Brings a Jellyfin page up to date after watching (marks, resume
+    /// points and "next up" changed on the server).
+    fn refresh_source(&mut self) {
+        let Some(SourceView {
+            source,
+            page: SourcePage::Jellyfin(j),
+            ..
+        }) = self.ui.source.as_mut()
+        else {
+            return;
+        };
+        let source = source.clone();
+        if let Some((seq, load)) = j.reload() {
+            // After the server has heard that playback stopped.
+            self.jellyfin_job(source, seq, load, Duration::from_millis(800));
+        }
+    }
+
+    /// Asks a Jellyfin/Emby server for a page, after `delay`.
+    fn jellyfin_job(
+        &mut self,
+        source: String,
+        seq: u64,
+        load: ui::jellyfin::Load,
+        delay: Duration,
+    ) {
         let Some(src) = self.services.opener.source(&source) else {
             return;
         };
-        let lib = self.services.library.clone();
-        self.ui.toast("Adding videos to the library…");
-        self.jobs.spawn("import", move || {
-            let mut queue = vec![(location, 0)];
-            let mut videos = Vec::new();
-            while let Some((loc, depth)) = queue.pop() {
-                let entries = match src.list(loc.as_deref()) {
-                    Ok(e) => e,
-                    Err(e) if depth == 0 => return Job::Imported(Err(e.to_string())),
-                    Err(_) => continue,
-                };
-                for e in entries {
-                    match e.kind {
-                        fp_core::source::EntryKind::Directory if depth < 4 => {
-                            queue.push((Some(e.location.clone()), depth + 1))
-                        }
-                        fp_core::source::EntryKind::Video => videos.push(e),
-                        _ => {}
-                    }
-                }
-                if videos.len() > 5000 {
-                    break;
-                }
+        self.jobs.spawn("jellyfin", move || {
+            std::thread::sleep(delay);
+            let result = match src.downcast_ref::<fp_sources::MediaBrowserSource>() {
+                Some(mb) => ui::jellyfin::run(mb, &load).map_err(|e| e.to_string()),
+                None => Err("not a Jellyfin or Emby server".to_string()),
+            };
+            Job::Jellyfin {
+                source,
+                seq,
+                result: Box::new(result),
             }
-            let n = videos.len();
-            Job::Imported(
-                lib.upsert_entries(src.id(), &videos)
-                    .map(|_| n)
-                    .map_err(|e| e.to_string()),
-            )
         });
     }
 
@@ -739,8 +876,7 @@ impl App {
                 } => {
                     if let Some(b) = self
                         .ui
-                        .browse
-                        .as_mut()
+                        .folder_mut()
                         .filter(|b| b.source == source && b.location == location)
                     {
                         b.loading = false;
@@ -764,14 +900,54 @@ impl App {
                     self.ui.invalidate();
                     self.services.wake_worker();
                 }
-                Job::Imported(r) => {
-                    match r {
-                        Ok(n) => self.ui.toast(format!("Added {n} videos to the library")),
-                        Err(e) => self.ui.toast(format!("Could not add folder: {e}")),
+                Job::Jellyfin {
+                    source,
+                    seq,
+                    result,
+                } => {
+                    if let Some(SourceView {
+                        source: s,
+                        page: SourcePage::Jellyfin(j),
+                        ..
+                    }) = self.ui.source.as_mut()
+                        && *s == source
+                    {
+                        j.loaded(seq, *result);
                     }
-                    self.ui.invalidate();
-                    self.services.wake_worker();
                 }
+                Job::FeedLibrary { source, result } => {
+                    if let Some(SourceView {
+                        source: s,
+                        page: SourcePage::Feed(f),
+                        ..
+                    }) = self.ui.source.as_mut()
+                        && *s == source
+                    {
+                        f.loaded(result);
+                    }
+                }
+                Job::FeedScene {
+                    source,
+                    url,
+                    full,
+                    result,
+                } => {
+                    if !full {
+                        self.feed_busy = self.feed_busy.saturating_sub(1);
+                    }
+                    if let Some(SourceView {
+                        source: s,
+                        page: SourcePage::Feed(f),
+                        ..
+                    }) = self.ui.source.as_mut()
+                        && *s == source
+                    {
+                        f.scene_loaded(&url, *result, full);
+                    }
+                    self.pump_feed();
+                }
+                Job::Toast(t) => self.ui.toast(t),
+                Job::Done => {}
                 Job::Dlna(r) => {
                     self.ui.dlna_searching = false;
                     match r {
@@ -926,8 +1102,7 @@ impl App {
         self.ui.invalidate();
         if let Some(b) = self
             .ui
-            .browse
-            .as_ref()
+            .folder_mut()
             .filter(|b| b.source == crate::services::REMOVABLE_SOURCE)
         {
             let loc = b.location.clone();
@@ -990,6 +1165,7 @@ impl App {
                 self.show_browser = true;
                 self.ui_visible = true;
                 self.ui.invalidate();
+                self.refresh_source();
             }
             Action::SetFormat(f) => {
                 if let Some(p) = &mut self.playback {
@@ -1070,8 +1246,10 @@ impl App {
                 let _ = lib.set_user_format(id, f);
                 self.ui.invalidate();
             }
-            Action::RemoveMedia(id) => {
-                let _ = lib.remove_media(id);
+            Action::RemoveFromHistory(id) => {
+                if let Err(e) = lib.remove_from_history(id) {
+                    log::warn!("removing from history: {e}");
+                }
                 self.ui.invalidate();
             }
             Action::Rescan { force } => self.rescan(force),
@@ -1081,7 +1259,20 @@ impl App {
                 self.ui.toast(format!("Retrying {n} videos"));
             }
             Action::ClearHistory => {
-                let _ = lib.clear_history();
+                match lib.clear_history() {
+                    Ok(()) => self.ui.toast("Watch history cleared"),
+                    Err(e) => self.ui.toast(format!("Could not clear the history: {e}")),
+                }
+                self.ui.invalidate();
+            }
+            Action::ForgetUnwatched => {
+                match lib.forget_unwatched(None) {
+                    Ok(n) => self.ui.toast(format!(
+                        "Forgot {n} unwatched network video{}",
+                        if n == 1 { "" } else { "s" }
+                    )),
+                    Err(e) => self.ui.toast(format!("Could not clean up: {e}")),
+                }
                 self.ui.invalidate();
             }
             Action::AddFolder(p) => {
@@ -1103,7 +1294,7 @@ impl App {
                     Some(e) => self.ui.toast(e),
                     None => {
                         self.ui.toast(format!("Added {}", cfg.name()));
-                        self.browse(cfg.id().to_string(), None);
+                        self.open_source(cfg.id().to_string(), Screen::Sources);
                     }
                 }
             }
@@ -1114,6 +1305,17 @@ impl App {
                 }
                 self.settings.source_pins.remove(&id);
                 self.ui.unlocked_sources.remove(&id);
+                if self.ui.source.as_ref().is_some_and(|s| s.source == id) {
+                    self.ui.source = None;
+                }
+                // What browsing it left in the library goes with it; what
+                // was watched stays in the history.
+                match lib.forget_unwatched(Some(&id)) {
+                    Ok(n) if n > 0 => log::info!("forgot {n} unwatched videos of {id}"),
+                    Ok(_) => {}
+                    Err(e) => log::warn!("forgetting the videos of {id}: {e}"),
+                }
+                self.ui.invalidate();
                 let list = self
                     .services
                     .source_configs
@@ -1133,7 +1335,7 @@ impl App {
                     self.ui.unlocked_sources.insert(source.clone());
                     self.ui.pin_form = None;
                     self.sync_locks();
-                    self.browse(source, None);
+                    self.open_source(source, Screen::Sources);
                 } else if let Some(f) = self.ui.pin_form.as_mut() {
                     f.pin.clear();
                     f.wrong = true;
@@ -1141,8 +1343,8 @@ impl App {
             }
             Action::LockSource(id) => {
                 self.ui.unlocked_sources.remove(&id);
-                if self.ui.browse.as_ref().is_some_and(|b| b.source == id) {
-                    self.ui.browse = None;
+                if self.ui.source.as_ref().is_some_and(|s| s.source == id) {
+                    self.ui.source = None;
                 }
                 self.ui.toast(format!("Locked {}", self.source_name(&id)));
             }
@@ -1161,8 +1363,8 @@ impl App {
                             .source_pins
                             .insert(source.clone(), crate::pin::hash(&pin));
                         self.ui.unlocked_sources.remove(&source);
-                        if self.ui.browse.as_ref().is_some_and(|b| b.source == source) {
-                            self.ui.browse = None;
+                        if self.ui.source.as_ref().is_some_and(|s| s.source == source) {
+                            self.ui.source = None;
                         }
                         self.ui.toast(format!("{name} is locked with a PIN"));
                     }
@@ -1174,8 +1376,83 @@ impl App {
                     }
                 }
             }
+            Action::OpenSource { source, back_to } => self.open_source(source, back_to),
             Action::Browse { source, location } => self.browse(source, location),
-            Action::ImportFolder { source, location } => self.import(source, location),
+            Action::Jellyfin { source, seq, load } => {
+                self.jellyfin_job(source, seq, load, Duration::ZERO)
+            }
+            Action::JellyfinMark {
+                source,
+                id,
+                mark,
+                on,
+            } => {
+                let Some(src) = self.services.opener.source(&source) else {
+                    return;
+                };
+                self.jobs.spawn("jellyfin-mark", move || {
+                    let Some(mb) = src.downcast_ref::<fp_sources::MediaBrowserSource>() else {
+                        return Job::Toast("Not a Jellyfin or Emby server".into());
+                    };
+                    let r = match mark {
+                        ui::jellyfin::Mark::Favorite => mb.set_favorite(&id, on),
+                        ui::jellyfin::Mark::Played => mb.set_played(&id, on),
+                    };
+                    match r {
+                        Ok(()) => Job::Done,
+                        Err(e) => Job::Toast(format!("The server did not take it: {e}")),
+                    }
+                });
+            }
+            Action::FeedLoad { source } => {
+                let Some(src) = self.services.opener.source(&source) else {
+                    return;
+                };
+                self.jobs.spawn("feed", move || {
+                    let any = src.as_ref();
+                    let result = if let Some(d) = any.downcast_ref::<fp_sources::DeoVrSource>() {
+                        d.library()
+                    } else if let Some(h) = any.downcast_ref::<fp_sources::HereSphereSource>() {
+                        h.library()
+                    } else {
+                        Err(fp_sources::Error::NotFound("not a scene feed".into()))
+                    };
+                    Job::FeedLibrary {
+                        source,
+                        result: result.map_err(|e| e.to_string()),
+                    }
+                });
+            }
+            Action::FeedFill {
+                source,
+                urls,
+                front,
+            } => {
+                let items = urls.into_iter().map(|u| (source.clone(), u));
+                if front {
+                    // On screen now: before what a search queued.
+                    for item in items.rev() {
+                        self.feed_queue.push_front(item);
+                    }
+                } else {
+                    self.feed_queue.extend(items);
+                }
+                self.pump_feed();
+            }
+            Action::FeedScene { source, url } => {
+                let Some(src) = self.services.opener.source(&source) else {
+                    return;
+                };
+                self.jobs.spawn("feed-scene", move || {
+                    let result = scene_details(src.as_ref(), &url, true);
+                    Job::FeedScene {
+                        source,
+                        url,
+                        full: true,
+                        result: Box::new(result),
+                    }
+                });
+            }
             Action::DiscoverDlna => {
                 self.ui.dlna_searching = true;
                 self.jobs.spawn("dlna", || {
@@ -1272,6 +1549,7 @@ impl App {
                 self.show_browser = show;
                 if show {
                     self.ui.invalidate();
+                    self.refresh_source();
                 }
             }
             Action::Quit => self.quit = true,
@@ -1346,8 +1624,10 @@ impl App {
                     {
                         p.push(egui::Event::Text(t));
                     } else {
-                        self.ui.search = t;
-                        self.ui.screen = ui::Screen::Library;
+                        // A search of what was watched.
+                        self.ui.history.search = t;
+                        self.ui.screen = Screen::History;
+                        self.ui.details = None;
                         self.ui.invalidate();
                         self.show_browser = true;
                         self.ui_visible = true;
@@ -1601,16 +1881,15 @@ impl App {
             self.ui.details = None;
         } else if (!playing || self.show_browser) && self.ui.source_form.is_some() {
             self.ui.source_form = None;
-        } else if (!playing || self.show_browser) && self.ui.browse.is_some() {
-            let source = self
-                .ui
-                .browse
-                .as_ref()
-                .map(|b| b.source.clone())
-                .unwrap_or_default();
-            match self.ui.browse.as_mut().and_then(|b| b.stack.pop()) {
-                Some(parent) => self.browse(source, parent),
-                None => self.ui.browse = None,
+        } else if (!playing || self.show_browser) && self.ui.pin_form.is_some() {
+            self.ui.pin_form = None;
+        } else if (!playing || self.show_browser)
+            && self.ui.screen == Screen::Sources
+            && self.ui.source.is_some()
+        {
+            // Up a folder, back a page, or out of the source.
+            if let Some(a) = self.ui.source_back() {
+                self.apply(a);
             }
         } else if playing && self.show_browser {
             // Library open over the video: back to the video.
@@ -1990,4 +2269,21 @@ impl App {
             w.stop();
         }
     }
+}
+
+/// A feed scene's details (`full`: with its media sources, for its page).
+/// Blocking: call from a job thread.
+fn scene_details(
+    src: &(dyn fp_sources::Source + 'static),
+    url: &str,
+    full: bool,
+) -> Result<fp_sources::SceneInfo, String> {
+    let r = if let Some(h) = src.downcast_ref::<fp_sources::HereSphereSource>() {
+        h.video(url, full)
+    } else if let Some(d) = src.downcast_ref::<fp_sources::DeoVrSource>() {
+        d.scene(url)
+    } else {
+        return Err("not a scene feed".into());
+    };
+    r.map_err(|e| e.to_string())
 }

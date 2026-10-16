@@ -118,7 +118,7 @@ pub fn builtin_sources() -> Vec<SourceConfig> {
     let mut out = Vec::new();
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         out.push(SourceConfig::Local(fp_sources::LocalConfig {
-            id: "device-home".into(),
+            id: HOME_SOURCE.into(),
             name: "This device".into(),
             root: home,
         }));
@@ -132,7 +132,11 @@ pub fn builtin_sources() -> Vec<SourceConfig> {
     out
 }
 
+pub const HOME_SOURCE: &str = "device-home";
 pub const REMOVABLE_SOURCE: &str = "device-removable";
+/// The headset as one place to browse: its indexed videos, and the home
+/// folder and removable drives (not a [`Source`] of its own).
+pub const LOCAL_HUB: &str = "on-device";
 /// Where SteamOS (udisks) mounts microSD cards and USB drives:
 /// `/run/media/deck/<label>` (older images: `/run/media/<device>`).
 pub const REMOVABLE_ROOT: &str = "/run/media";

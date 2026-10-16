@@ -35,12 +35,17 @@ EOF
 
 script="$home/ui.fps"
 cat >"$script" <<EOF
-# Library scan and thumbnails.
+# Library scan and thumbnails. Nothing watched yet: Home offers sources.
 wait 4
 panel main home
-screen library
+screen history
+panel main history-empty
+# The headset's own page: its videos, then its folders.
+open-source on-device
 wait 1
-panel main library
+panel main local
+local-folders
+panel main local-folders
 screen sources
 panel main sources
 # Browsing a folder of the home source, by name and then newest first.
@@ -88,13 +93,13 @@ screen settings updates
 panel main settings-updates
 screen settings about
 panel main settings-about
-# Hover state on the first library card.
-screen library
-point main 0.12 0.32
+# Hover state on the first card of the headset's videos.
+open-source on-device
+point main 0.12 0.45
 frames 8
-panel main library-hover
+panel main local-hover
 # The keyboard, from the search field.
-point main 0.12 0.15
+point main 0.12 0.30
 click
 frames 8
 panel keyboard keyboard
@@ -135,10 +140,22 @@ panel adjust adjust-passthrough
 slow-decode
 frames 8
 panel bar player-bar-slow-decode
+# What was watched: the history, and Home's banner, over the paused video
+# (Back closes the adjustments, then shows the browser).
+button secondary
+frames 3
+button secondary
+frames 3
+screen history
+frames 4
+panel main history
+screen home
+frames 4
+panel main home-watched
 EOF
 
 cargo build -p frameplayer
 HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
   XDG_CACHE_HOME="$home/.cache" \
-  target/debug/frameplayer --preview "$out" --script "$script" --size 1400
+  "${CARGO_TARGET_DIR:-target}/debug/frameplayer" --preview "$out" --script "$script" --size 1400
 ls -l "$out"
