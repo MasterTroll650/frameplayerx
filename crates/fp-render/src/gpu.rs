@@ -133,7 +133,6 @@ impl Gpu {
             c"VK_KHR_external_memory_fd",
             c"VK_EXT_external_memory_dma_buf",
             c"VK_EXT_image_drm_format_modifier",
-            c"VK_KHR_sampler_ycbcr_conversion",
         ];
         let mut enabled_ext_ptrs = Vec::new();
         let mut has_drm_mod = false;
@@ -162,14 +161,12 @@ impl Gpu {
         let qci = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family)
             .queue_priorities(&prio)];
-        let mut f11 = vk::PhysicalDeviceVulkan11Features::default().sampler_ycbcr_conversion(true);
         let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
             .dynamic_rendering(true)
             .synchronization2(true);
         let dci = vk::DeviceCreateInfo::default()
             .queue_create_infos(&qci)
             .enabled_extension_names(&enabled_ext_ptrs)
-            .push_next(&mut f11)
             .push_next(&mut f13);
         let raw_dev = creator.create_device(&instance, pdev, &dci)?;
         // SAFETY: raw_dev was created from this instance.

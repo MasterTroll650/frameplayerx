@@ -416,12 +416,13 @@ impl FrameConverter {
             return Err(Error::Unsupported("invalid frame dimensions".into()));
         }
 
-        // If the frame is in hardware format (other than DRM_PRIME), transfer to system memory.
+        // If the frame is in hardware format, transfer to system memory.
         unsafe {
             let desc = ff::av_pix_fmt_desc_get(f.format);
-            let is_hw = f.format != ff::AV_PIX_FMT_DRM_PRIME
-                && ((!desc.is_null() && ((*desc).flags & ff::AV_PIX_FMT_FLAG_HWACCEL as u64 != 0))
-                    || !f.hw_frames_ctx.is_null());
+            let is_hw = (f.format == ff::AV_PIX_FMT_DRM_PRIME
+                && (!f.hw_frames_ctx.is_null() || !f.data[0].is_null()))
+                || (!desc.is_null() && ((*desc).flags & ff::AV_PIX_FMT_FLAG_HWACCEL as u64 != 0))
+                || !f.hw_frames_ctx.is_null();
             if is_hw {
                 let mut sw = ff::av_frame_alloc();
                 if !sw.is_null() && ff::av_hwframe_transfer_data(sw, src, 0) >= 0 {
