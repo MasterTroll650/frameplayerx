@@ -114,6 +114,11 @@ const BAR: usize = 1;
 const ADJUST: usize = 2;
 const KEYBOARD: usize = 3;
 
+/// How long a video may take to open before the app gives up on it. A
+/// server that never sends a frame (a live transcode it can't keep up with)
+/// would otherwise leave "Opening …" up for good.
+const OPEN_TIMEOUT: Duration = Duration::from_secs(45);
+
 pub struct App {
     pub settings: Settings,
     saved: Settings,
@@ -127,6 +132,8 @@ pub struct App {
     pointer: Pointer,
     pub playback: Option<Playback>,
     open_seq: u64,
+    /// When the video being opened was asked for.
+    open_started: Instant,
     jobs: Jobs<Job>,
     anchor: Option<Mat4>,
     reanchor: bool,
@@ -220,6 +227,7 @@ impl App {
             pointer: Pointer::default(),
             playback: None,
             open_seq: 0,
+            open_started: Instant::now(),
             jobs: Jobs::new(),
             anchor: None,
             reanchor: true,
@@ -1951,6 +1959,7 @@ impl App {
             self.ui.invalidate();
         }
         self.open_seq += 1;
+        self.open_started = Instant::now();
         let lib = self.services.library.clone();
         let seq = self.open_seq;
         let opener = self.services.opener.clone();
@@ -1966,6 +1975,22 @@ impl App {
         self.jobs.spawn("open", move || {
             Job::Opened(seq, Box::new(playback::open(req, &opener, &lib, &settings)))
         });
+    }
+
+    /// Gives up on a video that has been opening for [`OPEN_TIMEOUT`]: says
+    /// so, and closes it if it opens after all (its answer is stale then).
+    fn give_up_slow_open(&mut self) {
+        if self.ui.opening.is_none() || self.open_started.elapsed() < OPEN_TIMEOUT {
+            return;
+        }
+        let title = self.ui.opening.take().unwrap_or_default();
+        log::warn!("gave up opening {title} after {} s", OPEN_TIMEOUT.as_secs());
+        self.open_seq += 1;
+        self.ui.open_error = Some(format!(
+            "{title}: the server sent no video in {} seconds",
+            OPEN_TIMEOUT.as_secs()
+        ));
+        self.ui.invalidate();
     }
 
     /// Next/previous video in the list the current one was opened from.
@@ -1994,6 +2019,7 @@ impl App {
 
     pub fn frame(&mut self, renderer: &mut Renderer, input: FrameInput) -> FrameOutput {
         self.poll_jobs();
+        self.give_up_slow_open();
         self.services
             .set_worker_busy(self.playback.is_some() || self.ui.opening.is_some());
         self.sync_locks();

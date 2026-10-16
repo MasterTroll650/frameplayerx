@@ -53,6 +53,15 @@ pub struct MediaSource {
     pub size: Option<u64>,
 }
 
+impl MediaSource {
+    /// A copy the server transcodes as it streams (stash-vr's "transcoding"
+    /// encoding) rather than the file itself: it can't seek, and a server
+    /// transcoding a large file may not send a frame for minutes.
+    pub fn is_transcode(&self) -> bool {
+        self.label.to_ascii_lowercase().contains("transcod")
+    }
+}
+
 /// Everything a feed says about one scene.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SceneInfo {
@@ -92,18 +101,25 @@ pub struct SceneInfo {
 
 impl SceneInfo {
     /// The tallest source not above `max_height`; when every source is
-    /// taller, the smallest one. Sources of unknown height rank lowest.
+    /// taller, the smallest one. Sources of unknown height rank lowest. The
+    /// files themselves come before the server's transcodes of them, which
+    /// are only picked when no file fits (or there is none).
     pub fn best_source(&self, max_height: Option<u32>) -> Option<&MediaSource> {
         let h = |s: &MediaSource| s.height.unwrap_or(0);
         let fits = |s: &&MediaSource| max_height.is_none_or(|m| h(s) <= m);
         // `max_by_key` keeps the last of equal keys; reverse to prefer the
         // first listed encoding among equals.
-        self.sources
-            .iter()
-            .rev()
-            .filter(fits)
-            .max_by_key(|s| h(s))
-            .or_else(|| self.sources.iter().min_by_key(|s| h(s)))
+        let tallest = |transcodes: bool| {
+            self.sources
+                .iter()
+                .rev()
+                .filter(|s| s.is_transcode() == transcodes)
+                .filter(fits)
+                .max_by_key(|s| h(s))
+        };
+        tallest(false)
+            .or_else(|| tallest(true))
+            .or_else(|| self.sources.iter().min_by_key(|s| (s.is_transcode(), h(s))))
     }
 
     /// Copies the scene's details into a listing entry (keeping its
@@ -1341,6 +1357,56 @@ mod tests {
         assert_eq!(s.best_source(None).unwrap().size, Some(123));
         assert_eq!(s.subtitles, ["http://x/Beach.en.srt"]);
         assert_eq!(s.markers, [(1.5, "Talk".to_string())]);
+    }
+
+    #[test]
+    fn the_file_comes_before_the_servers_transcode() {
+        // As stash-vr answers: DeoVR lists the live transcodes first, and
+        // they claim more than the file (2160 against 2048).
+        let transcodes = json!({"name": "transcoding", "videoSources": [
+            {"resolution": 2160, "url": "https://stash/scene/1/stream.mp4?resolution=FOUR_K"},
+            {"resolution": 1080, "url": "https://stash/scene/1/stream.mp4?resolution=FULL_HD"}
+        ]});
+        let direct = json!({"name": "direct", "videoSources": [
+            {"resolution": 2048, "url": "https://stash/scene/1/stream"}
+        ]});
+        let deovr = json!({"title": "A", "encodings": [transcodes, direct]});
+        let s = parse_deovr_scene(&deovr, "https://vr/deovr/1");
+        assert!(s.sources[0].is_transcode() && !s.sources[2].is_transcode());
+        assert_eq!(
+            s.best_source(None).unwrap().url,
+            "https://stash/scene/1/stream"
+        );
+        // A limit the file is over: the transcode that fits.
+        assert_eq!(
+            s.best_source(Some(1080)).unwrap().url,
+            "https://stash/scene/1/stream.mp4?resolution=FULL_HD"
+        );
+        // Nothing fits: the smallest file, before any transcode.
+        assert_eq!(
+            s.best_source(Some(100)).unwrap().url,
+            "https://stash/scene/1/stream"
+        );
+
+        // HereSphere lists the file first; the same choice.
+        let heresphere = json!({"title": "A", "media": [
+            {"name": "direct", "sources": [{"resolution": 2048, "url": "https://stash/scene/1/stream"}]},
+            {"name": "transcoding", "sources": [
+                {"resolution": 2160, "url": "https://stash/scene/1/stream.mp4?resolution=FOUR_K"}
+            ]}
+        ]});
+        let s = parse_heresphere_video(&heresphere, "https://vr/heresphere/1");
+        assert_eq!(
+            s.best_source(None).unwrap().url,
+            "https://stash/scene/1/stream"
+        );
+
+        // Only transcodes: one of them.
+        let only = json!({"title": "A", "encodings": [{"name": "Transcoding", "videoSources": [
+            {"resolution": 720, "url": "https://stash/scene/1/stream.mp4?resolution=STANDARD_HD"}
+        ]}]});
+        let s = parse_deovr_scene(&only, "https://vr/deovr/1");
+        assert!(s.best_source(None).unwrap().is_transcode());
     }
 
     #[test]

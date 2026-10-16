@@ -386,6 +386,24 @@ impl Sim {
                     ..Default::default()
                 });
             }
+            // Opens a video of a source as its card does, the source picking
+            // the stream: `open-in SOURCE LOCATION` (a feed scene's address).
+            Some("open-in") => {
+                let source = parts.get(1).ok_or("open-in needs a source")?.to_string();
+                let location = parts.get(2).ok_or("open-in needs a location")?.to_string();
+                let name = location.rsplit('/').next().unwrap_or_default().to_string();
+                let entry = fp_core::source::Entry::new(
+                    name,
+                    location.clone(),
+                    fp_core::source::EntryKind::Video,
+                );
+                self.app.open(crate::playback::OpenRequest {
+                    location,
+                    source_id: Some(source),
+                    entry: Some(entry),
+                    ..Default::default()
+                });
+            }
             // Browses a folder of a source, as the Sources screen does:
             // `browse SOURCE [LOCATION]` (the location may contain spaces).
             Some("browse") => {
