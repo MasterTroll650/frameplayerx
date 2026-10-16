@@ -51,7 +51,8 @@ Under WSL, keep the Linux build off the Windows drive with
 
 | Folder | What's in it |
 |---|---|
-| `assets/` | The logo (`logo.svg`) and the Steam library artwork made from it |
+| `assets/` | The logo (`logo.svg`), the Steam library artwork made from it, and the docs' install buttons |
+| `site/` | The GitHub Pages site: the page the Frame Control button opens (see [Install buttons](#install-buttons)) |
 | `packaging/` | What goes in the release zip besides the binary: the launcher, a README and the licences |
 | `tools/` | Build, package, preview and test scripts |
 | `tools/frame-desktop-install/` | The Desktop Mode installer: a Python script, and the install and uninstall `.desktop` launchers that download and run it (see its [README](../tools/frame-desktop-install/README.md)) |
@@ -266,6 +267,23 @@ The app finds updates in GitHub's release list: the highest version on
 the Stable channel without a `-` part, on Beta any version. In-app updates
 and `frameplayerx-install` without `--zip` only install releases whose
 manifest is signed with the release key.
+
+### Install buttons
+
+The README's install buttons are images in `assets/`, because GitHub strips
+the inline styles and SVG of the HTML buttons FrameDrop and Frame Control
+publish. They all point at the latest release, so they need no change per
+release:
+
+| Button | Opens |
+|---|---|
+| Download the installer / uninstaller | The release's `Install-FramePlayerX.desktop` / `Uninstall-FramePlayerX.desktop` |
+| Install with FrameDrop | `https://framedropvr.com/install?manifest=` with the release's `framedrop.json`, FrameDrop's documented link: it opens FrameDrop, or FrameDrop's site when it isn't installed |
+| Install with Frame Control | `site/frame-control.html` on GitHub Pages, which opens `frame-control://install?manifest=` with the release's `frameplayerx.json`. GitHub doesn't keep links to app schemes like `frame-control://` in Markdown, so a web page has to |
+
+`.github/workflows/pages.yml` publishes `site/` (with the logo) when it
+changes on `main`. Once, in the repository settings: **Pages › Build and
+deployment › Source: GitHub Actions**.
 
 ## Artwork
 

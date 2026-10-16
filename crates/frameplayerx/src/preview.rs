@@ -425,6 +425,28 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
+            // Searches the Jellyfin/Emby server open, as typing in its
+            // header does: `jellyfin-search blade`.
+            Some("jellyfin-search") => {
+                let text = line.trim().strip_prefix("jellyfin-search").unwrap_or("");
+                use crate::ui::jellyfin::Body;
+                if let Some(crate::ui::SourceView {
+                    page: crate::ui::SourcePage::Jellyfin(j),
+                    ..
+                }) = self.app.ui.source.as_mut()
+                    && let Some(p) = j.pages.last_mut()
+                    && let Body::Home { search, typed, .. } | Body::Search { search, typed, .. } =
+                        &mut p.body
+                {
+                    *search = text.trim().to_string();
+                    // Typed long enough ago for the search to go now.
+                    *typed = Instant::now().checked_sub(Duration::from_secs(1));
+                } else {
+                    return Err("jellyfin-search needs a Jellyfin page open".into());
+                }
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
             // The form editing a source, as its pencil opens: `edit-source ID`.
             Some("edit-source") => {
                 let id = parts.get(1).ok_or("edit-source needs a source")?;
