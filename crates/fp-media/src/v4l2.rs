@@ -186,11 +186,12 @@ impl Nv12Layout {
         sizeimage: usize,
     ) -> Option<Nv12Layout> {
         let (width, height) = visible;
+        let luma_height = fmt_height.max(height).next_multiple_of(32);
         let l = Nv12Layout {
             width,
             height,
             stride,
-            uv_offset: stride * fmt_height.max(height) as usize,
+            uv_offset: stride * luma_height as usize,
         };
         (width > 0 && height > 0 && stride >= width as usize && l.end() <= sizeimage).then_some(l)
     }
@@ -1210,12 +1211,19 @@ mod linux {
         /// The CAPTURE layout for format `f` (visible size from COMPOSE).
         fn layout(&self, f: &Format) -> Result<Nv12Layout> {
             let pixfmt = f.pixelformat();
-            let valid = pixfmt == NV12 || pixfmt == QC08 || pixfmt == Q10C || pixfmt == P010;
+            let use_dmabuf = std::env::var("FRAMEPLAYER_V4L2_DMABUF").as_deref() == Ok("1");
+            let valid = pixfmt == NV12
+                || pixfmt == P010
+                || (use_dmabuf && (pixfmt == QC08 || pixfmt == Q10C));
             if !valid || f.num_planes() != 1 {
                 return Err(Error::Unsupported(format!(
-                    "V4L2 capture format {} with {} planes",
+                    "V4L2 capture format {} is unsupported{}",
                     fourcc_str(f.pixelformat()),
-                    f.num_planes()
+                    if (pixfmt == QC08 || pixfmt == Q10C) && !use_dmabuf {
+                        " (compressed UBWC format cannot be read via MMAP; requires zero-copy DMA-BUF)"
+                    } else {
+                        ""
+                    }
                 )));
             }
             let mut s = Selection {
@@ -1230,9 +1238,9 @@ mod linux {
             let stride = if f.bytesperline(0) > 0 {
                 f.bytesperline(0) as usize
             } else if pixfmt == Q10C || pixfmt == P010 {
-                (f.width() * 2) as usize
+                (f.width() * 2).next_multiple_of(128) as usize
             } else {
-                f.width() as usize
+                f.width().next_multiple_of(128) as usize
             };
             Nv12Layout::new(stride, f.height(), visible, f.sizeimage(0) as usize).ok_or_else(|| {
                 Error::Unsupported(format!(
@@ -1253,9 +1261,18 @@ mod linux {
             {
                 return fourcc(&bytes);
             }
+            let use_dmabuf = std::env::var("FRAMEPLAYER_V4L2_DMABUF").as_deref() == Ok("1");
+            let cap_fmts = formats(&self.fd, BUF_TYPE_CAPTURE_MPLANE);
             if self.ten_bit {
-                let cap_fmts = formats(&self.fd, BUF_TYPE_CAPTURE_MPLANE);
-                if cap_fmts.contains(&P010) { P010 } else { NV12 }
+                if cap_fmts.contains(&P010) {
+                    P010
+                } else if use_dmabuf && cap_fmts.contains(&Q10C) {
+                    Q10C
+                } else {
+                    NV12
+                }
+            } else if use_dmabuf && cap_fmts.contains(&QC08) {
+                QC08
             } else {
                 NV12
             }
@@ -1397,7 +1414,9 @@ mod linux {
             let need = f.sizeimage(0) as usize;
             let new_format = (f.width(), f.height());
             let current_fmt = self.cap.as_ref().map(|c| c.pixelformat).unwrap_or(0);
-            if (f.pixelformat() == NV12 || f.pixelformat() == current_fmt)
+            if (f.pixelformat() == NV12
+                || f.pixelformat() == P010
+                || f.pixelformat() == current_fmt)
                 && can_reuse_capture(allocated_for, count, smallest, new_format, min, need)
             {
                 let layout = self.layout(&f)?;
