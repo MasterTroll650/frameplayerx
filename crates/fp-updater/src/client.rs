@@ -104,6 +104,14 @@ impl Updater {
         select_update(&manifest, current_version, channel, &self.arch)
     }
 
+    /// Fetches a GitHub release list and returns the `manifest.json` URL of
+    /// its highest-versioned release, pre-releases included. See
+    /// [`crate::github::newest_manifest_url`].
+    pub fn newest_manifest_url(&self, releases_url: &str) -> Result<String> {
+        check_download_url(releases_url)?;
+        crate::github::newest_manifest_url(&self.get_small(releases_url)?)
+    }
+
     fn get_small(&self, url: &str) -> Result<Vec<u8>> {
         let resp = self.agent.get(url).call().map_err(|e| http_err(url, e))?;
         let status = resp.status().as_u16();
@@ -518,6 +526,64 @@ mod tests {
         Updater::with_key(key.verifying_key())
             .agent(agent_with_proxy(None))
             .arch("aarch64")
+    }
+
+    #[test]
+    fn beta_finds_the_highest_release_in_the_list() {
+        let srv = Server::start();
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let mut releases = Vec::new();
+        for (tag, version, channel) in [
+            (
+                "v2.1.0-beta.1",
+                Version::parse("2.1.0-beta.1").unwrap(),
+                Channel::Beta,
+            ),
+            ("v2.0.0", Version::new(2, 0, 0), Channel::Stable),
+        ] {
+            let m = ReleaseManifest {
+                name: MANIFEST_NAME.into(),
+                version,
+                channel,
+                published: "2026-10-02T00:00:00Z".into(),
+                notes: String::new(),
+                artifacts: vec![Artifact {
+                    arch: "aarch64".into(),
+                    url: srv.url("/fp.zip"),
+                    sha256: "0".repeat(64),
+                    size: 1,
+                }],
+            };
+            let bytes = serde_json::to_vec(&m).unwrap();
+            let sig = sign_manifest(&bytes, &key).into_bytes();
+            for (path, data) in [("manifest.json", bytes), ("manifest.json.sig", sig)] {
+                let route = Route::Bytes {
+                    data,
+                    ranges: false,
+                };
+                srv.route(&format!("/{tag}/{path}"), route);
+            }
+            releases.push(serde_json::json!({
+                "tag_name": tag,
+                "assets": [{ "name": "manifest.json", "browser_download_url": srv.url(&format!("/{tag}/manifest.json")) }],
+            }));
+        }
+        srv.route(
+            "/releases",
+            Route::Bytes {
+                data: serde_json::to_vec(&releases).unwrap(),
+                ranges: false,
+            },
+        );
+
+        let u = updater(&key);
+        let url = u.newest_manifest_url(&srv.url("/releases")).unwrap();
+        assert_eq!(url, srv.url("/v2.1.0-beta.1/manifest.json"));
+        let current = Version::new(2, 0, 0);
+        let got = u.check(&url, &current, Channel::Beta).unwrap().unwrap();
+        assert_eq!(got.version, Version::parse("2.1.0-beta.1").unwrap());
+        // Stable never takes the beta, whichever way it was found.
+        assert!(u.check(&url, &current, Channel::Stable).unwrap().is_none());
     }
 
     #[test]

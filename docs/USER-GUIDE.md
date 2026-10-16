@@ -39,7 +39,9 @@ adds **FramePlayer** to the Steam library with artwork. Add
 **By hand.** Copy the zip to the headset, unzip it into your home folder
 and add `~/frameplayer/frameplayer.sh` to Steam as a non-Steam game.
 
-FramePlayer then updates itself from the Settings › Updates page.
+FramePlayer then updates itself from the Settings › Updates page. The
+**Stable** channel gets finished releases only; **Beta** also gets test
+versions before they are released.
 
 ## Where your videos can be
 
