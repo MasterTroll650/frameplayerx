@@ -24,7 +24,7 @@ def full_box(kind, payload, version=0, flags=0):
 
 def vr180_boxes():
     st3d = full_box(b"st3d", bytes([2]))  # 2 = left-right
-    svhd = full_box(b"svhd", b"frameplayer fixture\0")
+    svhd = full_box(b"svhd", b"frameplayerx fixture\0")
     prhd = full_box(b"prhd", struct.pack(">iii", 0, 0, 0))
     quarter = 1 << 30  # 0.25 in 0.32 fixed point
     equi = full_box(b"equi", struct.pack(">IIII", 0, 0, quarter, quarter))

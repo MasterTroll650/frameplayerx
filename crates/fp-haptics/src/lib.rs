@@ -1,4 +1,4 @@
-//! Interactive-device support for FramePlayer: plays funscripts on haptic
+//! Interactive-device support for FramePlayerX: plays funscripts on haptic
 //! devices in sync with the video.
 //!
 //! - [`funscript`]: parsing single- and multi-axis funscripts, mapping file

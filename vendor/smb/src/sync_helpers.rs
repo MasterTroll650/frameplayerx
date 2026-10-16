@@ -120,7 +120,7 @@ impl Semaphore {
         Ok(SemaphorePermit { sem: self, count })
     }
 
-    /// Like [`Self::acquire_many`], giving up after `timeout` (FramePlayer patch).
+    /// Like [`Self::acquire_many`], giving up after `timeout` (FramePlayerX patch).
     pub fn acquire_many_timeout(
         &self,
         count: u32,

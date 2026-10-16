@@ -34,7 +34,7 @@ pub fn agent_with_proxy(proxy: Option<ureq::Proxy>) -> ureq::Agent {
         .proxy(proxy)
         .timeout_connect(Some(Duration::from_secs(20)))
         .timeout_recv_response(Some(Duration::from_secs(60)))
-        .user_agent(concat!("frameplayer-updater/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("frameplayerx-updater/", env!("CARGO_PKG_VERSION")))
         .build()
         .new_agent()
 }
@@ -105,11 +105,11 @@ impl Updater {
     }
 
     /// Fetches a GitHub release list and returns the `manifest.json` URL of
-    /// its highest-versioned release, pre-releases included. See
+    /// its highest-versioned release for `channel`. See
     /// [`crate::github::newest_manifest_url`].
-    pub fn newest_manifest_url(&self, releases_url: &str) -> Result<String> {
+    pub fn newest_manifest_url(&self, releases_url: &str, channel: Channel) -> Result<String> {
         check_download_url(releases_url)?;
-        crate::github::newest_manifest_url(&self.get_small(releases_url)?)
+        crate::github::newest_manifest_url(&self.get_small(releases_url)?, channel)
     }
 
     fn get_small(&self, url: &str) -> Result<Vec<u8>> {
@@ -167,7 +167,7 @@ pub fn download_with(
         check_download_url(&art.url)?;
         fs::create_dir_all(dest_dir).ctx("cannot create", dest_dir)?;
         let name = file_name_from_url(&art.url)
-            .unwrap_or_else(|| format!("frameplayer-{}-{}.zip", update.version, art.arch));
+            .unwrap_or_else(|| format!("frameplayerx-{}-{}.zip", update.version, art.arch));
         let final_path = dest_dir.join(&name);
         let part_path = dest_dir.join(format!("{name}.part"));
         let expected = art.sha256.to_ascii_lowercase();
@@ -577,13 +577,26 @@ mod tests {
         );
 
         let u = updater(&key);
-        let url = u.newest_manifest_url(&srv.url("/releases")).unwrap();
+        let url = u
+            .newest_manifest_url(&srv.url("/releases"), Channel::Beta)
+            .unwrap();
         assert_eq!(url, srv.url("/v2.1.0-beta.1/manifest.json"));
         let current = Version::new(2, 0, 0);
         let got = u.check(&url, &current, Channel::Beta).unwrap().unwrap();
         assert_eq!(got.version, Version::parse("2.1.0-beta.1").unwrap());
         // Stable never takes the beta, whichever way it was found.
         assert!(u.check(&url, &current, Channel::Stable).unwrap().is_none());
+        // Stable finds the stable release in the same list, and from 1.x
+        // it is an update.
+        let stable = u
+            .newest_manifest_url(&srv.url("/releases"), Channel::Stable)
+            .unwrap();
+        assert_eq!(stable, srv.url("/v2.0.0/manifest.json"));
+        let got = u
+            .check(&stable, &Version::new(1, 0, 0), Channel::Stable)
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.version, Version::new(2, 0, 0));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //!
 //! Usage: frame-probe [--no-session] [--out DIR] [--json]
 //!   --no-session  skip creating an OpenXR session (no headset display change)
-//!   --out DIR     report directory (default: ~/frameplayer-probe)
+//!   --out DIR     report directory (default: ~/frameplayerx-probe)
 //!   --json        also print the JSON report to stdout
 
 mod drm;
@@ -43,7 +43,7 @@ fn parse_args() -> Result<Args, String> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     let mut a = Args {
         session: true,
-        out: PathBuf::from(home).join("frameplayer-probe"),
+        out: PathBuf::from(home).join("frameplayerx-probe"),
         json: false,
     };
     let mut it = std::env::args().skip(1);
@@ -134,7 +134,7 @@ fn render_text(r: &Report) -> String {
         .get("PRETTY_NAME")
         .cloned()
         .unwrap_or_default();
-    let _ = writeln!(s, "FramePlayer platform probe {}", r.probe_version);
+    let _ = writeln!(s, "FramePlayerX platform probe {}", r.probe_version);
     let _ = writeln!(
         s,
         "{os} | {} | {} | glibc {}",

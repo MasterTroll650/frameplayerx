@@ -101,8 +101,8 @@ pub enum Error {
     /// The archive exceeds the size or entry-count limits.
     #[error("archive is too large: {0}")]
     ArchiveTooLarge(String),
-    /// The extracted tree is not a usable FramePlayer installation.
-    #[error("not a valid FramePlayer build: {0}")]
+    /// The extracted tree is not a usable FramePlayerX installation.
+    #[error("not a valid FramePlayerX build: {0}")]
     InvalidInstall(String),
     /// The archive's `VERSION` file names a different version than expected.
     #[error("archive contains version {found}, expected {expected}")]

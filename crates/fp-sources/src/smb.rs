@@ -147,7 +147,7 @@ impl SmbSource {
         }
         if !cfg!(feature = "smb") {
             return Err(Error::SmbUnavailable(
-                "this build of FramePlayer was compiled without SMB support".into(),
+                "this build of FramePlayerX was compiled without SMB support".into(),
             ));
         }
         let root = smb_url(&config.host, config.port, &config.share, &config.path);
@@ -489,7 +489,7 @@ mod imp {
     /// An SMB file that is closed on the server once nothing uses it. smb-rs
     /// closes handles only when asked, so every video played (and every
     /// handle replaced by a reconnect) stayed open on the NAS until
-    /// FramePlayer disconnected. The close goes out on a thread of its own:
+    /// FramePlayerX disconnected. The close goes out on a thread of its own:
     /// it waits for the server, on a dead connection until the request
     /// times out, and the last reference can go on a player's close path.
     struct Handle(Option<smb::File>);

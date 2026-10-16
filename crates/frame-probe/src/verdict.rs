@@ -1,5 +1,5 @@
-//! Turns the raw probe data into answers to the platform questions marked
-//! [verify] in docs/OUTLINE.md section 1.
+//! Turns the raw probe data into answers to the open platform questions
+//! (decoders, refresh rates, passthrough, controller profile, ...).
 
 use crate::Report;
 use serde::Serialize;

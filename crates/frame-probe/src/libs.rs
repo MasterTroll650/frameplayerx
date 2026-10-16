@@ -1,5 +1,5 @@
 //! Which shared libraries the system offers outside any runtime container.
-//! Answers "what must FramePlayer bundle, and what can it take from SteamOS".
+//! Answers "what must FramePlayerX bundle, and what can it take from SteamOS".
 
 use serde::Serialize;
 use std::ffi::CString;

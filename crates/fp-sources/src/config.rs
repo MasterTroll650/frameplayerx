@@ -1,8 +1,8 @@
 //! Source configuration, credentials, and their on-disk storage.
 //!
 //! Credentials live inside [`SourceConfig`] and are written in clear JSON to
-//! a file only the user can read (mode 0600, folder 0700). SteamOS gaming
-//! mode has no secret service; see `docs/OUTLINE.md` section 3.6.
+//! a file only the user can read (mode 0600, folder 0700): SteamOS gaming
+//! mode has no secret service to keep them in.
 
 use crate::error::{Error, Result};
 use crate::urlutil::redact;
@@ -332,17 +332,26 @@ impl SourceConfig {
         }
     }
 
-    /// One-line description without secrets, for logs and the UI.
-    pub fn describe(&self) -> String {
-        let target = match self {
+    /// Where the source is (folder, URL, share), without secrets.
+    pub fn address(&self) -> String {
+        match self {
             SourceConfig::Local(c) => c.root.display().to_string(),
             SourceConfig::Http(c) | SourceConfig::WebDav(c) => redact(&c.url),
             SourceConfig::Dlna(c) => redact(&c.location),
             SourceConfig::DeoVr(c) | SourceConfig::HereSphere(c) => redact(&c.url),
             SourceConfig::Smb(c) => crate::smb::smb_url(&c.host, c.port, &c.share, &c.path),
             SourceConfig::MediaBrowser(c) => redact(&c.url),
-        };
-        format!("{} \"{}\" ({target})", self.kind().label(), self.name())
+        }
+    }
+
+    /// One-line description without secrets, for logs and the UI.
+    pub fn describe(&self) -> String {
+        format!(
+            "{} \"{}\" ({})",
+            self.kind().label(),
+            self.name(),
+            self.address()
+        )
     }
 }
 
@@ -353,7 +362,7 @@ struct ConfigFile {
     sources: Vec<SourceConfig>,
 }
 
-/// Default path of the sources file: `$XDG_CONFIG_HOME/frameplayer/sources.json`.
+/// Default path of the sources file: `$XDG_CONFIG_HOME/frameplayerx/sources.json`.
 pub fn default_config_path() -> PathBuf {
     fp_core::dirs::config_dir().join("sources.json")
 }

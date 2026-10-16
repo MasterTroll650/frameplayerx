@@ -25,7 +25,7 @@ pub enum Error {
     /// Encoding a thumbnail as JPEG failed.
     #[error("JPEG encoding failed: {0}")]
     Jpeg(String),
-    /// The database was written by a newer FramePlayer.
+    /// The database was written by a newer FramePlayerX.
     #[error("database schema version {found} is newer than this build supports ({supported})")]
     SchemaTooNew {
         /// `PRAGMA user_version` found in the file.

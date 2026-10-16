@@ -128,7 +128,7 @@ pub trait Worker: Sized + std::fmt::Debug {
             async_msg_ids.set(options.msg_id, async_id);
         }
 
-        // FramePlayer patch: servers grant the request's credits in the
+        // FramePlayerX patch: servers grant the request's credits in the
         // interim (STATUS_PENDING) response, and Samba grants none in the
         // final one. Only the returned message reaches the credit accounting,
         // so carry the interim grants over to it; otherwise every request

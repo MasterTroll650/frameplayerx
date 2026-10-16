@@ -33,7 +33,7 @@ const JSON_LIMIT: u64 = 64 << 20;
 const PAGE_SIZE: usize = 200;
 
 /// Client name reported in the MediaBrowser authorization header.
-const CLIENT_NAME: &str = "FramePlayer";
+const CLIENT_NAME: &str = "FramePlayerX";
 
 /// Device name reported in the MediaBrowser authorization header.
 const DEVICE_NAME: &str = "SteamFrame";
@@ -46,10 +46,10 @@ fn device_id() -> &'static str {
         use std::hash::{Hash, Hasher};
         let host = std::env::var("HOSTNAME")
             .or_else(|_| std::env::var("COMPUTERNAME"))
-            .unwrap_or_else(|_| "frameplayer-client".to_string());
+            .unwrap_or_else(|_| "frameplayerx-client".to_string());
         let mut hasher = DefaultHasher::new();
         host.hash(&mut hasher);
-        format!("frameplayer-{:016x}", hasher.finish())
+        format!("frameplayerx-{:016x}", hasher.finish())
     })
 }
 
@@ -984,14 +984,14 @@ mod tests {
     fn test_mediabrowser_header() {
         let unauthed = mediabrowser_header(None);
         assert!(unauthed.starts_with(
-            "MediaBrowser Client=\"FramePlayer\", Device=\"SteamFrame\", DeviceId=\""
+            "MediaBrowser Client=\"FramePlayerX\", Device=\"SteamFrame\", DeviceId=\""
         ));
         assert!(unauthed.contains(&format!("Version=\"{}\"", env!("CARGO_PKG_VERSION"))));
         assert!(!unauthed.contains("Token="));
 
         let authed = mediabrowser_header(Some("test_access_token"));
         assert!(authed.starts_with(
-            "MediaBrowser Client=\"FramePlayer\", Device=\"SteamFrame\", DeviceId=\""
+            "MediaBrowser Client=\"FramePlayerX\", Device=\"SteamFrame\", DeviceId=\""
         ));
         assert!(authed.contains(&format!("Version=\"{}\"", env!("CARGO_PKG_VERSION"))));
         assert!(authed.contains("Token=\"test_access_token\""));

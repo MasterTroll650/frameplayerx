@@ -1,4 +1,4 @@
-//! Media sources for FramePlayer: browsing and random-access reading of
+//! Media sources for FramePlayerX: browsing and random-access reading of
 //! local and network media.
 //!
 //! Every source implements [`Source`]: it lists folders as

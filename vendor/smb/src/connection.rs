@@ -566,7 +566,7 @@ pub(crate) struct ConnectionMessageHandler {
     /// The number of credits granted to the client by the server, including the being-used ones.
     /// This field is used ONLY when large MTU is enabled.
     credit_pool: AtomicU16,
-    /// How long a request waits for credits before failing (FramePlayer
+    /// How long a request waits for credits before failing (FramePlayerX
     /// patch: it used to wait forever, so a credit leak hung every later
     /// request on the connection).
     credit_timeout: std::time::Duration,
@@ -608,7 +608,7 @@ impl ConnectionMessageHandler {
     const CREDITS_PER_MSG_NO_LARGE_MTU: u32 = 1;
 
     /// Takes `count` credits for a request, failing after the connection
-    /// timeout instead of waiting forever (FramePlayer patch).
+    /// timeout instead of waiting forever (FramePlayerX patch).
     #[cfg(not(feature = "async"))]
     fn acquire_credits(&self, count: u32) -> crate::Result<()> {
         match self
@@ -707,7 +707,7 @@ impl ConnectionMessageHandler {
             let charged_credits = msg.message.header.credit_charge;
             // Update the pool size - return how many EXTRA credits were granted.
             // also, handle the case where the server granted less credits than charged.
-            // FramePlayer patch: saturating, the pool used to wrap around
+            // FramePlayerX patch: saturating, the pool used to wrap around
             // below zero and then never asked the server for more credits.
             let _ = self
                 .credit_pool

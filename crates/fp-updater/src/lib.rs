@@ -1,4 +1,4 @@
-//! In-app self-update for FramePlayer.
+//! In-app self-update for FramePlayerX.
 //!
 //! The update flow:
 //!
@@ -6,7 +6,7 @@
 //!    detached ed25519 signature (`manifest.json.sig`), verifies the
 //!    signature against [`RELEASE_PUBLIC_KEY`], and compares versions with
 //!    semver for the user's [`Channel`]. [`check_channel`] finds that
-//!    manifest among FramePlayer's GitHub releases.
+//!    manifest among FramePlayerX's GitHub releases.
 //! 2. [`download`] streams the zip to disk with resume (HTTP `Range`) and
 //!    verifies size and SHA-256 from the signed manifest.
 //! 3. [`install`] extracts into a staging directory beside the install
@@ -41,15 +41,17 @@ pub use manifest::{
 pub use semver::Version;
 
 /// Where the latest stable release manifest is published. The signature is
-/// expected at the same URL plus `.sig`.
+/// expected at the same URL plus `.sig`. The stable channel falls back to
+/// it when GitHub's release list can't be read (rate limits).
 pub const DEFAULT_MANIFEST_URL: &str =
-    "https://github.com/remotesojourner/frameplayer/releases/latest/download/manifest.json";
+    "https://github.com/remotesojourner/frameplayerx/releases/latest/download/manifest.json";
 
-/// GitHub's list of the most recent releases, pre-releases included. The
-/// beta channel picks the highest version here, since `releases/latest`
-/// skips pre-releases.
+/// GitHub's list of the most recent releases, pre-releases included. Both
+/// channels pick the highest version for them here: it is current the
+/// moment a release is published, where `releases/latest` can lag, and it
+/// goes by the version rather than GitHub's pre-release flag.
 pub const RELEASES_API_URL: &str =
-    "https://api.github.com/repos/remotesojourner/frameplayer/releases?per_page=10";
+    "https://api.github.com/repos/remotesojourner/frameplayerx/releases?per_page=10";
 
 /// The ed25519 public key release manifests are signed with.
 ///
@@ -85,16 +87,18 @@ pub fn check(url: &str, current_version: &str, channel: Channel) -> Result<Optio
     Updater::new()?.check(url, &current, channel)
 }
 
-/// Checks FramePlayer's GitHub releases for an update on `channel`: stable
-/// reads the latest stable release ([`DEFAULT_MANIFEST_URL`]), beta the
-/// highest version among recent releases, stable or pre-release
-/// ([`RELEASES_API_URL`]). Otherwise as [`check`].
+/// Checks FramePlayerX's GitHub releases for an update on `channel`: the
+/// highest version among recent releases ([`RELEASES_API_URL`]), stable
+/// versions only on the stable channel. Stable falls back to
+/// [`DEFAULT_MANIFEST_URL`] when the list can't be read. Otherwise as
+/// [`check`].
 pub fn check_channel(current_version: &str, channel: Channel) -> Result<Option<Update>> {
     let current = parse_version(current_version)?;
     let updater = Updater::new()?;
-    let url = match channel {
-        Channel::Stable => DEFAULT_MANIFEST_URL.to_string(),
-        Channel::Beta => updater.newest_manifest_url(RELEASES_API_URL)?,
+    let url = match updater.newest_manifest_url(RELEASES_API_URL, channel) {
+        Ok(url) => url,
+        Err(_) if channel == Channel::Stable => DEFAULT_MANIFEST_URL.to_string(),
+        Err(e) => return Err(e),
     };
     updater.check(&url, &current, channel)
 }
@@ -111,7 +115,7 @@ pub fn download(
 }
 
 /// The directory holding the running executable, which is the install
-/// directory for a FramePlayer started from `frameplayer.sh`.
+/// directory for a FramePlayerX started from `frameplayerx.sh`.
 pub fn current_install_dir() -> Result<PathBuf> {
     let exe = std::env::current_exe().map_err(|e| Error::io("cannot locate", "current exe", e))?;
     exe.parent()

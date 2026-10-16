@@ -56,7 +56,7 @@ impl Default for RemoteConfig {
 }
 
 impl RemoteConfig {
-    /// The conventional token location: `$XDG_CONFIG_HOME/frameplayer/remote-token`.
+    /// The conventional token location: `$XDG_CONFIG_HOME/frameplayerx/remote-token`.
     pub fn default_token_path() -> PathBuf {
         fp_core::dirs::config_dir().join("remote-token")
     }

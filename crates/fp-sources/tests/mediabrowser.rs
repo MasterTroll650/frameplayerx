@@ -40,7 +40,7 @@ fn mediabrowser_full_lifecycle_browse_stream_and_progress() {
 
         // Login
         if req.path() == "/Users/AuthenticateByName" {
-            assert!(auth.contains("MediaBrowser Client=\"FramePlayer\""));
+            assert!(auth.contains("MediaBrowser Client=\"FramePlayerX\""));
             assert!(req.body.contains("alice") && req.body.contains("secret123"));
             return resp(
                 200,

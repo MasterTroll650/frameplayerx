@@ -1,4 +1,4 @@
-// FramePlayer web remote. Every string from the server is rendered with
+// FramePlayerX web remote. Every string from the server is rendered with
 // textContent or as an attribute value; nothing is ever parsed as HTML.
 'use strict';
 

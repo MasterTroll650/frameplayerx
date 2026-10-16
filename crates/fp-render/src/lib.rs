@@ -1,4 +1,4 @@
-//! FramePlayer's Vulkan renderer.
+//! FramePlayerX's Vulkan renderer.
 //!
 //! - [`gpu`]: instance/device creation, directly (tests, desktop preview) or
 //!   through OpenXR's `XR_KHR_vulkan_enable2`.

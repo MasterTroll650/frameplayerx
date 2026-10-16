@@ -1,4 +1,4 @@
-//! Types shared by every FramePlayer crate.
+//! Types shared by every FramePlayerX crate.
 //!
 //! - [`format`]: how a video maps onto the sphere or screen ([`Projection`],
 //!   [`StereoLayout`]) and detection from file names and metadata.
@@ -7,7 +7,7 @@
 //!   ([`ByteSource`], [`Entry`]).
 //! - [`playback`]: playback status and commands shared with haptics and the
 //!   remote-control API.
-//! - [`dirs`]: where FramePlayer keeps config, data and cache.
+//! - [`dirs`]: where FramePlayerX keeps config, data and cache.
 
 pub mod dirs;
 pub mod format;

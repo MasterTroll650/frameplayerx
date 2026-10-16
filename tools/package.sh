@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Builds the FramePlayer release for the Steam Frame and writes everything
+# Builds the FramePlayerX release for the Steam Frame and writes everything
 # needed to publish it into dist/:
 #
-#   dist/frameplayer-<version>-aarch64.zip   the install archive
+#   dist/frameplayerx-<version>-aarch64.zip   the install archive
 #   dist/manifest.json                       update manifest (sign it!)
 #   dist/framedrop.json                      FrameDrop manifest
-#   dist/frameplayer.json                    Frame Control install manifest
+#   dist/frameplayerx.json                    Frame Control install manifest
 #
 # Usage: tools/package.sh [--url-base URL] [--notes FILE] [--key PREFIX.key]
 #   --url-base  where the zip will be downloadable (default: the GitHub
@@ -17,8 +17,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
-version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="frameplayer"))')"
-url_base="https://github.com/remotesojourner/frameplayer/releases/download/v$version"
+version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="frameplayerx"))')"
+url_base="https://github.com/remotesojourner/frameplayerx/releases/download/v$version"
 notes=""
 key=""
 while [ $# -gt 0 ]; do
@@ -34,18 +34,18 @@ target=aarch64-unknown-linux-gnu
 ffmpeg="$root/third_party/ffmpeg/aarch64/lib"
 [ -f "$ffmpeg/libavcodec.so" ] || { echo "missing $ffmpeg; run tools/build-ffmpeg.sh aarch64" >&2; exit 1; }
 
-echo "== building FramePlayer $version for the Steam Frame"
-tools/build-frame.sh -p frameplayer
+echo "== building FramePlayerX $version for the Steam Frame"
+tools/build-frame.sh -p frameplayerx
 cargo build --release -p fp-updater --bin fp-release
 
-stage="$root/dist/stage/frameplayer"
+stage="$root/dist/stage/frameplayerx"
 rm -rf "$root/dist/stage" && mkdir -p "$stage/lib" "$stage/licenses" "$stage/assets/steam"
-cp "target/$target/release/frameplayer" "$stage/"
-llvm-strip --strip-all "$stage/frameplayer" 2>/dev/null || true
+cp "target/$target/release/frameplayerx" "$stage/"
+llvm-strip --strip-all "$stage/frameplayerx" 2>/dev/null || true
 for l in avformat.so.61 avcodec.so.61 avutil.so.59 swresample.so.5 swscale.so.8; do
   cp -L "$ffmpeg/lib$l" "$stage/lib/lib$l"
 done
-cp packaging/frameplayer.sh packaging/README.txt LICENSE-MIT LICENSE-APACHE "$stage/"
+cp packaging/frameplayerx.sh packaging/README.txt LICENSE NOTICE "$stage/"
 cp packaging/licenses/* "$stage/licenses/"
 cp assets/steam/*.png "$stage/assets/steam/"
 echo "$version" > "$stage/VERSION"
@@ -55,7 +55,7 @@ import json, sys
 m = json.load(sys.stdin)
 pkgs = {p["id"]: p for p in m["packages"]}
 nodes = {n["id"]: n for n in m["resolve"]["nodes"]}
-root = next(i for i, p in pkgs.items() if p["name"] == "frameplayer")
+root = next(i for i, p in pkgs.items() if p["name"] == "frameplayerx")
 seen, todo = set(), [root]
 while todo:
     i = todo.pop()
@@ -68,26 +68,26 @@ for p in sorted((pkgs[i] for i in seen if i not in ours), key=lambda p: p["name"
 ' > "$stage/licenses/rust-crates.txt"
 
 # Sanity: right architecture, glibc <= 2.28, libraries resolvable.
-file "$stage/frameplayer" | grep -q "ARM aarch64" || { echo "not an aarch64 binary" >&2; exit 1; }
-max_glibc="$(objdump -T "$stage/frameplayer" "$stage"/lib/*.so* 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+file "$stage/frameplayerx" | grep -q "ARM aarch64" || { echo "not an aarch64 binary" >&2; exit 1; }
+max_glibc="$(objdump -T "$stage/frameplayerx" "$stage"/lib/*.so* 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
 echo "highest glibc symbol version: $max_glibc"
 case "$max_glibc" in GLIBC_2.2[0-8]|GLIBC_2.1*|GLIBC_2.[0-9]) ;; *) echo "needs newer glibc than 2.28" >&2; exit 1 ;; esac
-readelf -d "$stage/frameplayer" | grep -qE '(RPATH|RUNPATH).*\$ORIGIN/lib' || { echo "missing \$ORIGIN/lib rpath" >&2; exit 1; }
+readelf -d "$stage/frameplayerx" | grep -qE '(RPATH|RUNPATH).*\$ORIGIN/lib' || { echo "missing \$ORIGIN/lib rpath" >&2; exit 1; }
 
-zip="frameplayer-$version-aarch64.zip"
+zip="frameplayerx-$version-aarch64.zip"
 rm -f "dist/$zip"
-(cd "$root/dist/stage" && find frameplayer -print0 | sort -z | xargs -0 touch -d "@${SOURCE_DATE_EPOCH:-0}" && zip -qrX9 "$root/dist/$zip" frameplayer)
+(cd "$root/dist/stage" && find frameplayerx -print0 | sort -z | xargs -0 touch -d "@${SOURCE_DATE_EPOCH:-0}" && zip -qrX9 "$root/dist/$zip" frameplayerx)
 echo "== $(du -h "dist/$zip" | cut -f1) dist/$zip"
 
 release="target/release/fp-release"
 args=(manifest --version "$version" --zip "dist/$zip" --url-base "$url_base" --out dist/manifest.json)
 [ -n "$notes" ] && args+=(--notes "$notes")
 "$release" "${args[@]}"
-"$release" framedrop --name FramePlayer --zip "dist/$zip" --url "$url_base/$zip" --out dist/framedrop.json \
+"$release" framedrop --name FramePlayerX --zip "dist/$zip" --url "$url_base/$zip" --out dist/framedrop.json \
   --manifest-url "$url_base/framedrop.json"
 # The same file list for Frame Control install links
-# (frame-control://install?manifest=<url of frameplayer.json>).
-python3 - dist/framedrop.json > dist/frameplayer.json <<'P'
+# (frame-control://install?manifest=<url of frameplayerx.json>).
+python3 - dist/framedrop.json > dist/frameplayerx.json <<'P'
 import json, sys
 fd = json.load(open(sys.argv[1]))
 print(json.dumps({"schema": "frame-control.install/v1", "name": fd["name"], "files": fd["files"]}, indent=2))

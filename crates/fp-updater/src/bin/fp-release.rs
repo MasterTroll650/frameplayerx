@@ -1,4 +1,4 @@
-//! `fp-release`: maintainer tool for FramePlayer releases.
+//! `fp-release`: maintainer tool for FramePlayerX releases.
 //!
 //! ```text
 //! fp-release keygen [--out PREFIX]
@@ -7,7 +7,7 @@
 //! fp-release manifest --version X --zip PATH --url-base URL [--arch aarch64]
 //!                     [--notes FILE] [--channel stable|beta] [--published RFC3339]
 //!                     [--out manifest.json]
-//! fp-release framedrop --name FramePlayer --zip PATH --url URL
+//! fp-release framedrop --name FramePlayerX --zip PATH --url URL
 //!                      [--out framedrop.json] [--manifest-url URL]
 //! ```
 
@@ -30,20 +30,20 @@ use fp_updater::{
 };
 
 const USAGE: &str = "\
-fp-release: build, sign and check FramePlayer release metadata
+fp-release: build, sign and check FramePlayerX release metadata
 
 USAGE:
   fp-release keygen [--out PREFIX]
       Create a signing key pair: PREFIX.key (secret, keep offline) and
       PREFIX.pub. Prints the line to paste into fp-updater's lib.rs.
-      PREFIX defaults to frameplayer-release.
+      PREFIX defaults to frameplayerx-release.
 
   fp-release sign MANIFEST.json --key PREFIX.key
       Write MANIFEST.json.sig (base64 ed25519 signature of the exact bytes).
 
   fp-release verify MANIFEST.json [--pub PREFIX.pub]
       Check MANIFEST.json.sig and the manifest contents, against PREFIX.pub
-      or, without --pub, the release key built into FramePlayer.
+      or, without --pub, the release key built into FramePlayerX.
 
   fp-release manifest --version X --zip PATH --url-base URL [--arch aarch64]
                       [--notes FILE] [--channel stable|beta]
@@ -215,7 +215,7 @@ fn rust_key_literal(public: &[u8; 32]) -> String {
 }
 
 fn keygen(args: &Args) -> CliResult {
-    let prefix = args.get("out").unwrap_or("frameplayer-release");
+    let prefix = args.get("out").unwrap_or("frameplayerx-release");
     let mut seed = [0u8; 32];
     getrandom::fill(&mut seed).map_err(|e| format!("no system randomness: {e}"))?;
     let key = SigningKey::from_bytes(&seed);
@@ -225,7 +225,7 @@ fn keygen(args: &Args) -> CliResult {
     write_new(
         &secret_path,
         &format!(
-            "# FramePlayer release signing key (ed25519 seed, base64). KEEP SECRET.\n{}\n",
+            "# FramePlayerX release signing key (ed25519 seed, base64). KEEP SECRET.\n{}\n",
             BASE64.encode(seed)
         ),
         true,
@@ -233,7 +233,7 @@ fn keygen(args: &Args) -> CliResult {
     write_new(
         &public_path,
         &format!(
-            "# FramePlayer release public key (ed25519, base64)\n{}\n",
+            "# FramePlayerX release public key (ed25519, base64)\n{}\n",
             BASE64.encode(public)
         ),
         false,
@@ -331,7 +331,7 @@ fn manifest(args: &Args) -> CliResult {
         ));
     }
     if !info.has_launcher {
-        eprintln!("warning: the zip has no frameplayer.sh launcher");
+        eprintln!("warning: the zip has no frameplayerx.sh launcher");
     }
     let (size, sha256) = hash_file(&zip).map_err(|e| e.to_string())?;
     let m = ReleaseManifest {
@@ -370,15 +370,15 @@ fn framedrop(args: &Args) -> CliResult {
     let info = inspect_zip(&zip).map_err(|e| format!("{}: {e}", zip.display()))?;
     if !info.has_launcher {
         return Err(format!(
-            "{} has no frameplayer.sh, which the installers launch",
+            "{} has no frameplayerx.sh, which the installers launch",
             zip.display()
         ));
     }
     let root = info.root.unwrap_or_default();
     let exe = if root.is_empty() {
-        "frameplayer.sh".to_string()
+        "frameplayerx.sh".to_string()
     } else {
-        format!("{root}/frameplayer.sh")
+        format!("{root}/frameplayerx.sh")
     };
     let (size, sha256) = hash_file(&zip).map_err(|e| e.to_string())?;
     let m = FramedropManifest::for_zip(name, url, &sha256, size, &exe);
@@ -476,16 +476,16 @@ mod tests {
         // Refuses to overwrite.
         assert!(run(&s(&["keygen", "--out", &prefix])).is_err());
 
-        let zip = dir.path().join("frameplayer-1.2.3-aarch64.zip");
+        let zip = dir.path().join("frameplayerx-1.2.3-aarch64.zip");
         {
             use zip::write::SimpleFileOptions;
             let mut w = zip::ZipWriter::new(fs::File::create(&zip).unwrap());
             let exec = SimpleFileOptions::default().unix_permissions(0o755);
-            w.start_file("frameplayer/frameplayer", exec).unwrap();
+            w.start_file("frameplayerx/frameplayerx", exec).unwrap();
             w.write_all(b"bin").unwrap();
-            w.start_file("frameplayer/frameplayer.sh", exec).unwrap();
+            w.start_file("frameplayerx/frameplayerx.sh", exec).unwrap();
             w.write_all(b"#!/bin/sh").unwrap();
-            w.start_file("frameplayer/VERSION", SimpleFileOptions::default())
+            w.start_file("frameplayerx/VERSION", SimpleFileOptions::default())
                 .unwrap();
             w.write_all(b"1.2.3\n").unwrap();
             w.finish().unwrap();
@@ -522,7 +522,7 @@ mod tests {
         let m: ReleaseManifest = serde_json::from_slice(&fs::read(&out).unwrap()).unwrap();
         assert_eq!(
             m.artifacts[0].url,
-            "https://example.com/r/frameplayer-1.2.3-aarch64.zip"
+            "https://example.com/r/frameplayerx-1.2.3-aarch64.zip"
         );
         assert_eq!(m.channel, Channel::Stable);
 
@@ -537,11 +537,11 @@ mod tests {
         run(&s(&[
             "framedrop",
             "--name",
-            "FramePlayer",
+            "FramePlayerX",
             "--zip",
             &zip_s,
             "--url",
-            "https://example.com/r/frameplayer-1.2.3-aarch64.zip",
+            "https://example.com/r/frameplayerx-1.2.3-aarch64.zip",
             "--out",
             &fd,
         ]))
@@ -549,14 +549,14 @@ mod tests {
         let fdm = fp_updater::framedrop::parse_framedrop_manifest(&fs::read(&fd).unwrap()).unwrap();
         assert_eq!(
             fdm.files[0].exe.as_deref(),
-            Some("frameplayer/frameplayer.sh")
+            Some("frameplayerx/frameplayerx.sh")
         );
         // Local URLs are refused before writing.
         assert!(
             run(&s(&[
                 "framedrop",
                 "--name",
-                "FramePlayer",
+                "FramePlayerX",
                 "--zip",
                 &zip_s,
                 "--url",

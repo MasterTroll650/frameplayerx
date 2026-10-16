@@ -70,7 +70,7 @@ pub struct SessionInfo {
     pub errors: Vec<String>,
 }
 
-/// Extensions FramePlayer would use, enabled when present so their system
+/// Extensions FramePlayerX would use, enabled when present so their system
 /// properties and session functions can be queried.
 fn wanted(avail: &xr::ExtensionSet) -> xr::ExtensionSet {
     let mut e = xr::ExtensionSet::default();
@@ -155,9 +155,9 @@ pub fn probe(want_session: bool) -> XrReport {
     let mut instance = None;
     for api in [xr::Version::new(1, 1, 0), xr::Version::new(1, 0, 0)] {
         let app = xr::ApplicationInfo {
-            application_name: "frameplayer-probe",
+            application_name: "frameplayerx-probe",
             application_version: 1,
-            engine_name: "frameplayer",
+            engine_name: "frameplayerx",
             engine_version: 1,
             api_version: api,
         };
@@ -513,7 +513,7 @@ unsafe fn session_inner(
         vk::API_VERSION_1_1
     };
 
-    let app_name = CString::new("frameplayer-probe").unwrap();
+    let app_name = CString::new("frameplayerx-probe").unwrap();
     let app = vk::ApplicationInfo::default()
         .application_name(&app_name)
         .api_version(api);

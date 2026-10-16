@@ -1,4 +1,4 @@
-//! FramePlayer's own release manifest, its detached ed25519 signature, and
+//! FramePlayerX's own release manifest, its detached ed25519 signature, and
 //! the rules for picking an update from it.
 //!
 //! The manifest is published next to the release zip as `manifest.json`,
@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::url::check_download_url;
 
-/// The `name` every FramePlayer release manifest must carry.
-pub const MANIFEST_NAME: &str = "frameplayer";
+/// The `name` every FramePlayerX release manifest must carry.
+pub const MANIFEST_NAME: &str = "frameplayerx";
 
 /// Release channel. Stable users only see stable releases; beta users see
 /// both.
@@ -306,7 +306,7 @@ mod tests {
             notes: "Fixes".into(),
             artifacts: vec![Artifact {
                 arch: "aarch64".into(),
-                url: "https://example.com/frameplayer-1.2.3-aarch64.zip".into(),
+                url: "https://example.com/frameplayerx-1.2.3-aarch64.zip".into(),
                 sha256: "a".repeat(64),
                 size: 10,
             }],
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn parses_documented_json_shape() {
-        let json = r#"{"name":"frameplayer","version":"1.2.3","channel":"beta",
+        let json = r#"{"name":"frameplayerx","version":"1.2.3","channel":"beta",
             "published":"2026-10-02T12:00:00+02:00","notes":"* item",
             "artifacts":[{"arch":"aarch64","url":"https://h.example/a.zip",
             "sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","size":5}]}"#;

@@ -136,7 +136,7 @@ impl WorkerOptions {
 }
 
 impl Default for WorkerOptions {
-    /// Cache in `$XDG_CACHE_HOME/frameplayer/thumbnails`.
+    /// Cache in `$XDG_CACHE_HOME/frameplayerx/thumbnails`.
     fn default() -> Self {
         WorkerOptions::with_cache_dir(fp_core::dirs::cache_dir().join("thumbnails"))
     }

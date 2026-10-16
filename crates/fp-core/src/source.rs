@@ -1,5 +1,5 @@
 //! The contract between media sources (local, SMB, WebDAV, HTTP, DLNA,
-//! DeoVR feeds) and the rest of FramePlayer.
+//! DeoVR feeds) and the rest of FramePlayerX.
 
 use serde::{Deserialize, Serialize};
 use std::io;

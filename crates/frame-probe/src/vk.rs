@@ -110,7 +110,7 @@ pub fn probe() -> VkReport {
     }
 
     let api = loader_api.min(vk::API_VERSION_1_3);
-    let app_name = CString::new("frameplayer-probe").unwrap();
+    let app_name = CString::new("frameplayerx-probe").unwrap();
     let app = vk::ApplicationInfo::default()
         .application_name(&app_name)
         .api_version(api);

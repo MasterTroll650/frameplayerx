@@ -1,16 +1,19 @@
-//! Finding the newest release, pre-releases included, in GitHub's release
-//! list (`GET /repos/{owner}/{repo}/releases`).
+//! Finding the newest release for a channel in GitHub's release list
+//! (`GET /repos/{owner}/{repo}/releases`).
 //!
-//! `releases/latest` only ever points at a stable release, so the beta
-//! channel looks here instead. Nothing read here is trusted: the manifest it
-//! leads to is still signature-checked before use.
+//! Both channels read this list: `releases/latest` skips pre-releases, can
+//! lag behind a release just published (or point at one still uploading
+//! its manifest), and follows GitHub's pre-release flag rather than the
+//! version. Nothing read here is trusted: the manifest it leads to is still
+//! signature-checked before use.
 
 use semver::Version;
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::manifest::Channel;
 
-/// The asset every FramePlayer release carries its manifest in.
+/// The asset every FramePlayerX release carries its manifest in.
 pub const MANIFEST_ASSET: &str = "manifest.json";
 
 /// The parts of a GitHub release the updater reads.
@@ -30,10 +33,12 @@ struct Asset {
 }
 
 /// The `manifest.json` download URL of the highest-versioned release in
-/// `releases_json`, stable or pre-release. Drafts, tags that aren't
-/// versions (`v` prefix allowed) and releases without a manifest are
+/// `releases_json` for `channel`: any release for beta, only versions
+/// without a pre-release part (`1.2.0`, not `1.2.0-beta.1`) for stable,
+/// whatever GitHub's pre-release flag says. Drafts, tags that aren't
+/// versions (`v` prefix allowed) and releases without a manifest (yet) are
 /// skipped.
-pub fn newest_manifest_url(releases_json: &[u8]) -> Result<String> {
+pub fn newest_manifest_url(releases_json: &[u8], channel: Channel) -> Result<String> {
     let releases: Vec<Release> = serde_json::from_slice(releases_json)
         .map_err(|e| Error::InvalidManifest(format!("GitHub release list: {e}")))?;
     releases
@@ -42,6 +47,9 @@ pub fn newest_manifest_url(releases_json: &[u8]) -> Result<String> {
         .filter_map(|r| {
             let version =
                 Version::parse(r.tag_name.strip_prefix('v').unwrap_or(&r.tag_name)).ok()?;
+            if channel == Channel::Stable && !version.pre.is_empty() {
+                return None;
+            }
             let url = r
                 .assets
                 .into_iter()
@@ -51,7 +59,13 @@ pub fn newest_manifest_url(releases_json: &[u8]) -> Result<String> {
         })
         .max_by(|(a, _), (b, _)| a.cmp_precedence(b))
         .map(|(_, url)| url)
-        .ok_or_else(|| Error::InvalidManifest("no release in the list has a manifest.json".into()))
+        .ok_or_else(|| {
+            let which = match channel {
+                Channel::Stable => "stable release",
+                Channel::Beta => "release",
+            };
+            Error::InvalidManifest(format!("no {which} in the list has a manifest.json"))
+        })
 }
 
 #[cfg(test)]
@@ -60,8 +74,8 @@ mod tests {
 
     fn release(tag: &str, draft: bool, manifest: bool) -> serde_json::Value {
         let mut assets = vec![serde_json::json!({
-            "name": "frameplayer.zip",
-            "browser_download_url": format!("https://example.com/{tag}/frameplayer.zip"),
+            "name": "frameplayerx.zip",
+            "browser_download_url": format!("https://example.com/{tag}/frameplayerx.zip"),
         })];
         if manifest {
             assets.push(serde_json::json!({
@@ -73,7 +87,39 @@ mod tests {
     }
 
     fn newest(releases: &[serde_json::Value]) -> Result<String> {
-        newest_manifest_url(&serde_json::to_vec(releases).unwrap())
+        newest_manifest_url(&serde_json::to_vec(releases).unwrap(), Channel::Beta)
+    }
+
+    fn newest_stable(releases: &[serde_json::Value]) -> Result<String> {
+        newest_manifest_url(&serde_json::to_vec(releases).unwrap(), Channel::Stable)
+    }
+
+    #[test]
+    fn stable_goes_by_the_version_not_the_flag() {
+        // An alpha published without GitHub's pre-release flag (as older
+        // CI did) after the stable release, the next beta, and a stable
+        // release still uploading its manifest.
+        let mut alpha = release("v0.5.1-alpha.1", false, true);
+        alpha["prerelease"] = false.into();
+        let list = [
+            alpha,
+            release("v0.6.0", false, false),
+            release("v0.6.0-beta.2", false, true),
+            release("v0.5.0", false, true),
+            release("v0.4.0", false, true),
+        ];
+        assert_eq!(
+            newest_stable(&list).unwrap(),
+            "https://example.com/v0.5.0/manifest.json"
+        );
+        assert_eq!(
+            newest(&list).unwrap(),
+            "https://example.com/v0.6.0-beta.2/manifest.json"
+        );
+        assert!(matches!(
+            newest_stable(&[release("v1.0.0-beta.1", false, true)]),
+            Err(Error::InvalidManifest(_))
+        ));
     }
 
     #[test]
@@ -117,7 +163,7 @@ mod tests {
             Err(Error::InvalidManifest(_))
         ));
         assert!(matches!(
-            newest_manifest_url(b"{\"message\":\"rate limited\"}"),
+            newest_manifest_url(b"{\"message\":\"rate limited\"}", Channel::Stable),
             Err(Error::InvalidManifest(_))
         ));
     }
