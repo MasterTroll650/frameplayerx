@@ -595,16 +595,43 @@ fn falling_behind(stalls: u64, dropped: u64, shown: u64) -> bool {
 
 /// Whether the Frame's hardware decoder takes this stream.
 fn has_hardware_decoder(v: &StreamInfo) -> bool {
-    let codec = v.codec.as_str();
-    let bit_depth = v.bit_depth;
+    matches!(v.codec.as_str(), "hevc" | "h264" | "vp9") && v.bit_depth <= 8 && v.chroma() == "4:2:0"
+}
+
+/// The stream's codec, with its bit depth and chroma when the hardware
+/// decoder lacks them ("10-bit HEVC", "4:2:2 HEVC").
+fn stream_desc(v: &StreamInfo) -> String {
+    let codec = match v.codec.as_str() {
+        "hevc" => "HEVC".to_string(),
+        "h264" => "H.264".to_string(),
+        "av1" => "AV1".to_string(),
+        "vp9" => "VP9".to_string(),
+        c => c.to_uppercase(),
+    };
+    // The hardware decodes 8-bit 4:2:0 only: say which of the two it isn't.
     let chroma = v.chroma();
-    if chroma != "4:2:0" {
-        return false;
+    match (v.bit_depth > 8, chroma != "4:2:0") {
+        (true, true) => format!("{}-bit {chroma} {codec}", v.bit_depth),
+        (true, false) => format!("{}-bit {codec}", v.bit_depth),
+        (false, true) => format!("{chroma} {codec}"),
+        (false, false) => codec,
     }
-    match codec {
-        "hevc" => bit_depth <= 10,
-        "h264" | "vp9" => bit_depth <= 8,
-        _ => false,
+}
+
+/// Why a video decodes in software, for the stream info: the hardware
+/// decoder's error when it was tried, else why it wasn't.
+pub(crate) fn software_reason(
+    v: &StreamInfo,
+    hardware_on: bool,
+    hardware_error: Option<&str>,
+) -> String {
+    match hardware_error {
+        Some(e) => e.to_string(),
+        None if !has_hardware_decoder(v) => {
+            format!("no hardware decoding for {}", stream_desc(v))
+        }
+        None if !hardware_on => "hardware decoding is off in Settings".to_string(),
+        None => "hardware decoder not tried".to_string(),
     }
 }
 
@@ -616,26 +643,14 @@ pub(crate) fn slow_decode_notice(
     hardware_on: bool,
     hardware_error: Option<&str>,
 ) -> String {
-    let codec = match v.codec.as_str() {
-        "hevc" => "HEVC".to_string(),
-        "h264" => "H.264".to_string(),
-        "av1" => "AV1".to_string(),
-        "vp9" => "VP9".to_string(),
-        c => c.to_uppercase(),
-    };
-    let chroma = v.chroma();
-    let desc = match (v.bit_depth > 8, chroma != "4:2:0") {
-        (true, true) => format!("{}-bit {chroma} {codec}", v.bit_depth),
-        (true, false) => format!("{}-bit {codec}", v.bit_depth),
-        (false, true) => format!("{chroma} {codec}"),
-        (false, false) => codec,
-    };
+    let desc = stream_desc(v);
     if !has_hardware_decoder(v) {
-        return format!("Falling back to software decoder: {desc} is unsupported by hardware");
+        return format!(
+            "No hardware decoding for {desc}, so it stutters. 8-bit 4:2:0 H.265 plays smoothly"
+        );
     }
     if !hardware_on {
-        return "Falling back to software decoder: hardware decoding is turned off in Settings"
-            .to_string();
+        return format!("{desc} in software stutters: turn on hardware decoding in Settings");
     }
     // Out of decoder memory or sessions: other apps (Steam's streaming
     // among them) hold the hardware decoder.
@@ -644,10 +659,10 @@ pub(crate) fn slow_decode_notice(
         e.contains("memory") || e.contains("busy") || e.contains("no free")
     });
     if busy {
-        format!("Hardware decoder busy: falling back to software decoder for {desc}")
+        format!("Hardware decoder busy: {desc} in software stutters")
     } else {
         format!(
-            "Falling back to software decoder: hardware cannot decode this {desc} ({}x{})",
+            "The hardware decoder can't play this {desc} ({}x{}), so it stutters in software",
             v.width, v.height
         )
     }
@@ -754,20 +769,13 @@ mod tests {
             channels: 0,
             ambisonic: false,
         };
-        let n = slow_decode_notice(&stream("av1", 10), true, None);
-        assert!(
-            n.contains("Falling back to software decoder") && n.contains("10-bit AV1"),
-            "{n}"
-        );
-        let n = slow_decode_notice(&stream("hevc", 10), false, None);
-        assert!(n.contains("turned off in Settings"), "{n}");
         let n = slow_decode_notice(&stream("hevc", 10), true, None);
-        assert!(n.contains("busy"), "{n}");
-        let n = slow_decode_notice(&stream("av1", 8), true, None);
         assert!(
-            n.contains("Falling back to software decoder") && n.contains("AV1"),
+            n.contains("10-bit HEVC") && n.contains("8-bit 4:2:0 H.265"),
             "{n}"
         );
+        let n = slow_decode_notice(&stream("av1", 8), true, None);
+        assert!(n.contains("for AV1,"), "{n}");
         let busy = "V4L2 REQBUFS: Cannot allocate memory (os error 12)";
         let n = slow_decode_notice(&stream("hevc", 8), true, Some(busy));
         assert!(n.contains("busy"), "{n}");
@@ -775,14 +783,21 @@ mod tests {
         let mut s422 = stream("hevc", 8);
         s422.pixel_format = "yuv422p".into();
         let n = slow_decode_notice(&s422, true, None);
-        assert!(n.contains("4:2:2 HEVC"), "{n}");
+        assert!(n.contains("for 4:2:2 HEVC"), "{n}");
         let n = slow_decode_notice(&stream("hevc", 8), false, None);
-        assert!(n.contains("turned off in Settings"), "{n}");
+        assert!(n.contains("turn on hardware decoding"), "{n}");
         let refused = "V4L2: stream size unknown";
         let n = slow_decode_notice(&stream("hevc", 8), true, Some(refused));
-        assert!(
-            n.contains("hardware cannot decode this HEVC (8192x4096)"),
-            "{n}"
-        );
+        assert!(n.contains("can't play this HEVC (8192x4096)"), "{n}");
+
+        // The stream info's reason: the error when tried, else why not.
+        let r = software_reason(&stream("hevc", 10), true, None);
+        assert_eq!(r, "no hardware decoding for 10-bit HEVC");
+        let r = software_reason(&stream("hevc", 10), false, None);
+        assert_eq!(r, "no hardware decoding for 10-bit HEVC");
+        let r = software_reason(&stream("hevc", 8), false, None);
+        assert_eq!(r, "hardware decoding is off in Settings");
+        let r = software_reason(&stream("hevc", 8), true, Some(busy));
+        assert_eq!(r, busy);
     }
 }

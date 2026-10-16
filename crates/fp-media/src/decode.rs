@@ -138,17 +138,11 @@ fn candidates(
         format,
         ff::AV_PIX_FMT_NONE | ff::AV_PIX_FMT_YUV420P | ff::AV_PIX_FMT_YUVJ420P
     );
-    let ten_bit = matches!(
-        format,
-        ff::AV_PIX_FMT_YUV420P10LE | ff::AV_PIX_FMT_YUV420P10BE
-    );
-    // The hardware decodes HEVC Main10, but not 10-bit H.264.
-    let native_ten_bit = ten_bit && codec == ff::AV_CODEC_ID_HEVC;
-    if video && hw == HwDecode::Auto && (eight_bit || native_ten_bit) {
+    if video && hw == HwDecode::Auto && eight_bit {
         if native && crate::v4l2::Codec::from_ffmpeg(codec).is_some() {
             c.push(Candidate::NativeV4l2);
         }
-        if eight_bit && let Some(n) = v4l2_name(codec) {
+        if let Some(n) = v4l2_name(codec) {
             c.push(Candidate::Named(n, true));
         }
     }
@@ -688,19 +682,9 @@ mod tests {
             candidates(true, hevc, yuv420, HwDecode::Auto, true),
             vec![NativeV4l2, Named(c"hevc_v4l2m2m", true), Default]
         );
-        // 10-bit HEVC uses native V4L2 (P010), bypassing 8-bit-only FFmpeg wrappers.
+        // 10-bit bypasses 8-bit-only hardware decoders.
         assert_eq!(
             candidates(true, hevc, yuv420p10, HwDecode::Auto, true),
-            vec![NativeV4l2, Default]
-        );
-        // 10-bit H.264 goes straight to software.
-        assert_eq!(
-            candidates(true, ff::AV_CODEC_ID_H264, yuv420p10, HwDecode::Auto, true),
-            vec![Default]
-        );
-        // After the native decoder fails (or with it disabled), 10-bit bypasses 8-bit-only wrappers.
-        assert_eq!(
-            candidates(true, hevc, yuv420p10, HwDecode::Auto, false),
             vec![Default]
         );
         // After the native decoder fails (or with it disabled).

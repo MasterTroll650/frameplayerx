@@ -80,15 +80,9 @@ impl Codec {
     /// Frame needs. Generated with
     /// `ffmpeg -f lavfi -i color=c=black:s=8192x4080:r=1 -frames:v 1
     /// -pix_fmt yuv420p -c:v libx265 -profile:v main -x265-params info=0 -f hevc`.
-    /// The 10-bit one (`yuv420p10le`, `main10`) sets the decoder up for a
-    /// 10-bit stream, whose buffers differ from 8-bit ones.
-    pub(crate) fn primer(self, ten_bit: bool) -> Option<(&'static [u8], (u32, u32))> {
+    pub(crate) fn primer(self) -> Option<(&'static [u8], (u32, u32))> {
         match self {
             Codec::H264 => None,
-            Codec::Hevc if ten_bit => Some((
-                include_bytes!("../assets/primer_8192x4080_10bit.hevc"),
-                (8192, 4080),
-            )),
             Codec::Hevc => Some((
                 include_bytes!("../assets/primer_8192x4080.hevc"),
                 (8192, 4080),
@@ -176,25 +170,21 @@ pub(crate) struct Nv12Layout {
 
 impl Nv12Layout {
     /// From the CAPTURE format (`fmt_height` is the buffer's luma height,
-    /// already aligned by the driver) and the visible (compose) size, with
-    /// `sample_bytes` bytes per sample (1 for NV12, 2 for P010).
+    /// already aligned by the driver) and the visible (compose) size.
     pub(crate) fn new(
         stride: usize,
         fmt_height: u32,
         visible: (u32, u32),
         sizeimage: usize,
-        sample_bytes: usize,
     ) -> Option<Nv12Layout> {
         let (width, height) = visible;
-        let luma_height = fmt_height.max(height).next_multiple_of(32);
         let l = Nv12Layout {
             width,
             height,
             stride,
-            uv_offset: stride * luma_height as usize,
+            uv_offset: stride * fmt_height.max(height) as usize,
         };
-        (width > 0 && height > 0 && stride >= width as usize * sample_bytes && l.end() <= sizeimage)
-            .then_some(l)
+        (width > 0 && height > 0 && stride >= width as usize && l.end() <= sizeimage).then_some(l)
     }
 
     /// Bytes from the start of the buffer to the end of the visible chroma.
@@ -562,7 +552,6 @@ mod linux {
     use std::time::{Duration, Instant};
 
     const NV12: u32 = fourcc(b"NV12");
-    const P010: u32 = fourcc(b"P010");
     /// Give up when the device makes no progress for this long.
     const STALL: Duration = Duration::from_secs(5);
 
@@ -641,7 +630,6 @@ mod linux {
         /// Coded size (CAPTURE format) the buffers were allocated for.
         allocated_for: (u32, u32),
         layout: Nv12Layout,
-        pixelformat: u32,
         /// Buffer we hold after a LAST flag until decoding resumes.
         held: Option<u32>,
     }
@@ -662,7 +650,6 @@ mod linux {
         pub device: String,
         codec: Codec,
         stream_size: (u32, u32),
-        ten_bit: bool,
         /// The primer trick is active (declared OUTPUT size was lowered).
         primed: bool,
         bsf: *mut ff::AVBSFContext,
@@ -818,11 +805,9 @@ mod linux {
                 ff::AV_PIX_FMT_YUV420P,
                 ff::AV_PIX_FMT_YUVJ420P,
             ];
-            let ten_bit_420 = [ff::AV_PIX_FMT_YUV420P10LE, ff::AV_PIX_FMT_YUV420P10BE];
-            let ten_bit = ten_bit_420.contains(&p.format);
-            if !eight_bit_420.contains(&p.format) && !ten_bit {
+            if !eight_bit_420.contains(&p.format) {
                 return Err(Error::Unsupported(format!(
-                    "V4L2 path takes 8-bit or 10-bit 4:2:0 only (pixel format {})",
+                    "V4L2 path takes 8-bit 4:2:0 only (pixel format {})",
                     p.format
                 )));
             }
@@ -847,7 +832,6 @@ mod linux {
                 device,
                 codec,
                 stream_size,
-                ten_bit,
                 primed: false,
                 bsf: std::ptr::null_mut(),
                 out_free: Vec::new(),
@@ -880,7 +864,7 @@ mod linux {
             let mut t = BUF_TYPE_OUTPUT_MPLANE as i32;
             ioctl(&dec.fd, VIDIOC_STREAMON, &mut t).map_err(|e| err("STREAMON output", e))?;
             if dec.primed
-                && let Some((primer, _)) = codec.primer(ten_bit)
+                && let Some((primer, _)) = codec.primer()
             {
                 dec.queue_bitstream(primer, 0)?;
             }
@@ -959,7 +943,7 @@ mod linux {
                     // and open CAPTURE through the primer, if one fits.
                     let Some((_, primer)) = self
                         .codec
-                        .primer(self.ten_bit)
+                        .primer()
                         .filter(|(_, size)| primer_matches((w, h), *size))
                     else {
                         return Err(err("REQBUFS output", e));
@@ -1176,11 +1160,10 @@ mod linux {
 
         /// The CAPTURE layout for format `f` (visible size from COMPOSE).
         fn layout(&self, f: &Format) -> Result<Nv12Layout> {
-            let pixfmt = f.pixelformat();
-            if (pixfmt != NV12 && pixfmt != P010) || f.num_planes() != 1 {
+            if f.pixelformat() != NV12 || f.num_planes() != 1 {
                 return Err(Error::Unsupported(format!(
                     "V4L2 capture format {} with {} planes",
-                    fourcc_str(pixfmt),
+                    fourcc_str(f.pixelformat()),
                     f.num_planes()
                 )));
             }
@@ -1193,68 +1176,30 @@ mod linux {
                 Ok(()) if s.width > 0 && s.height > 0 => (s.width, s.height),
                 _ => (f.width(), f.height()),
             };
-            let sample_bytes = if pixfmt == P010 { 2 } else { 1 };
-            let stride = if f.bytesperline(0) > 0 {
-                f.bytesperline(0) as usize
-            } else {
-                (f.width() as usize * sample_bytes).next_multiple_of(128)
-            };
             Nv12Layout::new(
-                stride,
+                f.bytesperline(0) as usize,
                 f.height(),
                 visible,
                 f.sizeimage(0) as usize,
-                sample_bytes,
             )
             .ok_or_else(|| {
                 Error::Unsupported(format!(
-                    "V4L2 capture layout {} {}x{} (coded {}x{}) stride {} size {}",
-                    fourcc_str(pixfmt),
+                    "V4L2 capture layout {}x{} stride {} size {}",
                     visible.0,
                     visible.1,
-                    f.width(),
-                    f.height(),
-                    stride,
+                    f.bytesperline(0),
                     f.sizeimage(0)
                 ))
             })
         }
 
-        /// The CAPTURE format: NV12 for 8-bit, P010 for 10-bit. A 10-bit
-        /// stream decoded into NV12 would be misread, so without P010 the
-        /// stream goes to software.
-        fn capture_format(&self) -> Result<u32> {
-            if !self.ten_bit {
-                return Ok(NV12);
-            }
-            let cap_fmts = formats(&self.fd, BUF_TYPE_CAPTURE_MPLANE);
-            if cap_fmts.contains(&P010) {
-                return Ok(P010);
-            }
-            let listed: Vec<String> = cap_fmts.iter().map(|&f| fourcc_str(f)).collect();
-            Err(Error::Unsupported(format!(
-                "V4L2 offers no P010 capture for a 10-bit stream (has {})",
-                listed.join(", ")
-            )))
-        }
-
-        /// First source change: choose format, allocate, map and queue CAPTURE.
+        /// First source change: choose NV12, allocate, map and queue CAPTURE.
         fn setup_capture(&mut self) -> Result<()> {
             let mut f = self.g_fmt_capture()?;
-            let target_fmt = self.capture_format()?;
-            if f.pixelformat() != target_fmt {
-                f.set_pixelformat(target_fmt);
+            if f.pixelformat() != NV12 {
+                f.set_pixelformat(NV12);
                 ioctl(&self.fd, VIDIOC_S_FMT, &mut f).map_err(|e| err("S_FMT capture", e))?;
                 f = self.g_fmt_capture()?;
-            }
-            // S_FMT may substitute another format: reading its buffers as the
-            // one we asked for gives garbage.
-            if f.pixelformat() != target_fmt {
-                return Err(Error::Unsupported(format!(
-                    "V4L2 capture: asked for {}, driver chose {}",
-                    fourcc_str(target_fmt),
-                    fourcc_str(f.pixelformat())
-                )));
             }
             let layout = self.layout(&f)?;
             let min = self.min_capture_buffers();
@@ -1280,12 +1225,10 @@ mod linux {
                     .map_err(|e| err("mmap capture", e))?,
                 );
             }
-            let pixelformat = f.pixelformat();
             self.cap = Some(Capture {
                 bufs,
                 allocated_for: (f.width(), f.height()),
                 layout,
-                pixelformat,
                 held: None,
             });
             for i in 0..r.count {
@@ -1294,15 +1237,14 @@ mod linux {
             let mut t = BUF_TYPE_CAPTURE_MPLANE as i32;
             ioctl(&self.fd, VIDIOC_STREAMON, &mut t).map_err(|e| err("STREAMON capture", e))?;
             log::info!(
-                "V4L2 capture {}x{} (visible {}x{}, stride {}) x{} buffers of {} bytes (pixfmt {})",
+                "V4L2 capture {}x{} (visible {}x{}, stride {}) x{} buffers of {} bytes",
                 f.width(),
                 f.height(),
                 layout.width,
                 layout.height,
                 layout.stride,
                 r.count,
-                f.sizeimage(0),
-                fourcc_str(pixelformat)
+                f.sizeimage(0)
             );
             Ok(())
         }
@@ -1371,10 +1313,7 @@ mod linux {
                 .unwrap_or(((0, 0), 0, 0));
             let need = f.sizeimage(0) as usize;
             let new_format = (f.width(), f.height());
-            let current_fmt = self.cap.as_ref().map(|c| c.pixelformat).unwrap_or(0);
-            // A different pixel format goes through setup_capture, which
-            // picks and checks the format again.
-            if f.pixelformat() == current_fmt
+            if f.pixelformat() == NV12
                 && can_reuse_capture(allocated_for, count, smallest, new_format, min, need)
             {
                 let layout = self.layout(&f)?;
@@ -1411,7 +1350,7 @@ mod linux {
             self.setup_capture()
         }
 
-        /// Copies a decoded picture into a pooled NV12 or P010 `AVFrame`.
+        /// Copies a decoded picture into a pooled NV12 `AVFrame`.
         fn export(
             &mut self,
             index: u32,
@@ -1454,10 +1393,7 @@ mod linux {
                 f.data[1] = dst.add(y_len);
                 f.linesize[0] = l.stride as i32;
                 f.linesize[1] = l.stride as i32;
-                f.format = match cap.pixelformat {
-                    P010 => ff::AV_PIX_FMT_P010LE,
-                    _ => ff::AV_PIX_FMT_NV12,
-                };
+                f.format = ff::AV_PIX_FMT_NV12;
                 f.width = l.width as i32;
                 f.height = l.height as i32;
                 f.pts = pts;
@@ -1695,7 +1631,7 @@ mod tests {
 
     #[test]
     fn primer_only_for_streams_with_its_buffers() {
-        let primer = Codec::Hevc.primer(false).unwrap().1;
+        let primer = Codec::Hevc.primer().unwrap().1;
         assert_eq!(primer, (8192, 4080));
         assert!(primer_matches((8192, 4096), primer));
         assert!(primer_matches((8192, 4088), primer));
@@ -1706,32 +1642,23 @@ mod tests {
         assert!(!primer_matches((8192, 4320), primer));
         assert!(!primer_matches((7680, 4096), primer));
         assert!(!primer_matches((8192, 8192), primer));
-        assert!(Codec::H264.primer(false).is_none());
-        assert!(Codec::H264.primer(true).is_none());
+        assert!(Codec::H264.primer().is_none());
     }
 
     #[test]
     fn nv12_layout_from_driver_format() {
         // What iris reports for an 8192x4080 picture.
-        let l = Nv12Layout::new(8192, 4096, (8192, 4080), 50_331_648, 1).unwrap();
+        let l = Nv12Layout::new(8192, 4096, (8192, 4080), 50_331_648).unwrap();
         assert_eq!(l.uv_offset, 8192 * 4096);
         assert_eq!(l.end(), 8192 * 4096 + 8192 * 2040);
         assert_eq!(l.copy_size(), 8192 * (4080 + 2040));
         // A buffer too small for the picture is rejected.
-        assert!(Nv12Layout::new(8192, 4096, (8192, 4096), 1 << 20, 1).is_none());
+        assert!(Nv12Layout::new(8192, 4096, (8192, 4096), 1 << 20).is_none());
         // Stride narrower than the picture is rejected.
-        assert!(Nv12Layout::new(1024, 1088, (1920, 1080), 1 << 24, 1).is_none());
+        assert!(Nv12Layout::new(1024, 1088, (1920, 1080), 1 << 24).is_none());
         // Odd heights round the chroma up.
-        let l = Nv12Layout::new(128, 64, (100, 51), 128 * 96, 1).unwrap();
+        let l = Nv12Layout::new(128, 64, (100, 51), 128 * 96).unwrap();
         assert_eq!(l.end(), 128 * 64 + 128 * 26);
-        // P010 (two bytes a sample) at 3840x2160: rows of ALIGN(2 * 3840, 256)
-        // bytes, chroma after ALIGN(2160, 32) rows.
-        let l = Nv12Layout::new(7680, 2176, (3840, 2160), 7680 * (2176 + 1088), 2).unwrap();
-        assert_eq!(l.uv_offset, 7680 * 2176);
-        assert_eq!(l.copy_size(), 7680 * (2160 + 1080));
-        // A P010 stride counted in pixels rather than bytes would read every
-        // row half-wide and the chroma out of the luma: rejected.
-        assert!(Nv12Layout::new(3840, 2176, (3840, 2160), 1 << 25, 2).is_none());
     }
 
     #[test]
@@ -1761,20 +1688,16 @@ mod tests {
 
     #[test]
     fn primers_match_their_codecs() {
-        for ten_bit in [false, true] {
-            let (h, size) = Codec::Hevc.primer(ten_bit).unwrap();
-            assert_eq!(size, (8192, 4080));
-            assert!(h.starts_with(&[0, 0, 0, 1, 0x40, 0x01]), "HEVC VPS first");
-            // VPS, SPS, PPS, one IDR slice; no SEI.
-            let nal_types: Vec<u8> = h
-                .windows(4)
-                .filter(|w| w[..3] == [0, 0, 1])
-                .map(|w| (w[3] >> 1) & 0x3f)
-                .collect();
-            assert_eq!(nal_types, [32, 33, 34, 20]);
-            assert!(h.len() < 16 * 1024);
-        }
-        assert_ne!(Codec::Hevc.primer(false), Codec::Hevc.primer(true));
+        let (h, _) = Codec::Hevc.primer().unwrap();
+        assert!(h.starts_with(&[0, 0, 0, 1, 0x40, 0x01]), "HEVC VPS first");
+        // VPS, SPS, PPS, one IDR slice; no SEI.
+        let nal_types: Vec<u8> = h
+            .windows(4)
+            .filter(|w| w[..3] == [0, 0, 1])
+            .map(|w| (w[3] >> 1) & 0x3f)
+            .collect();
+        assert_eq!(nal_types, [32, 33, 34, 20]);
+        assert!(h.len() < 16 * 1024);
         assert_eq!(Codec::Hevc.fourcc(), fourcc(b"HEVC"));
         assert_eq!(macroblocks(8192, 4096), 131_072);
         assert_eq!(macroblocks(1920, 1080), 120 * 68);

@@ -85,7 +85,8 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
                 }
                 if let Some(video) = pb.player.info().video_stream() {
                     let st = pb.player.stats();
-                    let (badge_text, tooltip) = stream_info_labels(video, &st);
+                    let (badge_text, tooltip) =
+                        stream_info_labels(video, &st, v.settings.hardware_decoding);
                     if stream_pill(ui, &badge_text, st.hardware)
                         .tip(&tooltip)
                         .clicked()
@@ -330,7 +331,12 @@ fn format_pill(ui: &mut egui::Ui, text: &str) -> egui::Response {
 }
 
 /// Short summary label and detailed tooltip for a video stream.
-fn stream_info_labels(v: &fp_media::StreamInfo, st: &fp_media::Stats) -> (String, String) {
+/// `hardware_on` is the hardware decoding setting.
+fn stream_info_labels(
+    v: &fp_media::StreamInfo,
+    st: &fp_media::Stats,
+    hardware_on: bool,
+) -> (String, String) {
     let codec = match v.codec.as_str() {
         "hevc" => "HEVC",
         "h264" => "H.264",
@@ -346,13 +352,7 @@ fn stream_info_labels(v: &fp_media::StreamInfo, st: &fp_media::Stats) -> (String
     };
     let badge_text = format!("{hw} · {codec}{bits}");
 
-    let decoder = if st.hardware {
-        format!("Decoder: Hardware ({})", st.video_decoder)
-    } else if let Some(err) = &st.hardware_error {
-        format!("Decoder: Software ({}) — fallback: {err}", st.video_decoder)
-    } else {
-        format!("Decoder: Software ({})", st.video_decoder)
-    };
+    let decoder = decoder_text(v, st, hardware_on);
     let chroma = v.chroma();
     let pixel = if v.pixel_format.is_empty() {
         format!("{}-bit {chroma}", v.bit_depth)
@@ -360,10 +360,20 @@ fn stream_info_labels(v: &fp_media::StreamInfo, st: &fp_media::Stats) -> (String
         format!("{} ({}-bit {chroma})", v.pixel_format, v.bit_depth)
     };
     let tooltip = format!(
-        "{decoder}\nFormat: {codec} · {pixel}\nResolution: {}×{} @ {:.2} fps",
+        "Decoder: {decoder}\nFormat: {codec} · {pixel}\nResolution: {}×{} @ {:.2} fps",
         v.width, v.height, v.fps
     );
     (badge_text, tooltip)
+}
+
+/// The decoder playing the video and, for software, why not hardware.
+fn decoder_text(v: &fp_media::StreamInfo, st: &fp_media::Stats, hardware_on: bool) -> String {
+    if st.hardware {
+        format!("Hardware ({})", st.video_decoder)
+    } else {
+        let why = crate::playback::software_reason(v, hardware_on, st.hardware_error.as_deref());
+        format!("Software ({}): {why}", st.video_decoder)
+    }
 }
 
 /// A small raised pill naming the video stream format and decoder (HW / SW).
@@ -699,15 +709,10 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                             widgets::section_label(ui, "Video stream");
                             widgets::rows(ui, |r| {
                                 let st = pb.player.stats();
-                                let decoder_text = if st.hardware {
-                                    format!("Hardware ({})", st.video_decoder)
-                                } else if let Some(err) = &st.hardware_error {
-                                    format!("Software (fallback: {err})")
-                                } else {
-                                    format!("Software ({})", st.video_decoder)
-                                };
+                                let decoder =
+                                    decoder_text(video, &st, v.settings.hardware_decoding);
                                 r.row("Decoder", None, |ui| {
-                                    ui.label(RichText::new(decoder_text).color(if st.hardware {
+                                    ui.label(RichText::new(decoder).color(if st.hardware {
                                         theme::TEXT
                                     } else {
                                         theme::WARN
