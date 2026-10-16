@@ -1,11 +1,11 @@
 //! DeoVR feeds and HereSphere APIs (XBVR, Stash): their scene groups as
-//! chips over a grid of scenes, searched across titles, studios,
-//! performers and tags, sorted and filtered, with a details page per scene
-//! (description, performers, tags, chapters to start from).
+//! chips over a grid of scenes, searched (in the group chosen) across
+//! titles, studios, performers and tags, sorted and filtered, with a details
+//! page per scene (description, performers, tags, chapters to start from).
 //!
 //! A HereSphere library lists scene addresses only: scenes on screen (and,
-//! while searching, every scene) have their details fetched as they are
-//! needed.
+//! while searching, every scene of the group) have their details fetched as
+//! they are needed.
 
 use super::page::{self, Card};
 use super::theme::{self, Weight};
@@ -152,13 +152,9 @@ impl FeedView {
             .split_whitespace()
             .map(str::to_lowercase)
             .collect();
-        // A search looks through every group.
-        let scope = if words.is_empty() {
-            self.scope()
-        } else {
-            &self.order
-        };
-        let mut out: Vec<&FeedScene> = scope
+        // A search looks through the group chosen ("All": every group).
+        let mut out: Vec<&FeedScene> = self
+            .scope()
             .iter()
             .filter_map(|u| self.scenes.get(u))
             .filter(|s| words.is_empty() || s.matches(&words))
@@ -197,10 +193,10 @@ impl FeedView {
         self.scenes.values().any(has)
     }
 
-    /// Scenes that need their details fetched to be searched: those
-    /// without, not asked for yet.
+    /// Scenes of the group shown that need their details fetched to be
+    /// searched: those without, not asked for yet.
     fn unfilled(&self) -> Vec<String> {
-        self.order
+        self.scope()
             .iter()
             .filter(|u| !self.requested.contains(*u))
             .filter(|u| self.scenes.get(*u).is_some_and(|s| !s.detailed))
@@ -398,7 +394,7 @@ pub fn page(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut F
         });
     }
     if lazy {
-        // Cards on screen first; while searching, everything else after.
+        // Cards on screen first; while searching, the rest of the group after.
         on_screen.retain(|u| f.requested.insert(u.clone()));
         if !on_screen.is_empty() {
             v.actions.push(Action::FeedFill {
@@ -617,13 +613,16 @@ mod tests {
         assert_eq!(titles(&f), ["Beach", "Alps", "Canyon"]);
         f.group = Some(1);
         assert_eq!(titles(&f), ["Canyon"]);
-        // A search looks through every group: studios and performers too.
+        // A search looks through the group chosen, studios and performers
+        // too; "All" looks through every group.
         f.search = "lake".into();
-        assert_eq!(titles(&f), ["Alps"]);
+        assert!(titles(&f).is_empty());
         f.search = "JANE".into();
         assert_eq!(titles(&f), ["Canyon"]);
-        f.search.clear();
         f.group = None;
+        f.search = "lake".into();
+        assert_eq!(titles(&f), ["Alps"]);
+        f.search.clear();
         f.sort = FeedSort::Title;
         assert_eq!(titles(&f), ["Alps", "Beach", "Canyon"]);
         f.sort = FeedSort::Longest;
@@ -659,6 +658,10 @@ mod tests {
         assert!(f.scenes["b"].detailed);
         assert_eq!(f.scenes["b"].title, "Alps");
         assert_eq!(f.unfilled(), ["c"]);
+        // A search in a group fetches that group's scenes only.
+        f.group = Some(0);
+        assert!(f.unfilled().is_empty());
+        f.group = None;
 
         f.loaded(Ok(FeedLibrary {
             groups: vec![("Recent".into(), vec!["a".into()])],
