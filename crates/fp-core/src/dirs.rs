@@ -14,23 +14,23 @@ fn xdg(var: &str, fallback: &str) -> PathBuf {
     }
 }
 
-/// `$XDG_CONFIG_HOME/frameplayer` (settings, sources, credentials).
+/// `$XDG_CONFIG_HOME/frameplayerx` (settings, sources, credentials).
 pub fn config_dir() -> PathBuf {
-    xdg("XDG_CONFIG_HOME", ".config").join("frameplayer")
+    xdg("XDG_CONFIG_HOME", ".config").join("frameplayerx")
 }
 
-/// `$XDG_DATA_HOME/frameplayer` (library database).
+/// `$XDG_DATA_HOME/frameplayerx` (library database).
 pub fn data_dir() -> PathBuf {
-    xdg("XDG_DATA_HOME", ".local/share").join("frameplayer")
+    xdg("XDG_DATA_HOME", ".local/share").join("frameplayerx")
 }
 
-/// `$XDG_CACHE_HOME/frameplayer` (thumbnails, previews).
+/// `$XDG_CACHE_HOME/frameplayerx` (thumbnails, previews).
 pub fn cache_dir() -> PathBuf {
-    xdg("XDG_CACHE_HOME", ".cache").join("frameplayer")
+    xdg("XDG_CACHE_HOME", ".cache").join("frameplayerx")
 }
 
 /// Default folder scanned for scripts when none sit next to the video
 /// (DeoVR's convention).
 pub fn interactive_dir() -> PathBuf {
-    xdg("XDG_DATA_HOME", ".local/share").join("frameplayer/Interactive")
+    xdg("XDG_DATA_HOME", ".local/share").join("frameplayerx/Interactive")
 }

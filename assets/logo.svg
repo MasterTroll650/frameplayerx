@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- FramePlayerX: an X opened in the middle for a play button. The blue
+       and violet arms are the left and right eye. tools/make-artwork.py
+       renders the Steam artwork from this file, without the background
+       for the transparent logo. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#141A33"/>
+      <stop offset="1" stop-color="#2B1A5E"/>
+    </linearGradient>
+  </defs>
+  <rect id="background" width="512" height="512" rx="112" fill="url(#bg)"/>
+  <g fill="none" stroke-linecap="round" stroke-width="52">
+    <path stroke="#5CA0FF" d="M118 118L168 168M344 344L394 394"/>
+    <path stroke="#AA6EFF" d="M394 118L344 168M168 344L118 394"/>
+  </g>
+  <path fill="#FFFFFF" stroke="#FFFFFF" stroke-width="22" stroke-linejoin="round" d="M218 186V326L336 256Z"/>
+</svg>

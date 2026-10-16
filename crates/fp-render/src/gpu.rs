@@ -7,7 +7,7 @@ use std::ffi::CString;
 use std::mem::ManuallyDrop;
 use std::sync::Mutex;
 
-/// FramePlayer needs Vulkan 1.3 (dynamic rendering, synchronization2).
+/// FramePlayerX needs Vulkan 1.3 (dynamic rendering, synchronization2).
 pub const API_VERSION: u32 = vk::API_VERSION_1_3;
 
 /// Creates the instance and device. OpenXR runtimes need to do this
@@ -165,7 +165,7 @@ impl Gpu {
 
     /// Headless device for tests and tools.
     pub fn headless() -> Result<Gpu> {
-        Gpu::new(&DirectCreator, "frameplayer")
+        Gpu::new(&DirectCreator, "frameplayerx")
     }
 
     pub(crate) fn alloc(&self) -> std::sync::MutexGuard<'_, Allocator> {

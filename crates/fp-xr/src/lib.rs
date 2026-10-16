@@ -1,4 +1,4 @@
-//! OpenXR for FramePlayer.
+//! OpenXR for FramePlayerX.
 //!
 //! - [`loader`]: finds the active runtime manifest and negotiates with the
 //!   runtime directly (no Khronos loader to ship).

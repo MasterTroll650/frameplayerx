@@ -1,4 +1,4 @@
-//! FramePlayer's media pipeline on top of the bundled FFmpeg.
+//! FramePlayerX's media pipeline on top of the bundled FFmpeg.
 //!
 //! - [`io`]: FFmpeg reads through [`fp_core::ByteSource`], so all network
 //!   access stays in Rust.

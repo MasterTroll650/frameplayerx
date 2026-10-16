@@ -22,7 +22,7 @@ pub struct XrContext {
 
 impl XrContext {
     /// Loads the active runtime and creates an instance with the extensions
-    /// FramePlayer uses when they are available.
+    /// FramePlayerX uses when they are available.
     pub fn new(app_name: &str) -> Result<XrContext> {
         let manifest = loader::find_active_runtime(&loader::SearchEnv::from_process())
             .map_err(Error::Runtime)?;
@@ -57,7 +57,7 @@ impl XrContext {
             let app = xr::ApplicationInfo {
                 application_name: app_name,
                 application_version: 1,
-                engine_name: "frameplayer",
+                engine_name: "frameplayerx",
                 engine_version: 1,
                 api_version: api,
             };

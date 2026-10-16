@@ -21,16 +21,15 @@ if [[ "${1:-}" == "--build" || ! -x "$bin" ]]; then
 fi
 
 echo "==> copying probe to $host"
-ssh "$host" 'mkdir -p ~/frameplayer-probe'
-scp -q "$bin" "$host:frameplayer-probe/frame-probe"
+ssh "$host" 'mkdir -p ~/frameplayerx-probe'
+scp -q "$bin" "$host:frameplayerx-probe/frame-probe"
 
 echo "==> running on $host"
 # Over SSH there is no graphical session environment; point at the user's
 # runtime dir so anything that expects it (PipeWire, Wayland) resolves.
-ssh -t "$host" 'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; ~/frameplayer-probe/frame-probe '"$*"
+ssh -t "$host" 'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; ~/frameplayerx-probe/frame-probe '"$*"
 
 echo "==> fetching reports"
 mkdir -p probe-reports
-scp -q "$host:frameplayer-probe/probe-*" probe-reports/
+scp -q "$host:frameplayerx-probe/probe-*" probe-reports/
 ls -1t probe-reports | head -2
-echo "Paste the newest .txt into docs/platform-notes.md (see that file)."

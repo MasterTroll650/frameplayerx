@@ -25,20 +25,20 @@ semaphore, and a request waits on it until enough credits are free.
 - The wait on the semaphore had no timeout.
 
 So after enough slow reads every request on the connection, the read in
-progress and every later open, waited forever. FramePlayer showed this as
+progress and every later open, waited forever. FramePlayerX showed this as
 playback from a NAS freezing on "buffering" after a few minutes, with no
 other video opening until the app was restarted. A Samba share served from a
 FUSE folder that delays one read in 40 by 1.2 s hung the old code within
 5 MiB; the patched code reads the whole file.
 
-## The changes (marked "FramePlayer patch" in the source)
+## The changes (marked "FramePlayerX patch" in the source)
 
 - `src/connection/worker/worker_trait.rs`: credits granted by interim
   responses are added to the final response's credit grant, so the credit
   accounting sees them.
 - `src/connection.rs`: the pool size update saturates instead of wrapping,
   and a request waits for credits at most the connection timeout, then fails
-  with `Error::OperationTimeout(TimedOutTask::AcquireCredits, _)` (FramePlayer
+  with `Error::OperationTimeout(TimedOutTask::AcquireCredits, _)` (FramePlayerX
   then reconnects).
 - `src/sync_helpers.rs`: `Semaphore::acquire_many_timeout`.
 - `src/error.rs`: `TimedOutTask::AcquireCredits`.

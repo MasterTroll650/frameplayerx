@@ -426,7 +426,7 @@ fn egui_panel_and_pointer_render_in_the_scene() {
     };
     let out = ctx.run(input, |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("FramePlayer");
+            ui.heading("FramePlayerX");
             let _ = ui.button("Play");
         });
     });

@@ -1,12 +1,12 @@
 //! Safe extraction, validation, atomic swap and rollback of an installation
 //! directory.
 //!
-//! Layout on disk, for `install_dir = ~/frameplayer`:
+//! Layout on disk, for `install_dir = ~/frameplayerx`:
 //!
 //! ```text
-//! ~/frameplayer        current version (binary, lib/, assets/, VERSION)
-//! ~/frameplayer.old    the one previous version kept for rollback
-//! ~/frameplayer.new    staging area while an install is in progress
+//! ~/frameplayerx        current version (binary, lib/, assets/, VERSION)
+//! ~/frameplayerx.old    the one previous version kept for rollback
+//! ~/frameplayerx.new    staging area while an install is in progress
 //! ```
 
 use std::fs::{self, File, OpenOptions};
@@ -18,9 +18,9 @@ use semver::Version;
 use crate::error::{Error, IoContext, Result};
 
 /// Name of the main binary inside the install directory.
-pub const BINARY_NAME: &str = "frameplayer";
+pub const BINARY_NAME: &str = "frameplayerx";
 /// Name of the launcher script inside the install directory.
-pub const LAUNCHER_NAME: &str = "frameplayer.sh";
+pub const LAUNCHER_NAME: &str = "frameplayerx.sh";
 /// Name of the version file inside the install directory.
 pub const VERSION_FILE: &str = "VERSION";
 /// Directory inside the install holding Steam library artwork.
@@ -36,13 +36,13 @@ pub struct ArchiveInfo {
     /// Version from the archive's `VERSION` file.
     pub version: Version,
     /// Single top-level directory every entry sits in (normally
-    /// `frameplayer`), stripped on extraction.
+    /// `frameplayerx`), stripped on extraction.
     pub root: Option<String>,
     /// Number of entries.
     pub entries: usize,
     /// Sum of uncompressed sizes as declared by the archive.
     pub uncompressed_size: u64,
-    /// Whether `frameplayer.sh` is present.
+    /// Whether `frameplayerx.sh` is present.
     pub has_launcher: bool,
     /// Files under `assets/steam/` (paths relative to the install root).
     pub steam_assets: Vec<String>,
@@ -212,7 +212,7 @@ fn parse_version_text(text: &str) -> Result<Version> {
 }
 
 /// Extracts `zip_path` into `dest`, which must not exist yet. A single
-/// top-level directory (normally `frameplayer/`) is stripped. Files are
+/// top-level directory (normally `frameplayerx/`) is stripped. Files are
 /// created with `create_new`, so duplicate entries fail rather than
 /// overwrite; no symbolic links are ever created; permission bits are kept
 /// minus setuid/setgid/sticky.
@@ -296,8 +296,8 @@ pub fn installed_version(dir: &Path) -> Result<Option<Version>> {
     }
 }
 
-/// Checks that `dir` holds a runnable FramePlayer: a regular, executable
-/// `frameplayer` binary (not a link), an executable launcher if present,
+/// Checks that `dir` holds a runnable FramePlayerX: a regular, executable
+/// `frameplayerx` binary (not a link), an executable launcher if present,
 /// and a semver `VERSION` (equal to `expected` when given). Returns the
 /// version.
 pub fn validate_install_dir(dir: &Path, expected: Option<&Version>) -> Result<Version> {
@@ -335,12 +335,12 @@ pub fn validate_install_dir(dir: &Path, expected: Option<&Version>) -> Result<Ve
     Ok(version)
 }
 
-/// `<install_dir><suffix>` as a sibling path (`~/frameplayer.old`).
+/// `<install_dir><suffix>` as a sibling path (`~/frameplayerx.old`).
 pub fn sibling(install_dir: &Path, suffix: &str) -> PathBuf {
     let mut name = install_dir
         .file_name()
         .map(|n| n.to_os_string())
-        .unwrap_or_else(|| "frameplayer".into());
+        .unwrap_or_else(|| "frameplayerx".into());
     name.push(suffix);
     install_dir.with_file_name(name)
 }
@@ -501,16 +501,16 @@ pub(crate) mod tests {
         make_zip(
             path,
             &[
-                Item::Dir("frameplayer/"),
-                Item::File("frameplayer/frameplayer", b"\x7fELF fake", 0o755),
-                Item::File("frameplayer/frameplayer.sh", b"#!/bin/sh\n", 0o755),
+                Item::Dir("frameplayerx/"),
+                Item::File("frameplayerx/frameplayerx", b"\x7fELF fake", 0o755),
+                Item::File("frameplayerx/frameplayerx.sh", b"#!/bin/sh\n", 0o755),
                 Item::File(
-                    "frameplayer/VERSION",
+                    "frameplayerx/VERSION",
                     format!("{version}\n").as_bytes(),
                     0o644,
                 ),
-                Item::File("frameplayer/lib/libavcodec.so.61", b"lib", 0o644),
-                Item::File("frameplayer/assets/steam/portrait.png", b"png", 0o644),
+                Item::File("frameplayerx/lib/libavcodec.so.61", b"lib", 0o644),
+                Item::File("frameplayerx/assets/steam/portrait.png", b"png", 0o644),
             ],
         );
     }
@@ -518,8 +518,8 @@ pub(crate) mod tests {
     #[test]
     fn entry_name_rules() {
         assert_eq!(
-            safe_entry_components("frameplayer/./lib//a.so").unwrap(),
-            ["frameplayer", "lib", "a.so"]
+            safe_entry_components("frameplayerx/./lib//a.so").unwrap(),
+            ["frameplayerx", "lib", "a.so"]
         );
         for bad in [
             "",
@@ -544,7 +544,7 @@ pub(crate) mod tests {
         release_zip(&zip, "1.2.3");
         let info = inspect_zip(&zip).unwrap();
         assert_eq!(info.version, Version::new(1, 2, 3));
-        assert_eq!(info.root.as_deref(), Some("frameplayer"));
+        assert_eq!(info.root.as_deref(), Some("frameplayerx"));
         assert!(info.has_launcher);
         assert_eq!(info.steam_assets, ["assets/steam/portrait.png"]);
     }
@@ -554,7 +554,7 @@ pub(crate) mod tests {
     fn install_swap_and_rollback() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("frameplayer");
+        let dir = tmp.path().join("frameplayerx");
         let z1 = tmp.path().join("1.zip");
         let z2 = tmp.path().join("2.zip");
         let z3 = tmp.path().join("3.zip");
@@ -565,7 +565,7 @@ pub(crate) mod tests {
         assert!(matches!(rollback(&dir), Err(Error::NoPreviousVersion(_))));
         assert_eq!(install(&z1, &dir).unwrap(), Version::new(1, 0, 0));
         assert!(!sibling(&dir, ".old").exists());
-        let mode = fs::metadata(dir.join("frameplayer"))
+        let mode = fs::metadata(dir.join("frameplayerx"))
             .unwrap()
             .permissions()
             .mode();
@@ -591,7 +591,7 @@ pub(crate) mod tests {
         let siblings: Vec<_> = fs::read_dir(tmp.path())
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .filter(|n| n.starts_with("frameplayer"))
+            .filter(|n| n.starts_with("frameplayerx"))
             .collect();
         assert_eq!(siblings.len(), 2, "{siblings:?}");
 
@@ -611,7 +611,7 @@ pub(crate) mod tests {
     #[test]
     fn version_mismatch_leaves_install_untouched() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("frameplayer");
+        let dir = tmp.path().join("frameplayerx");
         let z1 = tmp.path().join("1.zip");
         let z2 = tmp.path().join("2.zip");
         release_zip(&z1, "1.0.0");
@@ -630,17 +630,22 @@ pub(crate) mod tests {
     #[test]
     fn zip_slip_is_rejected() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("inst").join("frameplayer");
-        for (i, evil) in ["frameplayer/../../evil", "/tmp/evil", "..\\evil", "C:/evil"]
-            .iter()
-            .enumerate()
+        let dir = tmp.path().join("inst").join("frameplayerx");
+        for (i, evil) in [
+            "frameplayerx/../../evil",
+            "/tmp/evil",
+            "..\\evil",
+            "C:/evil",
+        ]
+        .iter()
+        .enumerate()
         {
             let z = tmp.path().join(format!("evil{i}.zip"));
             make_zip(
                 &z,
                 &[
-                    Item::File("frameplayer/frameplayer", b"bin", 0o755),
-                    Item::File("frameplayer/VERSION", b"1.0.0", 0o644),
+                    Item::File("frameplayerx/frameplayerx", b"bin", 0o755),
+                    Item::File("frameplayerx/VERSION", b"1.0.0", 0o644),
                     Item::File(evil, b"pwned", 0o644),
                 ],
             );
@@ -659,15 +664,15 @@ pub(crate) mod tests {
     #[test]
     fn symlinks_are_rejected() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("frameplayer");
+        let dir = tmp.path().join("frameplayerx");
         let z = tmp.path().join("link.zip");
         make_zip(
             &z,
             &[
-                Item::File("frameplayer/frameplayer", b"bin", 0o755),
-                Item::File("frameplayer/VERSION", b"1.0.0", 0o644),
-                Item::Symlink("frameplayer/lib", "/etc"),
-                Item::File("frameplayer/lib/passwd", b"x", 0o644),
+                Item::File("frameplayerx/frameplayerx", b"bin", 0o755),
+                Item::File("frameplayerx/VERSION", b"1.0.0", 0o644),
+                Item::Symlink("frameplayerx/lib", "/etc"),
+                Item::File("frameplayerx/lib/passwd", b"x", 0o644),
             ],
         );
         let err = install(&z, &dir).unwrap_err();
@@ -678,16 +683,16 @@ pub(crate) mod tests {
     #[test]
     fn duplicate_entries_do_not_overwrite() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("frameplayer");
+        let dir = tmp.path().join("frameplayerx");
         let z = tmp.path().join("dup.zip");
         // ZipWriter refuses duplicate names, so build one with distinct
         // spellings that normalise to the same path.
         make_zip(
             &z,
             &[
-                Item::File("frameplayer/frameplayer", b"bin", 0o755),
-                Item::File("frameplayer/./frameplayer", b"evil", 0o755),
-                Item::File("frameplayer/VERSION", b"1.0.0", 0o644),
+                Item::File("frameplayerx/frameplayerx", b"bin", 0o755),
+                Item::File("frameplayerx/./frameplayerx", b"evil", 0o755),
+                Item::File("frameplayerx/VERSION", b"1.0.0", 0o644),
             ],
         );
         assert!(matches!(install(&z, &dir), Err(Error::Io { .. })));
@@ -698,13 +703,13 @@ pub(crate) mod tests {
     #[test]
     fn non_executable_binary_is_rejected() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("frameplayer");
+        let dir = tmp.path().join("frameplayerx");
         let z = tmp.path().join("noexec.zip");
         make_zip(
             &z,
             &[
-                Item::File("frameplayer/frameplayer", b"bin", 0o644),
-                Item::File("frameplayer/VERSION", b"1.0.0", 0o644),
+                Item::File("frameplayerx/frameplayerx", b"bin", 0o644),
+                Item::File("frameplayerx/VERSION", b"1.0.0", 0o644),
             ],
         );
         let err = install(&z, &dir).unwrap_err();
@@ -714,19 +719,19 @@ pub(crate) mod tests {
     #[test]
     fn missing_binary_or_version_is_rejected() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("frameplayer");
+        let dir = tmp.path().join("frameplayerx");
         let z = tmp.path().join("nobin.zip");
-        make_zip(&z, &[Item::File("frameplayer/VERSION", b"1.0.0", 0o644)]);
+        make_zip(&z, &[Item::File("frameplayerx/VERSION", b"1.0.0", 0o644)]);
         assert!(matches!(install(&z, &dir), Err(Error::InvalidInstall(_))));
         let z = tmp.path().join("nover.zip");
-        make_zip(&z, &[Item::File("frameplayer/frameplayer", b"x", 0o755)]);
+        make_zip(&z, &[Item::File("frameplayerx/frameplayerx", b"x", 0o755)]);
         assert!(matches!(install(&z, &dir), Err(Error::InvalidInstall(_))));
         let z = tmp.path().join("badver.zip");
         make_zip(
             &z,
             &[
-                Item::File("frameplayer/frameplayer", b"x", 0o755),
-                Item::File("frameplayer/VERSION", b"latest", 0o644),
+                Item::File("frameplayerx/frameplayerx", b"x", 0o755),
+                Item::File("frameplayerx/VERSION", b"latest", 0o644),
             ],
         );
         assert!(matches!(install(&z, &dir), Err(Error::InvalidInstall(_))));
@@ -737,17 +742,17 @@ pub(crate) mod tests {
     fn setuid_bits_are_stripped() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("frameplayer");
+        let dir = tmp.path().join("frameplayerx");
         let z = tmp.path().join("suid.zip");
         make_zip(
             &z,
             &[
-                Item::File("frameplayer/frameplayer", b"x", 0o4755),
-                Item::File("frameplayer/VERSION", b"1.0.0", 0o644),
+                Item::File("frameplayerx/frameplayerx", b"x", 0o4755),
+                Item::File("frameplayerx/VERSION", b"1.0.0", 0o644),
             ],
         );
         install(&z, &dir).unwrap();
-        let mode = fs::metadata(dir.join("frameplayer"))
+        let mode = fs::metadata(dir.join("frameplayerx"))
             .unwrap()
             .permissions()
             .mode();
@@ -762,11 +767,11 @@ pub(crate) mod tests {
         make_zip(
             &z,
             &[
-                Item::File("frameplayer", b"x", 0o755),
+                Item::File("frameplayerx", b"x", 0o755),
                 Item::File("VERSION", b"2.0.0", 0o644),
             ],
         );
         assert_eq!(install(&z, &dir).unwrap(), Version::new(2, 0, 0));
-        assert!(dir.join("frameplayer").is_file());
+        assert!(dir.join("frameplayerx").is_file());
     }
 }

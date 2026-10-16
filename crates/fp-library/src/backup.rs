@@ -23,7 +23,7 @@ use crate::query::Query;
 use crate::record::{MediaId, PlaylistId, now};
 
 /// Value of [`UserDataExport::format`].
-pub const EXPORT_FORMAT: &str = "frameplayer-library";
+pub const EXPORT_FORMAT: &str = "frameplayerx-library";
 /// Current export document version.
 pub const EXPORT_VERSION: u32 = 1;
 
@@ -213,7 +213,7 @@ fn export_conn(conn: &Connection) -> Result<UserDataExport> {
 fn import_conn(conn: &Connection, doc: &UserDataExport) -> Result<ImportReport> {
     if doc.format != EXPORT_FORMAT {
         return Err(Error::InvalidArgument(format!(
-            "not a FramePlayer library export (format {:?})",
+            "not a FramePlayerX library export (format {:?})",
             doc.format
         )));
     }

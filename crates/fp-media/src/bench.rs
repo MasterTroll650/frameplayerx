@@ -1,4 +1,4 @@
-//! Decode-only benchmark (`frameplayer --decode-bench FILE`): runs the
+//! Decode-only benchmark (`frameplayerx --decode-bench FILE`): runs the
 //! player's video decoder and frame conversion without a headset or GPU, and
 //! reports the rate plus a checksum per frame for comparing decoders.
 

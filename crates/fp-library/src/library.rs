@@ -132,7 +132,7 @@ impl std::fmt::Debug for Library {
     }
 }
 
-/// Default database file: `$XDG_DATA_HOME/frameplayer/library.sqlite3`.
+/// Default database file: `$XDG_DATA_HOME/frameplayerx/library.sqlite3`.
 pub fn default_db_path() -> PathBuf {
     fp_core::dirs::data_dir().join("library.sqlite3")
 }
@@ -1134,13 +1134,11 @@ impl Library {
         })
     }
 
-    /// Deletes videos that were never played and carry nothing the user
-    /// set (favourite, rating, tags, format, adjustments, keyframes,
-    /// bookmarks, playlists): what browsing or importing a network source
-    /// left behind. With `source_id`, only that source's; without, those of
-    /// every network source (local files stay: the folder scan keeps them).
+    /// Deletes the videos of `source_id` that were never played and carry
+    /// nothing the user set (favourite, rating, tags, format, adjustments,
+    /// keyframes, bookmarks, playlists), for a source being removed.
     /// Returns how many were deleted.
-    pub fn forget_unwatched(&self, source_id: Option<&str>) -> Result<usize> {
+    pub fn forget_unwatched(&self, source_id: &str) -> Result<usize> {
         self.in_tx(|c| {
             let n = c.execute(
                 "DELETE FROM media WHERE id IN (
@@ -1153,7 +1151,7 @@ impl Library {
                                        WHERE k.media_id = m.id AND k.from_source = 0)
                        AND NOT EXISTS (SELECT 1 FROM playlist_items p WHERE p.media_id = m.id)
                        AND NOT EXISTS (SELECT 1 FROM history h WHERE h.media_id = m.id)
-                       AND ((?1 IS NULL AND m.location NOT LIKE '/%') OR m.source_id = ?1))",
+                       AND m.source_id = ?1)",
                 [source_id],
             )?;
             prune_tags(c)?;
@@ -1679,27 +1677,24 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_unwatched_network_videos() {
+    fn forgetting_the_unwatched_videos_of_a_source() {
         let lib = lib();
         let local = add(&lib, "/v/local.mp4");
         let up = |loc: &str, src: &str| lib.upsert(&MediaUpsert::new(loc, src)).unwrap().id;
         let plain = up("smb://nas/v/plain.mp4", "nas");
         let watched = up("smb://nas/v/watched.mp4", "nas");
         let fav = up("smb://nas/v/fav.mp4", "nas");
-        let tagged = up("http://feed/1", "feed");
-        let marked = up("http://feed/2", "feed");
+        let tagged = up("smb://nas/v/tagged.mp4", "nas");
+        let marked = up("smb://nas/v/marked.mp4", "nas");
         let other = up("http://feed/3", "feed");
         lib.start_playback(watched).unwrap();
         lib.set_favorite(fav, true).unwrap();
         lib.set_tags(tagged, &["keep"]).unwrap();
         lib.add_marker(marked, 3.0, "mine").unwrap();
 
-        assert_eq!(lib.forget_unwatched(Some("nas")).unwrap(), 1);
+        assert_eq!(lib.forget_unwatched("nas").unwrap(), 1);
         assert!(lib.get(plain).unwrap().is_none());
-        assert!(lib.get(other).unwrap().is_some());
-        assert_eq!(lib.forget_unwatched(None).unwrap(), 1);
-        assert!(lib.get(other).unwrap().is_none());
-        for id in [local, watched, fav, tagged, marked] {
+        for id in [local, watched, fav, tagged, marked, other] {
             assert!(lib.get(id).unwrap().is_some(), "{id} was deleted");
         }
     }

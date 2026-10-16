@@ -9,12 +9,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let ctx = Arc::new(XrContext::new("frameplayer-xr-smoke")?);
+    let ctx = Arc::new(XrContext::new("frameplayerx-xr-smoke")?);
     println!(
         "runtime: {} | system: {} | blend modes {:?}",
         ctx.runtime, ctx.system_name, ctx.blend_modes
     );
-    let gpu = Arc::new(Gpu::new(&ctx.creator(), "frameplayer")?);
+    let gpu = Arc::new(Gpu::new(&ctx.creator(), "frameplayerx")?);
     println!("gpu: {} ({})", gpu.device_name, gpu.driver);
     let mut session = XrSession::new(ctx.clone(), gpu.clone())?;
     println!(

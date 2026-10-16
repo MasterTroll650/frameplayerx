@@ -138,7 +138,7 @@ impl Default for VideoFormat {
 impl VideoFormat {
     /// The format of a video nothing identifies (no metadata, file name tag
     /// or telling shape): stereo 180 side by side, the most common VR video
-    /// format and what FramePlayer is mostly used for. FramePlayer's
+    /// format and what FramePlayerX is mostly used for. FramePlayerX's
     /// settings choose another for the player.
     pub const FALLBACK: VideoFormat = VideoFormat {
         projection: Projection::EQUIRECT_180,

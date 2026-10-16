@@ -250,9 +250,9 @@ impl Timestamps {
 pub(crate) use linux::V4l2Decoder;
 
 /// Whether the native decoder may be tried at all: Linux only, and
-/// `FRAMEPLAYER_V4L2=0` turns it off.
+/// `FRAMEPLAYERX_V4L2=0` turns it off.
 pub(crate) fn enabled() -> bool {
-    cfg!(target_os = "linux") && !matches!(std::env::var("FRAMEPLAYER_V4L2").as_deref(), Ok("0"))
+    cfg!(target_os = "linux") && !matches!(std::env::var("FRAMEPLAYERX_V4L2").as_deref(), Ok("0"))
 }
 
 #[cfg(target_os = "linux")]
@@ -756,10 +756,10 @@ mod linux {
     }
 
     /// `/dev/video-dec0` (the Frame's decoder), else the first `/dev/video*`
-    /// M2M device decoding `codec`. `FRAMEPLAYER_V4L2_DEVICE` overrides.
+    /// M2M device decoding `codec`. `FRAMEPLAYERX_V4L2_DEVICE` overrides.
     fn find_device(codec: Codec) -> Result<(String, OwnedFd)> {
         let mut paths: Vec<String> = Vec::new();
-        if let Ok(p) = std::env::var("FRAMEPLAYER_V4L2_DEVICE") {
+        if let Ok(p) = std::env::var("FRAMEPLAYERX_V4L2_DEVICE") {
             paths.push(p);
         } else {
             paths.push("/dev/video-dec0".into());

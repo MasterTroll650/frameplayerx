@@ -1,5 +1,5 @@
 #!/bin/bash
-# Renders every FramePlayer screen to flat PNGs for design review, with the
+# Renders every FramePlayerX screen to flat PNGs for design review, with the
 # desktop preview (no headset; any Vulkan driver, lavapipe on CI).
 #
 # Usage: tools/ui-preview.sh OUT_DIR
@@ -26,9 +26,9 @@ touch -d 2025-11-20 "$home/Videos/Mountain Lake_360.webm"
 touch -d 2026-06-30 "$home/Videos/City Lights_180_SBS.webm"
 touch -d 2026-01-08 "$home/Videos/Aurora Timelapse_360_TB.mkv"
 # A source to lock with a PIN.
-mkdir -p "$home/Private" "$home/.config/frameplayer"
+mkdir -p "$home/Private" "$home/.config/frameplayerx"
 cp "$data/camera_clip.mp4" "$home/Private/Rooftop.mp4"
-(umask 077 && cat >"$home/.config/frameplayer/sources.json" <<EOF
+(umask 077 && cat >"$home/.config/frameplayerx/sources.json" <<EOF
 [{"type": "local", "id": "private", "name": "Private videos", "root": "$home/Private"}]
 EOF
 )
@@ -83,8 +83,8 @@ screen settings controller-open
 panel main settings-controller-open
 screen settings controller-stick
 panel main settings-controller-stick
-screen settings library
-panel main settings-library
+screen settings device
+panel main settings-device
 screen settings haptics
 panel main settings-haptics
 screen settings remote
@@ -154,8 +154,8 @@ frames 4
 panel main home-watched
 EOF
 
-cargo build -p frameplayer
+cargo build -p frameplayerx
 HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
   XDG_CACHE_HOME="$home/.cache" \
-  "${CARGO_TARGET_DIR:-target}/debug/frameplayer" --preview "$out" --script "$script" --size 1400
+  "${CARGO_TARGET_DIR:-target}/debug/frameplayerx" --preview "$out" --script "$script" --size 1400
 ls -l "$out"

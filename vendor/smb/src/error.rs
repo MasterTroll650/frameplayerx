@@ -9,7 +9,7 @@ use smb_msg::{Command, ErrorResponse, Status};
 #[derive(Debug)]
 pub enum TimedOutTask {
     ReceiveNextMessage,
-    /// Waiting for the server to grant credits for a request (FramePlayer patch).
+    /// Waiting for the server to grant credits for a request (FramePlayerX patch).
     AcquireCredits,
 }
 

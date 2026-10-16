@@ -1,55 +1,155 @@
-# FramePlayer user guide
+# FramePlayerX user guide
 
-FramePlayer plays flat, 180°, 360°, fisheye and YouTube-style (EAC) videos,
+FramePlayerX plays flat, 180°, 360°, fisheye and YouTube-style (EAC) videos,
 2D or 3D, on the Steam Frame, from the headset, a microSD card, a USB drive
 or your network.
 
+- [Install](#install), [updating](#updating) and [uninstall](#uninstall)
+- [Where your videos can be](#where-your-videos-can-be): browsing,
+  PIN locks, microSD cards and USB drives
+- [Video formats](#video-formats), and [videos that stutter](#videos-that-stutter-10-bit-hevc-and-av1)
+- [Controls](#controls)
+- [Passthrough videos](#passthrough-videos)
+- [Haptics](#haptics)
+- [Remote control](#remote-control)
+- [Troubleshooting](#troubleshooting)
+
 ## Install
 
-You need a Steam Frame with **Developer Mode** on, paired once with your PC
-by `frameplayer-install pair` (below), Frame Control, FrameDrop or Valve's
-SteamOS Devkit Client.
+**On the headset, in Desktop Mode (no PC).** Open this page in the
+headset's browser and press the button to download the installer:
+
+<a href="https://github.com/remotesojourner/frameplayerx/releases/latest/download/Install-FramePlayerX.desktop"><img src="../assets/install-button.svg" alt="Download the installer: Install-FramePlayerX.desktop" width="300" /></a>
+
+Open `Install-FramePlayerX.desktop` from your Downloads folder and confirm
+when Desktop Mode asks whether to trust it. A terminal window opens and:
+
+- downloads the latest stable release and checks it against the checksum
+  GitHub recorded for it;
+- removes other copies of FramePlayerX and their library entries (your
+  settings and watch history stay);
+- installs it into `~/frameplayerx` and adds **FramePlayerX** to the Steam
+  library with its artwork.
+
+If Steam can't be updated while it's running, the installer asks to close
+it; the app then appears when you return to Gaming Mode, which it offers to
+do. Run the same file again to reinstall. From a terminal, the installer
+also takes `--beta` (the newest release, betas included); see
+[tools/frame-desktop-install](../tools/frame-desktop-install/README.md).
+
+The other two ways need **Developer Mode** on, and the headset paired once
+with your PC by `frameplayerx-install pair` (below), Frame Control,
+FrameDrop or Valve's SteamOS Devkit Client.
 
 **One click (Frame Control / FrameDrop).** Open the install link from the
 release page. It points the tool at `framedrop.json`, which downloads the
-release, checks its SHA-256 and unpacks it into `~/frameplayer`.
+release, checks its SHA-256 and unpacks it into `~/frameplayerx`.
 
-**From a PC with the installer.** Download `frameplayer-install` for your
+**From a PC with the installer.** Download `frameplayerx-install` for your
 PC from the release page and run it:
 
 ```
-frameplayer-install pair 192.168.0.68       # once: the headset's IP address
-frameplayer-install                         # latest release
-frameplayer-install --zip frameplayer-0.1.0-aarch64.zip
-frameplayer-install status | uninstall
+frameplayerx-install pair 192.168.0.68       # once: the headset's IP address
+frameplayerx-install                         # latest release
+frameplayerx-install --zip frameplayerx-0.1.0-aarch64.zip
+frameplayerx-install status | uninstall
 ```
 
 To pair, open Steam Settings › Developer › Pair new host on the headset
 and keep that screen showing while `pair` runs. It creates an RSA key
 (`~/.ssh/id_rsa_frame_devkit`; the headset does not accept ed25519 keys),
 registers it with the headset and adds a `Host frame` entry to
-`~/.ssh/config`. If you skip this step, `frameplayer-install` offers to
+`~/.ssh/config`. If you skip this step, `frameplayerx-install` offers to
 pair when it cannot log in.
 
 It reuses the `frame` SSH alias created when pairing, installs into
-`~/frameplayer` (keeping the previous version as `~/frameplayer.old`) and
-adds **FramePlayer** to the Steam library with artwork. Add
+`~/frameplayerx` (keeping the previous version as `~/frameplayerx.old`) and
+adds **FramePlayerX** to the Steam library with artwork. Add
 `--restart-steam` to make it show up right away.
 
 **By hand.** Copy the zip to the headset, unzip it into your home folder
-and add `~/frameplayer/frameplayer.sh` to Steam as a non-Steam game.
+and add `~/frameplayerx/frameplayerx.sh` to Steam as a non-Steam game.
 
-FramePlayer then updates itself from the Settings › Updates page. The
-**Stable** channel gets finished releases only; **Beta** also gets test
-versions before they are released.
+## Updating
+
+FramePlayerX checks for a new version each time it starts, but doesn't
+install it by itself. To update, open **Settings › Updates**: when a new
+version is out it's listed there with what changed. Press **Download and
+install**, then **Quit now** and start FramePlayerX again. **Check now**
+looks again without restarting.
+
+The **Stable** channel gets finished releases only; **Beta** also gets
+test versions before they are released. Switch off **Check for updates at
+start** to only check when you press **Check now**. Installing again with
+any of the ways above also updates it.
+
+## Uninstall
+
+Uninstalling removes the app, its entry in the Steam library and its
+library artwork. You choose whether your settings, source passwords, watch
+history and thumbnails go too; kept, a later install picks up where you
+left off. Your videos are never touched.
+
+**On the headset, in Desktop Mode (no PC).** Open this page in the
+headset's browser and press the button to download the uninstaller:
+
+<a href="https://github.com/remotesojourner/frameplayerx/releases/latest/download/Uninstall-FramePlayerX.desktop"><img src="../assets/uninstall-button.svg" alt="Download the uninstaller: Uninstall-FramePlayerX.desktop" width="276" /></a>
+
+Open `Uninstall-FramePlayerX.desktop` from your Downloads folder and
+confirm when Desktop Mode asks whether to trust it. A terminal window
+opens, asks you to confirm, removes FramePlayerX, then asks whether to
+delete your settings and watch history too. If it closes Steam, the entry
+is gone when you return to Gaming Mode, which it offers to do.
+
+From Konsole, the same installer's `--remove` does this, and
+`--remove --purge` deletes your settings and watch history without asking:
+
+```
+curl -fsSL https://github.com/remotesojourner/frameplayerx/releases/latest/download/frameplayerx-desktop-install.py -o /tmp/frameplayerx-desktop-install.py
+python3 /tmp/frameplayerx-desktop-install.py --remove
+```
+
+**From a PC.** With the headset still paired (Developer Mode on):
+
+```
+frameplayerx-install uninstall                  # keeps your settings and watch history
+frameplayerx-install uninstall --purge          # deletes them too
+```
+
+Add `--restart-steam` so the library updates right away.
+
+**Installed with Frame Control or FrameDrop.** They install into the same
+folder, `~/frameplayerx`, so either way above removes it.
+
+**By hand.** Delete the `frameplayerx` and `frameplayerx.old` folders in
+your home folder, and remove FramePlayerX from the Steam library.
+
+**Deleting your settings and watch history later.** If you kept them, or
+removed the app by hand, they stay behind. To delete them, run this in
+Konsole on the headset:
+
+```
+rm -rf ~/.config/frameplayerx ~/.local/share/frameplayerx ~/.cache/frameplayerx
+```
+
+| Folder | What's in it |
+|---|---|
+| `~/.config/frameplayerx` | Settings, your sources and their passwords |
+| `~/.local/share/frameplayerx` | The watch history, ratings, adjustments, the log, and the `Interactive` folder, including any haptic scripts you put there |
+| `~/.cache/frameplayerx` | Thumbnails |
+
+If you paired a PC with `frameplayerx-install pair` and nothing else uses
+that pairing, you can also delete `~/.ssh/id_rsa_frame_devkit` and
+`~/.ssh/id_rsa_frame_devkit.pub` on the PC, and the `Host frame` entry in
+`~/.ssh/config`.
 
 ## Where your videos can be
 
 | Where | How |
 |---|---|
 | `~/Videos`, `~/Downloads` | Found automatically (Home › On this device) |
-| microSD card / USB drive (exFAT from a PC, or ext4) | Found automatically when inserted (Settings › Library) |
-| Other folders on the headset | Settings › Library › Add folder |
+| microSD card / USB drive (exFAT from a PC, or ext4) | Found automatically when inserted (Settings › On this device) |
+| Other folders on the headset | Settings › On this device › Add folder |
 | XBVR, Stash and other DeoVR / HereSphere servers | Sources › Add source › DeoVR feed or HereSphere API |
 | NAS / Windows share | Sources › Add source › SMB share (`smb://nas/videos`) |
 | Nextcloud and other WebDAV | Sources › Add source › WebDAV |
@@ -63,14 +163,16 @@ versions before they are released.
 *Continue watching* and *Favorites*) and ends with a row of your sources:
 **On this device** first, then every source you added, then *Add a source*.
 Each opens in a browser made for that kind of source; Back returns to Home.
+Its title is always the source's name, with where you are in it underneath.
+Sources locked with a PIN stay off Home until unlocked; the padlock on a
+tile locks it (or, without a PIN yet, asks for one).
 
 **Watch history** lists everything you have played, from any source, with
 the same search, format filters and orders (recently watched, title, most
 watched, rating, length). Remove one video with ⋯ › *Remove from history*,
 or everything with *Clear history*; favorites and ratings stay. Browsing a
-network source never adds anything here; Settings › Library › *Forget
-unwatched network videos* clears what older versions imported, and removing
-a source forgets its unwatched videos.
+network source never adds anything here. Removing a source forgets its
+videos, except those you watched or marked.
 
 | Source | What browsing it offers |
 |---|---|
@@ -82,13 +184,21 @@ a source forgets its unwatched videos.
 ### Locking a source with a PIN
 
 To keep a share or folder private when someone else uses the headset, press
-the padlock next to it under **Sources** and choose a PIN (4 to 8 digits).
-While it is locked it can't be browsed, and its videos are left out of
-Home, the watch history, search and the phone remote; opening
-one asks for the PIN. **Unlock** opens it until FramePlayer restarts; the
-padlock then locks it again at once, changes the PIN or removes it.
+the padlock next to it under **Sources** (or on its tile on Home) and choose
+a PIN (4 to 8 digits). While it is locked it can't be browsed, it is left
+off Home, and its videos are left out of the watch history, search and the
+phone remote; opening one asks for the PIN. **Unlock** opens it until
+FramePlayerX restarts; one press of the padlock locks it again. To change
+the PIN or remove it, edit the source (the pencil under **Sources**).
 Removing the source also removes its PIN. This keeps guests out, it doesn't
 encrypt anything: the files themselves stay as they are.
+
+### Editing a source
+
+The pencil next to a source under **Sources** opens its details: rename it,
+change its address, user name and password, or its PIN. Its type stays; a
+Jellyfin or Emby server signed in with Quick Connect keeps that sign-in
+unless you clear it.
 
 To lock one folder of a NAS, add that folder as its own source
 (`smb://nas/videos/private`) and lock it. Everything in it is then hidden
@@ -97,7 +207,7 @@ watch history even if it was played through that source.
 
 ### microSD cards and USB drives (VR180 and everything else)
 
-FramePlayer notices when a card or drive is inserted (a "Found drive"
+FramePlayerX notices when a card or drive is inserted (a "Found drive"
 message appears), adds its videos to **On this device** and makes
 thumbnails. You can also browse it as folders under **On this device ›
 Folders**.
@@ -108,12 +218,12 @@ videos onto it and put it in the Frame. exFAT has no 4 GB file limit, so
 8K files are fine; FAT32 cannot hold files over 4 GB.
 
 - The Frame's SteamOS only mounts ext4 cards itself (the kind Steam
-  formats for games) and no USB drives. FramePlayer mounts exFAT, FAT32
+  formats for games) and no USB drives. FramePlayerX mounts exFAT, FAT32
   and NTFS cards, and USB drives, itself while it is running, under
   `/run/media/steamos/<name>`.
 - Steam may say the card needs formatting. **Don't format it from Steam**:
   that erases the card and makes it ext4, which Windows and macOS can't
-  read. FramePlayer still finds the videos.
+  read. FramePlayerX still finds the videos.
 - An ext4 card formatted by Steam works too (shared with games: Steam game
   folders, `steamapps`, are skipped), but only the Frame can read it.
 - When the card is removed its videos stay listed with your
@@ -159,7 +269,7 @@ to 8-bit 4:2:0 HEVC once on a PC and they play smoothly.
 
 "Hardware decoder busy" means the file is fine but the decoder had no room
 for it (Steam's own streaming uses it too). "The hardware decoder can't
-play this HEVC" means it tried and refused the file; frameplayer.log says
+play this HEVC" means it tried and refused the file; frameplayerx.log says
 why.
 
 The pill next to the format on the control bar says which decoder plays
@@ -243,7 +353,7 @@ on and off.
 
 Many passthrough videos carry a see-through mask inside the
 picture, and their names end in `_alpha` (for example
-`Scene_4096p_FISHEYE190_alpha.mp4`). FramePlayer reads the mask by itself:
+`Scene_4096p_FISHEYE190_alpha.mp4`). FramePlayerX reads the mask by itself:
 only the people stay and the room shows around them, with nothing to set.
 **Use the video's mask** in the Passthrough tab turns it on or off for a
 file, for example one renamed without `_alpha`. Only side-by-side videos
@@ -266,7 +376,8 @@ Settings again.
 ## Haptics
 
 Scripts (`.funscript`, including multi-axis `video.surge.funscript` etc.)
-are found next to the video, in `~/Interactive`, or supplied by the server.
+are found next to the video, in `~/.local/share/frameplayerx/Interactive`
+(Settings › On this device shows it), or supplied by the server.
 Add a device in **Settings › Haptics**: Intiface Central (Buttplug), TCode
 devices (OSR2/SR6 over USB serial, TCP or UDP), or The Handy (connection
 key). The seek bar shows the script's intensity.
@@ -280,11 +391,11 @@ protocol. Both only answer devices on your local network.
 
 ## Troubleshooting
 
-- Log: `~/.local/share/frameplayer/frameplayer.log`; the run before is kept
-  as `frameplayer.log.old` (the one to send after a freeze or crash, once
-  FramePlayer has been started again)
-- Settings: `~/.config/frameplayer/settings.json` (delete to reset)
-- Network source passwords: `~/.config/frameplayer/sources.json`
+- Log: `~/.local/share/frameplayerx/frameplayerx.log`; the run before is kept
+  as `frameplayerx.log.old` (the one to send after a freeze or crash, once
+  FramePlayerX has been started again)
+- Settings: `~/.config/frameplayerx/settings.json` (delete to reset)
+- Network source passwords: `~/.config/frameplayerx/sources.json`
   (readable only by you)
-- "Is SteamVR running?": FramePlayer needs the headset's OpenXR runtime;
+- "Is SteamVR running?": FramePlayerX needs the headset's OpenXR runtime;
   start it from the Steam library, not a desktop terminal.

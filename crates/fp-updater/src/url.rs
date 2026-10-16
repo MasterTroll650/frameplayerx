@@ -317,8 +317,8 @@ mod tests {
     #[test]
     fn file_names() {
         assert_eq!(
-            file_name_from_url("https://h/x/frameplayer-1.0.0.zip?dl=1").as_deref(),
-            Some("frameplayer-1.0.0.zip")
+            file_name_from_url("https://h/x/frameplayerx-1.0.0.zip?dl=1").as_deref(),
+            Some("frameplayerx-1.0.0.zip")
         );
         assert_eq!(file_name_from_url("https://h/x/"), None);
         assert_eq!(file_name_from_url("https://h/x/..zip"), None);

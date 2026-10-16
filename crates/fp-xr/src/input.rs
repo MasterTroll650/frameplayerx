@@ -58,7 +58,7 @@ pub(crate) struct Actions {
     pub hands: [xr::Path; 2],
     aim_spaces: Option<[xr::Space; 2]>,
     pub bound: Vec<(String, usize)>,
-    /// `FRAMEPLAYER_DEBUG_INPUT=1`: log each hand's input when it changes,
+    /// `FRAMEPLAYERX_DEBUG_INPUT=1`: log each hand's input when it changes,
     /// and errors reading action states (normally ignored).
     debug: bool,
     last_logged: std::cell::RefCell<[String; 2]>,
@@ -203,7 +203,7 @@ impl Actions {
             hands,
             aim_spaces: None,
             bound: Vec::new(),
-            debug: std::env::var_os("FRAMEPLAYER_DEBUG_INPUT").is_some_and(|v| v != "0"),
+            debug: std::env::var_os("FRAMEPLAYERX_DEBUG_INPUT").is_some_and(|v| v != "0"),
             last_logged: Default::default(),
         };
         for (profile, candidates) in PROFILES {

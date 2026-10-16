@@ -1,4 +1,4 @@
-//! Raw bindings to the FFmpeg 7.1 libraries FramePlayer bundles.
+//! Raw bindings to the FFmpeg 7.1 libraries FramePlayerX bundles.
 //!
 //! Generated per architecture by `tools/gen-ffmpeg-bindings.sh` from the
 //! headers of our own build, so struct layouts match the shipped libraries

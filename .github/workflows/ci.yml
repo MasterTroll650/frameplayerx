@@ -85,7 +85,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stamp version
         run: |
-          sed -i 's/^version = .*/version = "${{ needs.version.outputs.version }}"/' crates/frameplayer/Cargo.toml
+          sed -i 's/^version = .*/version = "${{ needs.version.outputs.version }}"/' crates/frameplayerx/Cargo.toml
       # Pinned so a new stable release's lints cannot break CI unannounced;
       # bump deliberately (and fix what its clippy reports).
       - uses: dtolnay/rust-toolchain@master
@@ -130,6 +130,9 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/third_party/ffmpeg/x86_64/lib
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
         run: cargo test --workspace
+      - name: Desktop Mode installer tests
+        working-directory: tools/frame-desktop-install
+        run: python3 -m unittest
       # Every screen as a flat PNG, for design review (artifact ui-preview).
       - name: UI preview
         env:
@@ -145,7 +148,7 @@ jobs:
         run: tools/package.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: frameplayer-aarch64
+          name: frameplayerx-aarch64
           path: dist/
 
   # The PC-side installer, for each desktop OS.
@@ -154,21 +157,21 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            name: frameplayer-install-linux-x86_64
-            exe: frameplayer-install
+            name: frameplayerx-install-linux-x86_64
+            exe: frameplayerx-install
           - os: windows-latest
-            name: frameplayer-install-windows-x86_64
-            exe: frameplayer-install.exe
+            name: frameplayerx-install-windows-x86_64
+            exe: frameplayerx-install.exe
           - os: macos-latest
-            name: frameplayer-install-macos-arm64
-            exe: frameplayer-install
+            name: frameplayerx-install-macos-arm64
+            exe: frameplayerx-install
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p frameplayer-install
-      - run: cargo build --release -p frameplayer-install
+      - run: cargo test -p frameplayerx-install
+      - run: cargo build --release -p frameplayerx-install
       - name: Stage
         shell: bash
         run: |
@@ -193,11 +196,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: frameplayer-aarch64
+          name: frameplayerx-aarch64
           path: dist
       - uses: actions/download-artifact@v4
         with:
-          pattern: frameplayer-install-*
+          pattern: frameplayerx-install-*
           path: dist
           merge-multiple: true
       - uses: actions/checkout@v4
@@ -226,7 +229,7 @@ jobs:
           fi
           if [ "$PRERELEASE" = true ]; then
             {
-              echo "Beta built from \`$GITHUB_REF_NAME\` (${GITHUB_SHA::7}). FramePlayer offers it on the Beta channel only (Settings › Updates). Changes since the last stable release:"
+              echo "Beta built from \`$GITHUB_REF_NAME\` (${GITHUB_SHA::7}). FramePlayerX offers it on the Beta channel only (Settings › Updates). Changes since the last stable release:"
               echo
               cat ../dist/RELEASE_NOTES.md
             } > ../dist/notes.md
@@ -245,7 +248,7 @@ jobs:
           printf '%s\n' "$FP_RELEASE_KEY" > "$RUNNER_TEMP/release.key"
           cargo run --manifest-path src/Cargo.toml --release -p fp-updater --bin fp-release -- sign dist/manifest.json --key "$RUNNER_TEMP/release.key"
           rm -f "$RUNNER_TEMP/release.key"
-          # The signature must match the key FramePlayer builds carry.
+          # The signature must match the key FramePlayerX builds carry.
           cargo run --manifest-path src/Cargo.toml --release -p fp-updater --bin fp-release -- verify dist/manifest.json
       - uses: softprops/action-gh-release@v2
         with:
@@ -253,13 +256,17 @@ jobs:
           target_commitish: ${{ github.sha }}
           body_path: dist/RELEASE_NOTES.md
           prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
-          # releases/latest, which stable FramePlayer and frameplayer-install
-          # read, must never point at a beta.
+          # releases/latest, which frameplayerx-install and the Desktop Mode
+          # launcher read (and stable FramePlayerX when GitHub's release
+          # list can't be read), must never point at a beta.
           make_latest: ${{ needs.version.outputs.prerelease == 'true' && 'false' || 'true' }}
           files: |
-            dist/frameplayer-*.zip
+            dist/frameplayerx-*.zip
             dist/manifest.json
             dist/manifest.json.sig
             dist/framedrop.json
-            dist/frameplayer.json
-            dist/frameplayer-install-*
+            dist/frameplayerx.json
+            dist/frameplayerx-install-*
+            src/tools/frame-desktop-install/frameplayerx-desktop-install.py
+            src/tools/frame-desktop-install/Install-FramePlayerX.desktop
+            src/tools/frame-desktop-install/Uninstall-FramePlayerX.desktop

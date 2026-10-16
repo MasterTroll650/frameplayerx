@@ -54,7 +54,7 @@ pub struct ButtplugConfig {
     pub url: String,
     /// Client name shown in Intiface.
     pub client_name: String,
-    /// Display name of this device in FramePlayer (also the settings key).
+    /// Display name of this device in FramePlayerX (also the settings key).
     pub name: String,
     /// Minimum time between commands, milliseconds.
     pub min_interval_ms: u32,
@@ -68,7 +68,7 @@ impl Default for ButtplugConfig {
     fn default() -> Self {
         ButtplugConfig {
             url: DEFAULT_URL.into(),
-            client_name: "FramePlayer".into(),
+            client_name: "FramePlayerX".into(),
             name: "Intiface".into(),
             min_interval_ms: 50,
             scan: true,

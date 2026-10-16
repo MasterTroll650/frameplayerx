@@ -1,4 +1,4 @@
-FramePlayer bundles these libraries as separate shared objects in lib/:
+FramePlayerX bundles these libraries as separate shared objects in lib/:
 
 FFmpeg 7.1.1 (libavformat, libavcodec, libavutil, libswresample, libswscale)
   Licence: GNU Lesser General Public License 2.1 or later (LGPL-2.1-or-later),
@@ -6,7 +6,7 @@ FFmpeg 7.1.1 (libavformat, libavcodec, libavutil, libswresample, libswscale)
   Source: https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz
   (also http://archive.ubuntu.com/ubuntu/pool/universe/f/ffmpeg/ffmpeg_7.1.1.orig.tar.xz)
   Exact build recipe and configure flags: tools/build-ffmpeg.sh in the
-  FramePlayer repository, https://github.com/remotesojourner/frameplayer
+  FramePlayerX repository, https://github.com/remotesojourner/frameplayerx
   You may replace the libraries in lib/ with your own build of the same
   major versions (libavcodec.so.61, libavformat.so.61, libavutil.so.59,
   libswresample.so.5, libswscale.so.8).
@@ -15,10 +15,10 @@ dav1d 1.5.3 (statically linked into libavcodec)
   Licence: BSD 2-Clause, text in dav1d-COPYING.txt.
   Source: https://code.videolan.org/videolan/dav1d
 
-Rust crates compiled into the frameplayer binary are under MIT, Apache-2.0,
+Rust crates compiled into the frameplayerx binary are under MIT, Apache-2.0,
 BSD, ISC, Zlib, Unicode-3.0 or MPL-2.0 licences; see rust-crates.txt.
 
-Fonts embedded in the frameplayer binary:
+Fonts embedded in the frameplayerx binary:
 
 Inter 4.1 by Rasmus Andersson (Regular, Medium, SemiBold, Bold; subset)
   Licence: SIL Open Font License 1.1, text in Inter-OFL.txt.
@@ -28,11 +28,11 @@ Phosphor Icons (regular and fill weights)
   Licence: MIT, text in Phosphor-MIT.txt.
   Source: https://github.com/phosphor-icons/core
 
-Pictures embedded in the frameplayer binary:
+Pictures embedded in the frameplayerx binary:
 
 Steam Frame controllers (Settings > Controller): renders of Valve's own
   controller models as SteamVR ships them, made with Blender
-  (crates/frameplayer/assets/controllers/). The controllers' design and
+  (crates/frameplayerx/assets/controllers/). The controllers' design and
   models are Valve Corporation's; these pictures are not covered by
-  FramePlayer's MIT / Apache-2.0 licence. Steam and the Steam logo are
+  FramePlayerX's Apache-2.0 licence. Steam and the Steam logo are
   trademarks of Valve Corporation.

@@ -211,7 +211,7 @@ impl Api {
         let mut body = Vec::with_capacity(csv.len() + 256);
         body.extend_from_slice(
             format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"frameplayer.csv\"\r\nContent-Type: text/csv\r\n\r\n",
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"frameplayerx.csv\"\r\nContent-Type: text/csv\r\n\r\n",
                 field = self.upload_field.replace(['"', '\r', '\n'], "")
             )
             .as_bytes(),

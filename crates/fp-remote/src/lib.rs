@@ -1,4 +1,4 @@
-//! Remote control of FramePlayer from other devices on the LAN.
+//! Remote control of FramePlayerX from other devices on the LAN.
 //!
 //! Two servers, both off until the app starts them through [`RemoteHub`]:
 //!

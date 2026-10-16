@@ -1,4 +1,4 @@
-//! FramePlayer's media library: a SQLite index of videos from every source.
+//! FramePlayerX's media library: a SQLite index of videos from every source.
 //!
 //! - [`Library`]: the database handle (cheap to clone, shareable between
 //!   threads). Open with [`Library::open`] or [`Library::open_in_memory`].

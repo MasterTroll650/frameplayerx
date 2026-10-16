@@ -252,11 +252,11 @@ mod tests {
 
     fn good() -> FramedropManifest {
         FramedropManifest::for_zip(
-            "FramePlayer",
-            "https://github.com/remotesojourner/frameplayer/releases/download/v1.0.0/frameplayer-1.0.0-aarch64.zip",
+            "FramePlayerX",
+            "https://github.com/remotesojourner/frameplayerx/releases/download/v1.0.0/frameplayerx-1.0.0-aarch64.zip",
             SHA,
             12345,
-            "frameplayer/frameplayer.sh",
+            "frameplayerx/frameplayerx.sh",
         )
     }
 
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(parse_framedrop_manifest(json.as_bytes()).unwrap(), m);
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["schema"], "framedrop.install/v1");
-        assert_eq!(v["files"][0]["exe"], "frameplayer/frameplayer.sh");
+        assert_eq!(v["files"][0]["exe"], "frameplayerx/frameplayerx.sh");
     }
 
     #[test]
