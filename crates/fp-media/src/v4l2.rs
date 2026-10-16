@@ -33,6 +33,8 @@
 //! pooled `AVFrame`s, so the rest of the pipeline sees ordinary NV12 frames
 //! and the CAPTURE buffers go straight back to the decoder.
 
+#![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
+
 /// Bitstream (OUTPUT) buffers to request.
 pub(crate) const OUTPUT_BUFFERS: u32 = 6;
 /// Decoded-picture (CAPTURE) buffers to request (at least the driver minimum).

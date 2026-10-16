@@ -634,9 +634,8 @@ pub(crate) fn slow_decode_notice(
         return format!("Falling back to software decoder: {desc} is unsupported by hardware");
     }
     if !hardware_on {
-        return format!(
-            "Falling back to software decoder: hardware decoding is turned off in Settings"
-        );
+        return "Falling back to software decoder: hardware decoding is turned off in Settings"
+            .to_string();
     }
     // Out of decoder memory or sessions: other apps (Steam's streaming
     // among them) hold the hardware decoder.
