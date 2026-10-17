@@ -3,6 +3,7 @@
 use super::theme::Weight;
 use super::widgets::{Kind, Tip};
 use super::{Action, View, depth, fmt_time, icons, premium, theme, widgets};
+use crate::subtitles::Pick;
 use egui::{Align, Color32, Layout, RichText, Sense, Vec2};
 use fp_core::format::{Projection, StereoLayout, VideoFormat};
 use fp_core::view::ViewSettings;
@@ -305,14 +306,23 @@ fn view_keys(
     {
         actions.push(Action::HideControls);
     }
-    // Your room only shows around flat videos.
-    if passthrough_available
-        && pb.format.projection == Projection::Flat
-        && widgets::key(ui, icons::ARMCHAIR, 52.0, passthrough)
-            .tip("Room")
-            .clicked()
-    {
-        actions.push(Action::TogglePassthrough);
+    // Your room shows around a flat video's screen, or through a
+    // side-by-side passthrough video's own mask.
+    if passthrough_available {
+        if pb.format.projection == Projection::Flat {
+            if widgets::key(ui, icons::ARMCHAIR, 52.0, passthrough)
+                .tip("Room")
+                .clicked()
+            {
+                actions.push(Action::TogglePassthrough);
+            }
+        } else if let Some(f) = pb.mask_toggled()
+            && widgets::key(ui, icons::ARMCHAIR, 52.0, pb.format.alpha_packed)
+                .tip("Room, through the video's mask")
+                .clicked()
+        {
+            actions.push(Action::SetFormat(Some(f)));
+        }
     }
     if widgets::key(ui, icons::CROSSHAIR, 52.0, false)
         .tip("Recenter")
@@ -689,7 +699,13 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                             v.actions,
                         );
                     }
-                    5 => audio_and_text(ui, pb, v.actions),
+                    5 => audio_and_text(
+                        ui,
+                        pb,
+                        &v.settings.subtitle_language,
+                        &mut v.state.foreign_subtitles_open,
+                        v.actions,
+                    ),
                     _ => haptics_tab(ui, pb.script_count, v.settings, v.devices),
                 }
                 if pb.settings != before {
@@ -1141,7 +1157,17 @@ pub(super) fn chroma_controls(
     s.key() != before
 }
 
-fn audio_and_text(ui: &mut egui::Ui, pb: &crate::playback::Playback, actions: &mut Vec<Action>) {
+/// Videos with more subtitles than this list those in other languages only
+/// when asked.
+const FOLD_SUBTITLES: usize = 6;
+
+fn audio_and_text(
+    ui: &mut egui::Ui,
+    pb: &crate::playback::Playback,
+    language: &str,
+    foreign_open: &mut bool,
+    actions: &mut Vec<Action>,
+) {
     let info = pb.player.info();
     widgets::section_label(ui, "Audio");
     let current = pb.player.audio_stream();
@@ -1166,32 +1192,48 @@ fn audio_and_text(ui: &mut egui::Ui, pb: &crate::playback::Playback, actions: &m
     }
     widgets::section_label(ui, "Subtitles");
     let sub_stream = pb.player.subtitle_stream();
-    let off = sub_stream.is_none() && pb.active_subtitle_file.is_none();
-    widgets::rows(ui, |r| {
-        r.row("Off", None, |ui| {
-            if radio(ui, off).clicked() {
-                actions.push(Action::SelectSubtitleFile(None));
-                actions.push(Action::SelectSubtitleStream(None));
+    let file = pb.active_subtitle_file;
+    let on = |pick: Pick| match pick {
+        Pick::Off => sub_stream.is_none() && file.is_none(),
+        Pick::File(i) => file == Some(i),
+        Pick::Stream(s) => sub_stream == Some(s) && file.is_none(),
+    };
+    let rows = crate::subtitles::rows(language, info, &pb.subtitle_files);
+    let fold = rows.len() > FOLD_SUBTITLES;
+    let (shown, folded): (Vec<_>, Vec<_>) = rows
+        .into_iter()
+        .partition(|row| !fold || !row.foreign || on(row.pick));
+    let mut track = |r: &mut widgets::Rows, title: &str, detail: &str, pick: Pick| {
+        let detail = Some(detail).filter(|d| !d.is_empty());
+        r.row(title, detail, |ui| {
+            if radio(ui, on(pick)).clicked() {
+                if let Pick::File(i) = pick {
+                    actions.push(Action::SelectSubtitleFile(Some(i)));
+                } else {
+                    actions.push(Action::SelectSubtitleFile(None));
+                    actions.push(Action::SelectSubtitleStream(pick.stream()));
+                }
             }
         });
-        for (i, f) in pb.subtitle_files.iter().enumerate() {
-            let (title, desc) = crate::subtitles::file_label(f);
-            r.row(&title, Some(desc.as_str()), |ui| {
-                if radio(ui, pb.active_subtitle_file == Some(i)).clicked() {
-                    actions.push(Action::SelectSubtitleFile(Some(i)));
-                }
-            });
+    };
+    widgets::rows(ui, |r| {
+        track(r, "Off", "", Pick::Off);
+        for row in &shown {
+            track(r, &row.title, &row.detail, row.pick);
         }
-        for s in info.subtitle_streams() {
-            let title = crate::subtitles::track_name(s);
-            let desc = crate::subtitles::stream_detail(s);
-            r.row(&title, Some(desc.as_str()), |ui| {
-                let on = sub_stream == Some(s.index) && pb.active_subtitle_file.is_none();
-                if radio(ui, on).clicked() {
-                    actions.push(Action::SelectSubtitleFile(None));
-                    actions.push(Action::SelectSubtitleStream(Some(s.index)));
+        if !folded.is_empty() {
+            let more = format!("{} more", folded.len());
+            r.row("Other languages", Some(more.as_str()), |ui| {
+                let label = if *foreign_open { "Hide" } else { "Show" };
+                if widgets::button(ui, None, label, Kind::Secondary).clicked() {
+                    *foreign_open = !*foreign_open;
                 }
             });
+            if *foreign_open {
+                for row in &folded {
+                    track(r, &row.title, &row.detail, row.pick);
+                }
+            }
         }
     });
     if !pb.markers.is_empty() {
