@@ -95,7 +95,7 @@ and adjustments survive a card being taken out.
 | `~/frameplayerx.old` | The previous version, kept for rollback |
 | `~/.config/frameplayerx` | `settings.json`, `sources.json` (passwords, readable only by the user) and the optional `env` file |
 | `~/.local/share/frameplayerx` | The database, `frameplayerx.log` (and `.log.old`), and `Interactive/`, searched for scripts not next to their video |
-| `~/.cache/frameplayerx` | Thumbnails and scrub previews |
+| `~/.cache/frameplayerx` | Thumbnails, scrub previews, and `feeds/`: each scene feed's last listing, shown at once the next time it's opened (readable only by the user: its URLs can carry the server's API key) |
 
 ## Running without a headset
 

@@ -371,6 +371,19 @@ pub fn default_config_path() -> PathBuf {
 /// the user: the file gets mode 0600 and a newly created folder 0700. The
 /// write is atomic (temporary file + rename).
 pub fn save_configs(path: &Path, configs: &[SourceConfig]) -> Result<()> {
+    let mut json = serde_json::to_vec_pretty(&ConfigFile {
+        version: 1,
+        sources: configs.to_vec(),
+    })
+    .map_err(|e| Error::Config(format!("cannot serialize sources: {e}")))?;
+    json.push(b'\n');
+    write_private(path, &json)?;
+    Ok(())
+}
+
+/// Writes `data` to `path` readable only by the user (mode 0600, a newly
+/// created folder 0700), atomically (temporary file + rename).
+pub(crate) fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         let mut builder = std::fs::DirBuilder::new();
         builder.recursive(true);
@@ -378,12 +391,6 @@ pub fn save_configs(path: &Path, configs: &[SourceConfig]) -> Result<()> {
         builder.mode(0o700);
         builder.create(dir)?;
     }
-    let json = serde_json::to_vec_pretty(&ConfigFile {
-        version: 1,
-        sources: configs.to_vec(),
-    })
-    .map_err(|e| Error::Config(format!("cannot serialize sources: {e}")))?;
-
     let mut tmp_name = path.as_os_str().to_owned();
     tmp_name.push(".tmp");
     let tmp = PathBuf::from(tmp_name);
@@ -396,16 +403,14 @@ pub fn save_configs(path: &Path, configs: &[SourceConfig]) -> Result<()> {
         // `mode` only applies on creation; tighten a leftover temp file too.
         #[cfg(unix)]
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        file.write_all(&json)?;
-        file.write_all(b"\n")?;
+        file.write_all(data)?;
         file.sync_all()?;
         std::fs::rename(&tmp, path)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
-    result?;
-    Ok(())
+    result
 }
 
 /// Reads source configurations written by [`save_configs`]. A missing file
