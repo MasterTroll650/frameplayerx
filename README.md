@@ -101,6 +101,8 @@ To update later, open **Settings › Updates** and press **Download and install*
 
 FramePlayerX is licensed under the [Apache License, Version 2.0](LICENSE). It's a modified version of FramePlayer by yellkell; see [NOTICE](NOTICE). Bundled third-party libraries and fonts keep their own licences, and the controller pictures are renders of Valve's Steam Frame controller models; see [packaging/licenses](packaging/licenses/THIRD-PARTY.txt).
 
+FramePlayerX is an independent project, not affiliated with or endorsed by Valve. Steam and Steam Frame are trademarks of Valve Corporation.
+
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in FramePlayerX by you shall be licensed under the Apache License, Version 2.0, without any additional terms or conditions.
 
 ---
@@ -125,9 +127,9 @@ Yes, if it offers one of these: Jellyfin or Emby (sign in with Quick Connect or 
 
 ---
 
-### Is FramePlayerX made by Valve?
+### Will it be released on Steam?
 
-No. It's an independent project and isn't affiliated with or endorsed by Valve. Steam and Steam Frame are trademarks of Valve Corporation.
+Not for now. I develop FramePlayerX for myself in my free time, and I don't see the point in paying Steam's $100 fee to publish it. If donations ever reach that amount, I'll spend them on releasing it on Steam. I don't expect any, though: it's an app built with the help of AI to solve an immediate need of my own. Meanwhile, the installers in [Quick Start](#quick-start) add it to your Steam library like a game.
 
 ---
 
