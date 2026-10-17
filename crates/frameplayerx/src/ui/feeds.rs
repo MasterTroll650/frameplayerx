@@ -34,7 +34,12 @@ pub enum FeedSort {
 
 pub struct FeedView {
     pub kind: SourceKind,
+    /// The server's listing is on its way (the one saved last time may be
+    /// shown meanwhile).
     pub loading: bool,
+    /// A HereSphere scan is on its way: titles, people and tags of every
+    /// scene.
+    pub scanning: bool,
     pub error: Option<String>,
     /// Groups in feed order with their scenes' URLs.
     pub groups: Vec<(String, Vec<String>)>,
@@ -67,6 +72,7 @@ impl FeedView {
         FeedView {
             kind,
             loading: true,
+            scanning: false,
             error: None,
             groups: Vec::new(),
             scenes: HashMap::new(),
@@ -82,9 +88,17 @@ impl FeedView {
         }
     }
 
-    /// Takes the feed's groups and scenes (keeping details already read).
-    pub fn loaded(&mut self, result: Result<FeedLibrary, String>) {
-        self.loading = false;
+    /// Takes the feed's groups and scenes, keeping what is known already:
+    /// details read, and titles a bare listing doesn't have. `cached`: the
+    /// listing saved last time, shown while the server answers (only into
+    /// an empty page).
+    pub fn loaded(&mut self, result: Result<FeedLibrary, String>, cached: bool) {
+        if cached && !self.order.is_empty() {
+            return;
+        }
+        if !cached {
+            self.loading = false;
+        }
         let lib = match result {
             Ok(l) => l,
             Err(e) => {
@@ -93,10 +107,17 @@ impl FeedView {
             }
         };
         self.error = None;
+        // A HereSphere listing is addresses only; the scan follows it.
+        if !cached && self.kind == SourceKind::HereSphere {
+            self.scanning = true;
+        }
         self.order = lib.scenes.iter().map(|s| s.url.clone()).collect();
         let mut scenes = HashMap::with_capacity(lib.scenes.len());
         for s in lib.scenes {
-            let keep = self.scenes.remove(&s.url).filter(|old| old.detailed);
+            let keep = self
+                .scenes
+                .remove(&s.url)
+                .filter(|old| old.detailed || (s.bare && !old.bare));
             scenes.insert(s.url.clone(), keep.unwrap_or(s));
         }
         self.scenes = scenes;
@@ -107,6 +128,18 @@ impl FeedView {
         // One group: show it rather than "All" beside it.
         if self.groups.len() == 1 {
             self.group = Some(0);
+        }
+    }
+
+    /// Takes a HereSphere scan into the scenes (`None`: the server has
+    /// none). Scenes whose own details came first keep them: they say the
+    /// same and more.
+    pub fn scanned(&mut self, scan: Option<Vec<FeedScene>>) {
+        self.scanning = false;
+        for found in scan.into_iter().flatten() {
+            if let Some(s) = self.scenes.get_mut(&found.url).filter(|s| !s.detailed) {
+                s.merge(found);
+            }
         }
     }
 
@@ -194,12 +227,13 @@ impl FeedView {
     }
 
     /// Scenes of the group shown that need their details fetched to be
-    /// searched: those without, not asked for yet.
+    /// searched: those known by their address only (no scan said more),
+    /// not asked for yet.
     fn unfilled(&self) -> Vec<String> {
         self.scope()
             .iter()
             .filter(|u| !self.requested.contains(*u))
-            .filter(|u| self.scenes.get(*u).is_some_and(|s| !s.detailed))
+            .filter(|u| self.scenes.get(*u).is_some_and(|s| s.bare && !s.detailed))
             .cloned()
             .collect()
     }
@@ -235,11 +269,16 @@ pub fn page(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut F
         return details(ui, v, source, name, f);
     }
     let lazy = f.kind == SourceKind::HereSphere;
-    let subtitle = format!(
+    let mut subtitle = format!(
         "{} · {}",
         f.kind.label(),
         page::plural(f.order.len(), "scene", "scenes")
     );
+    // Scenes are shown (last time's, or a listing before its scan) while
+    // the rest arrives.
+    if !f.order.is_empty() && (f.loading || f.scanning) {
+        subtitle.push_str(" · updating…");
+    }
     let back = page::header(ui, name, Some(&subtitle), |ui| {
         if widgets::icon_button(ui, icons::ARROWS_CLOCKWISE, 44.0, false)
             .tip("Refresh")
@@ -403,7 +442,8 @@ pub fn page(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut F
                 front: true,
             });
         }
-        if !f.search.trim().is_empty() {
+        // A scan on its way brings what a search looks through anyway.
+        if !f.search.trim().is_empty() && !f.scanning {
             let rest = f.unfilled();
             if !rest.is_empty() {
                 f.requested.extend(rest.iter().cloned());
@@ -580,25 +620,28 @@ mod tests {
 
     fn view() -> FeedView {
         let mut f = FeedView::new(SourceKind::DeoVr);
-        f.loaded(Ok(FeedLibrary {
-            groups: vec![
-                ("Recent".into(), vec!["a".into(), "b".into()]),
-                ("Scripted".into(), vec!["c".into()]),
-            ],
-            scenes: vec![
-                scene("a", "Beach", 60.0),
-                FeedScene {
-                    studio: Some("Lake Films".into()),
-                    scripted: true,
-                    ..scene("b", "Alps", 600.0)
-                },
-                FeedScene {
-                    actors: vec!["Jane".into()],
-                    rating: Some(4.5),
-                    ..scene("c", "Canyon", 30.0)
-                },
-            ],
-        }));
+        f.loaded(
+            Ok(FeedLibrary {
+                groups: vec![
+                    ("Recent".into(), vec!["a".into(), "b".into()]),
+                    ("Scripted".into(), vec!["c".into()]),
+                ],
+                scenes: vec![
+                    scene("a", "Beach", 60.0),
+                    FeedScene {
+                        studio: Some("Lake Films".into()),
+                        scripted: true,
+                        ..scene("b", "Alps", 600.0)
+                    },
+                    FeedScene {
+                        actors: vec!["Jane".into()],
+                        rating: Some(4.5),
+                        ..scene("c", "Canyon", 30.0)
+                    },
+                ],
+            }),
+            false,
+        );
         f
     }
 
@@ -639,6 +682,11 @@ mod tests {
     #[test]
     fn details_fill_cards_and_survive_a_refresh() {
         let mut f = view();
+        // Known by their address only, as a HereSphere listing without a
+        // scan has them.
+        for s in f.scenes.values_mut() {
+            s.bare = true;
+        }
         f.details = Some(Details {
             url: "a".into(),
             info: None,
@@ -663,11 +711,63 @@ mod tests {
         assert!(f.unfilled().is_empty());
         f.group = None;
 
-        f.loaded(Ok(FeedLibrary {
-            groups: vec![("Recent".into(), vec!["a".into()])],
-            scenes: vec![scene("a", "Beach", 60.0)],
-        }));
+        f.loaded(
+            Ok(FeedLibrary {
+                groups: vec![("Recent".into(), vec!["a".into()])],
+                scenes: vec![scene("a", "Beach", 60.0)],
+            }),
+            false,
+        );
         assert_eq!(f.scenes["a"].title, "Beach Day");
         assert_eq!(f.group, Some(0), "a lone group is shown as such");
+    }
+
+    #[test]
+    fn last_listing_first_then_the_servers_then_its_scan() {
+        let bare = |url: &str| FeedScene {
+            bare: true,
+            ..scene(url, url, 0.0)
+        };
+        let listing = |scenes: Vec<FeedScene>| FeedLibrary {
+            groups: vec![(
+                "Recent".into(),
+                scenes.iter().map(|s| s.url.clone()).collect(),
+            )],
+            scenes,
+        };
+        let mut f = FeedView::new(SourceKind::HereSphere);
+        // Last time's listing, with the titles its scan gave.
+        f.loaded(Ok(listing(vec![scene("12", "Beach", 60.0)])), true);
+        assert!(f.loading && !f.scanning && titles(&f) == ["Beach"]);
+        // Not over a page that shows something already (a refresh).
+        f.loaded(Ok(listing(vec![scene("99", "Old", 1.0)])), true);
+        assert_eq!(titles(&f), ["Beach"]);
+
+        // The server's bare listing keeps the titles it doesn't have; a new
+        // scene shows its address until the scan.
+        f.loaded(Ok(listing(vec![bare("12"), bare("13")])), false);
+        assert!(!f.loading && f.scanning);
+        assert_eq!(titles(&f), ["Beach", "13"]);
+        // Bare scenes are what a search would fetch (the page waits for the
+        // scan instead while it is on its way).
+        f.search = "13".into();
+        assert_eq!(f.unfilled(), ["13"]);
+        // A card whose own details came first keeps them.
+        if let Some(s) = f.scenes.get_mut("12") {
+            s.detailed = true;
+            s.duration = Some(2627.0);
+        }
+        f.scanned(Some(vec![
+            FeedScene {
+                tags: vec!["Sun".into()],
+                ..scene("13", "Lake", 90.0)
+            },
+            scene("12", "Beach", 2.6),
+        ]));
+        assert!(!f.scanning && !f.scenes["13"].bare);
+        assert_eq!(f.scenes["12"].duration, Some(2627.0));
+        assert!(f.unfilled().is_empty(), "the scan answers the search");
+        f.search = "sun".into();
+        assert_eq!(titles(&f), ["Lake"]);
     }
 }

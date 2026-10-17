@@ -81,9 +81,17 @@ enum Job {
         seq: u64,
         result: Box<Result<ui::jellyfin::Loaded, String>>,
     },
+    /// A scene feed's listing; `cached`: the one saved last time, shown
+    /// while the server answers.
     FeedLibrary {
         source: String,
         result: Result<fp_sources::FeedLibrary, String>,
+        cached: bool,
+    },
+    /// A HereSphere scan, after its listing (`None`: the server has none).
+    FeedScan {
+        source: String,
+        scenes: Option<Vec<fp_sources::FeedScene>>,
     },
     /// A scene's details: for its page (`full`, with media) or a card.
     FeedScene {
@@ -928,7 +936,11 @@ impl App {
                         j.loaded(seq, *result);
                     }
                 }
-                Job::FeedLibrary { source, result } => {
+                Job::FeedLibrary {
+                    source,
+                    result,
+                    cached,
+                } => {
                     if let Some(SourceView {
                         source: s,
                         page: SourcePage::Feed(f),
@@ -936,7 +948,18 @@ impl App {
                     }) = self.ui.source.as_mut()
                         && *s == source
                     {
-                        f.loaded(result);
+                        f.loaded(result, cached);
+                    }
+                }
+                Job::FeedScan { source, scenes } => {
+                    if let Some(SourceView {
+                        source: s,
+                        page: SourcePage::Feed(f),
+                        ..
+                    }) = self.ui.source.as_mut()
+                        && *s == source
+                    {
+                        f.scanned(scenes);
                     }
                 }
                 Job::FeedScene {
@@ -1320,10 +1343,12 @@ impl App {
                     Some(e) => self.ui.toast(e),
                     None => self.ui.toast(format!("Saved {}", cfg.name())),
                 }
-                // A browser of it was made with the old details.
+                // A browser of it was made with the old details, and so was
+                // its saved listing.
                 if self.ui.source.as_ref().is_some_and(|s| s.source == id) {
                     self.ui.source = None;
                 }
+                let _ = std::fs::remove_file(feed_listing_path(&id));
                 self.ui.home = None;
             }
             Action::RemoveSource(id) => {
@@ -1336,6 +1361,7 @@ impl App {
                 if self.ui.source.as_ref().is_some_and(|s| s.source == id) {
                     self.ui.source = None;
                 }
+                let _ = std::fs::remove_file(feed_listing_path(&id));
                 // Its videos go with it, except what was watched or marked.
                 match lib.forget_unwatched(&id) {
                     Ok(n) if n > 0 => log::info!("forgot {n} unwatched videos of {id}"),
@@ -1442,18 +1468,55 @@ impl App {
                 let Some(src) = self.services.opener.source(&source) else {
                     return;
                 };
+                let tx = self.jobs.sender();
                 self.jobs.spawn("feed", move || {
-                    let any = src.as_ref();
-                    let result = if let Some(d) = any.downcast_ref::<fp_sources::DeoVrSource>() {
-                        d.library()
-                    } else if let Some(h) = any.downcast_ref::<fp_sources::HereSphereSource>() {
-                        h.library()
-                    } else {
-                        Err(fp_sources::Error::NotFound("not a scene feed".into()))
+                    let path = feed_listing_path(&source);
+                    let save = |lib: &fp_sources::FeedLibrary| {
+                        if let Err(e) = lib.save(&path) {
+                            log::warn!("saving the listing of {source}: {e}");
+                        }
                     };
-                    Job::FeedLibrary {
-                        source,
-                        result: result.map_err(|e| e.to_string()),
+                    let listed = |result: fp_sources::Result<fp_sources::FeedLibrary>, cached| {
+                        Job::FeedLibrary {
+                            source: source.clone(),
+                            result: result.map_err(|e| e.to_string()),
+                            cached,
+                        }
+                    };
+                    // What it listed last time, at once, while the server
+                    // answers (a DeoVR feed's root can take seconds).
+                    if let Some(lib) = fp_sources::FeedLibrary::load(&path) {
+                        let _ = tx.send(listed(Ok(lib), true));
+                    }
+                    let any = src.as_ref();
+                    if let Some(d) = any.downcast_ref::<fp_sources::DeoVrSource>() {
+                        let result = d.library();
+                        if let Ok(lib) = &result {
+                            save(lib);
+                        }
+                        return listed(result, false);
+                    }
+                    let Some(h) = any.downcast_ref::<fp_sources::HereSphereSource>() else {
+                        return listed(
+                            Err(fp_sources::Error::NotFound("not a scene feed".into())),
+                            false,
+                        );
+                    };
+                    // The listing (quick, addresses only) to browse at once,
+                    // then the scan (slow) with every scene's titles and tags.
+                    let mut lib = match h.library() {
+                        Ok(lib) => lib,
+                        Err(e) => return listed(Err(e), false),
+                    };
+                    let _ = tx.send(listed(Ok(lib.clone()), false));
+                    let scenes = h.scan();
+                    if let Some(s) = &scenes {
+                        lib.merge_scan(s.clone());
+                    }
+                    save(&lib);
+                    Job::FeedScan {
+                        source: source.clone(),
+                        scenes,
                     }
                 });
             }
@@ -2321,6 +2384,21 @@ impl App {
             w.stop();
         }
     }
+}
+
+/// Where a scene feed's last listing is kept, to show at once next time
+/// (see [`fp_sources::FeedLibrary::save`]).
+fn feed_listing_path(source: &str) -> std::path::PathBuf {
+    let name: String = source
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => c,
+            _ => '_',
+        })
+        .collect();
+    fp_core::dirs::cache_dir()
+        .join("feeds")
+        .join(format!("{name}.json"))
 }
 
 /// A feed scene's details (`full`: with its media sources, for its page).

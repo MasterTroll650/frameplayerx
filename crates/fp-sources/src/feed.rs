@@ -28,7 +28,9 @@ use fp_core::format::{Projection, StereoLayout, VideoFormat, detect_from_name};
 use fp_core::source::{
     ByteSource, Entry, EntryKind, is_script_name, is_subtitle_name, is_video_name,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -518,6 +520,14 @@ fn untagged(name: &str) -> &str {
     }
 }
 
+/// A scan's duration in seconds. A video's own document gives milliseconds,
+/// but stash-vr's scan gives seconds (4893.57 for 4893570): a day or more
+/// can only be milliseconds, anything less is read as seconds (milliseconds
+/// would be a clip of under a minute and a half).
+fn scan_seconds(d: f64) -> f64 {
+    if d >= 86_400.0 { d / 1000.0 } else { d }
+}
+
 /// Parses a HereSphere scan (`{"scanData": [...]}`): the details of every
 /// video at once, without thumbnails or media.
 pub fn parse_heresphere_scan(v: &Value, base: &str) -> Vec<FeedScene> {
@@ -535,9 +545,7 @@ pub fn parse_heresphere_scan(v: &Value, base: &str) -> Vec<FeedScene> {
             Some(FeedScene {
                 format: detect_from_name(&title),
                 title,
-                duration: num(s, "duration")
-                    .filter(|d| *d > 0.0)
-                    .map(|ms| ms / 1000.0),
+                duration: num(s, "duration").filter(|d| *d > 0.0).map(scan_seconds),
                 released: date_field(s, "dateReleased"),
                 added: date_field(s, "dateAdded"),
                 rating: rating_field(s, "rating"),
@@ -554,7 +562,8 @@ pub fn parse_heresphere_scan(v: &Value, base: &str) -> Vec<FeedScene> {
 
 /// A scene as a feed's grid shows it: what the listing says, completed as
 /// its details arrive ([`FeedScene::apply`]).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FeedScene {
     /// Scene URL: the location to open and fetch details from.
     pub url: String,
@@ -584,6 +593,9 @@ pub struct FeedScene {
     pub format: Option<VideoFormat>,
     /// The scene's own document was read (so nothing more will come).
     pub detailed: bool,
+    /// Only its address is known (a HereSphere listing, before its scan or
+    /// details): the title is the address's last part.
+    pub bare: bool,
 }
 
 impl FeedScene {
@@ -627,10 +639,12 @@ impl FeedScene {
         }
         self.scripted |= !info.scripts.is_empty();
         self.detailed = true;
+        self.bare = false;
     }
 
     /// Takes what a scan learned (titles, dates, tags) without its gaps.
-    fn merge(&mut self, scan: FeedScene) {
+    pub fn merge(&mut self, scan: FeedScene) {
+        self.bare = false;
         if !scan.title.is_empty() {
             self.title = scan.title;
         }
@@ -675,7 +689,8 @@ impl FeedScene {
 }
 
 /// Everything a feed lists: its scene groups and their scenes.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FeedLibrary {
     /// Groups in feed order, each with the URLs of its scenes.
     pub groups: Vec<(String, Vec<String>)>,
@@ -684,6 +699,35 @@ pub struct FeedLibrary {
 }
 
 impl FeedLibrary {
+    /// Takes a HereSphere scan into the scenes it describes.
+    pub fn merge_scan(&mut self, scan: Vec<FeedScene>) {
+        let mut scanned: std::collections::HashMap<String, FeedScene> =
+            scan.into_iter().map(|s| (s.url.clone(), s)).collect();
+        for s in &mut self.scenes {
+            if let Some(found) = scanned.remove(&s.url) {
+                s.merge(found);
+            }
+        }
+    }
+
+    /// A listing saved by [`FeedLibrary::save`]; `None` when there is none
+    /// (or it can't be read).
+    pub fn load(path: &Path) -> Option<FeedLibrary> {
+        let data = std::fs::read(path).ok()?;
+        serde_json::from_slice(&data)
+            .map_err(|e| log::debug!("feed listing {}: {e}", path.display()))
+            .ok()
+    }
+
+    /// Saves the listing readable only by the user: its poster and scene
+    /// URLs can carry the server's API key.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let json = serde_json::to_vec(self)
+            .map_err(|e| Error::Config(format!("cannot serialize the feed listing: {e}")))?;
+        crate::config::write_private(path, &json)?;
+        Ok(())
+    }
+
     fn from_groups(groups: Vec<SceneGroup>) -> FeedLibrary {
         let mut seen = std::collections::HashSet::new();
         let mut scenes = Vec::new();
@@ -1049,28 +1093,30 @@ impl HereSphereSource {
         Ok(parse_heresphere_video(&v, url))
     }
 
-    /// Every group and scene of the API. The library lists only scene URLs;
-    /// servers that answer a scan (`<url>/scan`) give titles, dates and tags
-    /// for all of them at once, otherwise [`Self::video`] fills each in.
+    /// Every group and scene of the API, quickly: the library lists only
+    /// scene URLs, so its scenes are [`FeedScene::bare`] until [`Self::scan`]
+    /// or [`Self::video`] fills them in.
     pub fn library(&self) -> Result<FeedLibrary> {
         let mut lib = FeedLibrary::from_groups(self.groups(&self.core.url)?);
-        match self.post(&scan_url(&self.core.url), None) {
-            Ok(Some(v)) => {
-                let mut scanned: std::collections::HashMap<String, FeedScene> =
-                    parse_heresphere_scan(&v, &self.core.url)
-                        .into_iter()
-                        .map(|s| (s.url.clone(), s))
-                        .collect();
-                for s in &mut lib.scenes {
-                    if let Some(scan) = scanned.remove(&s.url) {
-                        s.merge(scan);
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(e) => log::debug!("no HereSphere scan at {}: {e}", redact(&self.core.url)),
+        for s in &mut lib.scenes {
+            s.bare = true;
         }
         Ok(lib)
+    }
+
+    /// Titles, dates and tags of every scene at once, from servers that
+    /// answer a scan (`<url>/scan`, stash-vr); `None` from those that don't
+    /// (XBVR). Slower than the library: seconds, and megabytes, for a large
+    /// one. See [`FeedLibrary::merge_scan`].
+    pub fn scan(&self) -> Option<Vec<FeedScene>> {
+        match self.post(&scan_url(&self.core.url), None) {
+            Ok(Some(v)) => Some(parse_heresphere_scan(&v, &self.core.url)),
+            Ok(None) => None,
+            Err(e) => {
+                log::debug!("no HereSphere scan at {}: {e}", redact(&self.core.url));
+                None
+            }
+        }
     }
 
     /// Fills in titles and details for a group's scenes, several requests
@@ -1360,6 +1406,40 @@ mod tests {
     }
 
     #[test]
+    fn listings_take_a_scan_and_save() {
+        let scene = |n: &str| Entry::new(n, format!("http://x/heresphere/{n}"), EntryKind::Video);
+        let mut lib = FeedLibrary::from_groups(vec![SceneGroup {
+            name: "Recent".into(),
+            scenes: vec![scene("12"), scene("13")],
+        }]);
+        for s in &mut lib.scenes {
+            s.bare = true;
+        }
+        lib.merge_scan(vec![FeedScene {
+            url: "http://x/heresphere/12".into(),
+            title: "Beach".into(),
+            tags: vec!["Sun".into()],
+            ..FeedScene::default()
+        }]);
+        assert!(!lib.scenes[0].bare && lib.scenes[0].title == "Beach");
+        assert!(lib.scenes[1].bare && lib.scenes[1].title == "13");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("feeds").join("x.json");
+        lib.save(&path).unwrap();
+        assert_eq!(FeedLibrary::load(&path).as_ref(), Some(&lib));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "poster URLs can carry an API key");
+        }
+        assert_eq!(FeedLibrary::load(&dir.path().join("none.json")), None);
+        std::fs::write(&path, b"not json").unwrap();
+        assert_eq!(FeedLibrary::load(&path), None);
+    }
+
+    #[test]
     fn the_file_comes_before_the_servers_transcode() {
         // As stash-vr answers: DeoVR lists the live transcodes first, and
         // they claim more than the file (2160 against 2048).
@@ -1551,11 +1631,15 @@ mod tests {
                 {"link": "/heresphere/2", "title": "Lake_180_LR", "duration": 90000,
                  "dateReleased": "2022-01-01", "isFavorite": true,
                  "tags": [{"name": "Talent:Jane"}, {"name": "Category:Nature"}]},
-                {"title": "no link"}
+                {"title": "no link"},
+                // stash-vr's scan gives seconds where the video's own
+                // document gives milliseconds.
+                {"link": "/heresphere/3", "duration": 4893.57}
             ]}),
             base,
         );
-        assert_eq!(scan.len(), 1);
+        assert_eq!(scan.len(), 2);
+        assert_eq!(scan[1].duration, Some(4893.57));
         lib.scenes[1].merge(scan.into_iter().next().unwrap());
         let s = &lib.scenes[1];
         assert_eq!((s.title.as_str(), s.duration), ("Lake_180_LR", Some(90.0)));
