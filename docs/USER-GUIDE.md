@@ -468,3 +468,7 @@ protocol. Both only answer devices on your local network.
   (readable only by you)
 - "Is SteamVR running?": FramePlayerX needs the headset's OpenXR runtime;
   start it from the Steam library, not a desktop terminal.
+- "… has signed this headset out": a Jellyfin or Emby server ends a Quick
+  Connect sign-in when the account's password changes or the device is
+  signed out on the server. Pair again: the pencil next to the source under
+  **Sources**, *Clear* next to Quick Connect, then *Get pairing code*.

@@ -323,3 +323,19 @@ fn mediabrowser_quick_connect_flow() {
     assert_eq!(token, "qc_token_99");
     assert_eq!(uid, "usr_bob");
 }
+
+/// A Quick Connect sign-in the server revoked (the password changed, or the
+/// device was signed out) can't be renewed: no password is kept.
+#[test]
+fn revoked_quick_connect_sign_in_says_pair_again() {
+    let server = TestServer::start(|_| resp(401, "", &[]));
+    let mut config = mediabrowser_config(server.url(""), None);
+    config.access_token = Some("revoked".into());
+    config.user_id = Some("usr_bob".into());
+    let src = build(&SourceConfig::MediaBrowser(config)).unwrap();
+    for _ in 0..2 {
+        let err = src.list(None).unwrap_err();
+        assert!(matches!(err, fp_sources::Error::SignedOut(_)), "{err}");
+        assert!(err.to_string().contains("Quick Connect"), "{err}");
+    }
+}

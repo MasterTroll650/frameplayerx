@@ -40,10 +40,20 @@ const CLIENT_NAME: &str = "FramePlayerX";
 /// Device name reported in the MediaBrowser authorization header.
 const DEVICE_NAME: &str = "SteamFrame";
 
-/// Returns a stable identifier for this device.
+static DEVICE_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Sets the id this installation gives servers, before the first request.
+/// Jellyfin and Emby sign a user's sessions on a device out when the same
+/// device id signs in again, so two installations must not share one.
+pub fn set_device_id(id: String) {
+    if DEVICE_ID.set(id).is_err() {
+        log::warn!("the device id was set after the first request");
+    }
+}
+
+/// The id from [`set_device_id`]; else one from the host name.
 fn device_id() -> &'static str {
-    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    ID.get_or_init(|| {
+    DEVICE_ID.get_or_init(|| {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let host = std::env::var("HOSTNAME")
@@ -418,7 +428,7 @@ impl MediaBrowserSource {
         let creds = self
             .credentials
             .as_ref()
-            .ok_or_else(|| Error::Auth(redact(&self.base_url)))?;
+            .ok_or_else(|| Error::SignedOut(redact(&self.base_url)))?;
         let opts = HttpOptions {
             insecure_tls: self.insecure_tls,
             ..HttpOptions::default()
@@ -524,12 +534,13 @@ impl MediaBrowserSource {
                 let mut auth = lock(&self.auth);
                 *auth = None;
             }
-            if self.credentials.is_some() {
-                self.authenticate()?;
-                let (client, _) = self.client()?;
-                let reply = client.request(method, &url, headers, body, JSON_LIMIT)?;
-                return reply.error_for_status(&url);
+            if self.credentials.is_none() {
+                return Err(Error::SignedOut(redact(&self.base_url)));
             }
+            self.authenticate()?;
+            let (client, _) = self.client()?;
+            let reply = client.request(method, &url, headers, body, JSON_LIMIT)?;
+            return reply.error_for_status(&url);
         }
         reply.error_for_status(&url)
     }

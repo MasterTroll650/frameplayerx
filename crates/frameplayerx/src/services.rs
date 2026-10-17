@@ -10,8 +10,9 @@ use fp_haptics::HapticsEngine;
 use fp_library::Library;
 use fp_remote::{RemoteEvent, RemoteHub, RemoteItem, RemoteLibrary};
 use fp_sources::{Source, SourceConfig};
+use ring::rand::SecureRandom;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 /// A configured source that could not be built.
@@ -73,7 +74,7 @@ impl Opener {
         location: &str,
     ) -> Result<Arc<dyn ByteSource>, String> {
         if location.starts_with('/') {
-            let path = std::path::Path::new(location);
+            let path = Path::new(location);
             if !path.exists() && location.starts_with(&format!("{REMOVABLE_ROOT}/")) {
                 return Err(
                     "This video is on a microSD card or USB drive that is not inserted.".into(),
@@ -228,8 +229,41 @@ impl RemoteLibrary for WebLibrary {
     }
 }
 
+/// This installation's id for servers that tell devices apart, made once
+/// and kept in `path`: Jellyfin and Emby sign a device out when another
+/// installation signs in with the same id.
+fn device_id(path: &Path) -> String {
+    if let Ok(saved) = std::fs::read_to_string(path) {
+        let id = saved.trim();
+        let valid = |c: char| c.is_ascii_alphanumeric() || c == '-';
+        if !id.is_empty() && id.len() <= 64 && id.chars().all(valid) {
+            return id.to_string();
+        }
+    }
+    let mut bytes = [0u8; 16];
+    if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        bytes = (nanos ^ u128::from(std::process::id())).to_le_bytes();
+    }
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let id = format!("frameplayerx-{hex}");
+    let saved = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(path, &id));
+    if let Err(e) = saved {
+        log::warn!("cannot keep this device's id in {}: {e}", path.display());
+    }
+    id
+}
+
 impl Services {
     pub fn new(settings: &Settings, library: Library) -> Services {
+        fp_sources::mediabrowser::set_device_id(device_id(
+            &fp_core::dirs::config_dir().join("device-id"),
+        ));
         let opener = Arc::new(Opener::new());
         let source_configs = match fp_sources::load_configs(&Settings::sources_path()) {
             Ok(c) => c,
@@ -460,5 +494,27 @@ impl Services {
             .as_ref()
             .map(|r| r.events().try_iter().collect())
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_id_is_made_once_and_kept() {
+        let dir = std::env::temp_dir().join(format!("fpx-device-id-{}", std::process::id()));
+        let path = dir.join("config").join("device-id");
+        let first = device_id(&path);
+        assert!(
+            first.starts_with("frameplayerx-") && first.len() == 45,
+            "{first}"
+        );
+        assert_eq!(device_id(&path), first);
+        // Another installation gets its own.
+        assert_ne!(device_id(&dir.join("other")), first);
+        std::fs::write(&path, "not an id!\n").unwrap();
+        assert_ne!(device_id(&path), "not an id!");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
