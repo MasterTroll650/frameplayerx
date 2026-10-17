@@ -16,6 +16,7 @@
 use crate::config::{DlnaConfig, SourceKind};
 use crate::error::{Error, Result};
 use crate::http::{HttpClient, HttpOptions};
+use crate::sidecar::subtitle_file;
 use crate::sidecar::{Sidecars, match_sidecars};
 use crate::timeutil::parse_duration;
 use crate::urlutil::{encode_segment, last_segment, percent_decode, redact, resolve};
@@ -24,6 +25,7 @@ use crate::{Source, dir_entry, sort_entries};
 use fp_core::source::{
     ByteSource, Entry, EntryKind, is_script_name, is_subtitle_name, is_video_name,
 };
+use fp_core::sync::lock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
@@ -441,16 +443,16 @@ fn item_entry(item: &Element, base: &str) -> Option<(Entry, Option<String>)> {
             if (m.starts_with("text/") || m.contains("subrip"))
                 && let Ok(u) = resolve(base, r.text.trim())
             {
-                e.subtitles.push(u);
+                e.subtitles.push(subtitle_file(&u, &e.name));
             }
         }
         if let Some(cap) = item
             .child_text("CaptionInfoEx")
             .or(item.child_text("CaptionInfo"))
             && let Ok(u) = resolve(base, cap)
-            && !e.subtitles.contains(&u)
+            && !e.subtitles.iter().any(|s| s.location == u)
         {
-            e.subtitles.push(u);
+            e.subtitles.push(subtitle_file(&u, &e.name));
         }
     }
     Some((e, item.attr("parentID").map(str::to_string)))
@@ -589,7 +591,7 @@ impl DlnaSource {
     }
 
     fn control(&self) -> Result<Control> {
-        let mut guard = crate::cache::lock(&self.control);
+        let mut guard = lock(&self.control);
         if let Some(c) = guard.as_ref() {
             return Ok(c.clone());
         }
@@ -648,7 +650,7 @@ impl DlnaSource {
         for _ in 0..MAX_PAGES {
             let page = self.browse(object_id, start, PAGE_SIZE)?;
             {
-                let mut parents = crate::cache::lock(&self.parents);
+                let mut parents = lock(&self.parents);
                 for (loc, parent) in page.parents {
                     parents.insert(loc, parent);
                 }
@@ -711,7 +713,7 @@ impl Source for DlnaSource {
     }
 
     fn parent(&self, location: &str) -> Option<String> {
-        crate::cache::lock(&self.parents)
+        lock(&self.parents)
             .get(location)
             .map(|id| container_location(id))
     }
@@ -858,7 +860,11 @@ mod tests {
             s.thumbnail_url.as_deref(),
             Some("http://192.168.1.10:8200/AlbumArt/22-1.jpg")
         );
-        assert_eq!(s.subtitles, ["http://192.168.1.10:8200/Captions/22.srt"]);
+        assert_eq!(
+            s.subtitles[0].location,
+            "http://192.168.1.10:8200/Captions/22.srt"
+        );
+        assert_eq!(s.subtitles.len(), 1);
         let f = s.format.unwrap();
         assert_eq!(
             (f.projection, f.stereo),

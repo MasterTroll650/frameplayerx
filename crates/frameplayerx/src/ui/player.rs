@@ -65,225 +65,273 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
         let Some(pb) = v.playback.as_deref_mut() else {
             return;
         };
-        let duration = pb.player.duration();
-        let position = v.state.scrub.unwrap_or_else(|| pb.player.position());
-        let state = pb.player.state();
-
-        // Title, status, format.
-        ui.horizontal(|ui| {
-            ui.set_height(30.0);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                // The format opens the adjust panel's Format tab (again
-                // closes it).
-                if format_pill(ui, &widgets::format_short(&pb.format))
-                    .tip("Change the format")
-                    .clicked()
-                {
-                    let showing = v.state.adjust_open && v.state.adjust_tab == 0;
-                    v.state.adjust_open = !showing;
-                    v.state.adjust_tab = 0;
-                }
-                if let Some(video) = pb.player.info().video_stream() {
-                    let st = pb.player.stats();
-                    let (badge_text, tooltip) =
-                        stream_info_labels(video, &st, v.settings.hardware_decoding);
-                    if stream_pill(ui, &badge_text, st.hardware)
-                        .tip(&tooltip)
-                        .clicked()
-                    {
-                        let showing = v.state.adjust_open && v.state.adjust_tab == 0;
-                        v.state.adjust_open = !showing;
-                        v.state.adjust_tab = 0;
-                    }
-                }
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    let message = match pb.player.error() {
-                        Some(e) => Some((e, theme::ERROR)),
-                        None => pb.notice.clone().map(|n| (n, theme::WARN)),
-                    };
-                    // With a message, the title leaves it most of the row;
-                    // both truncate rather than run under the format pill.
-                    let title_width = if message.is_some() {
-                        ui.available_width() * 0.35
-                    } else {
-                        ui.available_width()
-                    };
-                    ui.scope(|ui| {
-                        ui.set_max_width(title_width);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(widgets::display_title(&pb.title))
-                                    .font(theme::font(Weight::SemiBold, 21.0))
-                                    .color(theme::TEXT),
-                            )
-                            .truncate(),
-                        );
-                    });
-                    // Sized to fit the 30-point row: the default spinner
-                    // (44) grew the row, so every stutter bounced the seek
-                    // bar and buttons up and down.
-                    if state == PlayerState::Buffering {
-                        ui.add(egui::Spinner::new().size(20.0));
-                    }
-                    if let Some((text, color)) = message {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(text)
-                                    .font(theme::font(Weight::Regular, 15.0))
-                                    .color(color),
-                            )
-                            .truncate(),
-                        );
-                    }
-                });
-            });
-        });
+        title_row(ui, pb, v.state, v.settings.hardware_decoding);
         ui.add_space(6.0);
-
-        // Times either side of the seek bar.
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 14.0;
-            let time = |ui: &mut egui::Ui, t: f64, align: Align| {
-                ui.allocate_ui_with_layout(
-                    Vec2::new(68.0, 36.0),
-                    Layout::left_to_right(Align::Center).with_main_align(align),
-                    |ui| {
-                        ui.label(
-                            RichText::new(fmt_time(t))
-                                .font(theme::font(Weight::Medium, 16.0))
-                                .color(theme::TEXT_2),
-                        )
-                    },
-                );
-            };
-            time(ui, position, Align::Min);
-            let w = ui.available_width() - 68.0 - 14.0;
-            seek_bar(ui, w, v.state, pb, v.actions);
-            time(ui, duration, Align::Max);
-        });
+        seek_row(ui, pb, v.state, v.actions);
         ui.add_space(8.0);
 
         // Controls: three groups on one row, transport always centred.
         let (row, _) =
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 72.0), Sense::hover());
-        let paused = pb.player.is_paused() || state == PlayerState::Ended;
-        let step = v.settings.seek_step;
-
         let mut left = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(row)
                 .layout(Layout::left_to_right(Align::Center)),
         );
-        widgets::well(&mut left, |ui| {
-            if widgets::key(ui, icons::SQUARES_FOUR, 52.0, false)
-                .tip("Library")
-                .clicked()
-            {
-                v.actions.push(Action::ShowBrowser(true));
-            }
-            let speed = pb.player.speed();
-            if widgets::pill_key(ui, &fmt_speed(speed), (speed - 1.0).abs() > 1e-3)
-                .tip("Speed")
-                .clicked()
-            {
-                v.actions.push(Action::SetSpeed(next_speed(speed)));
-            }
-            let vol = pb.player.volume();
-            let speaker = if vol <= 0.001 {
-                icons::SPEAKER_X
-            } else if vol < 0.5 {
-                icons::SPEAKER_LOW
-            } else {
-                icons::SPEAKER_HIGH
-            };
-            if widgets::key(ui, speaker, 52.0, false)
-                .tip(if vol <= 0.001 { "Unmute" } else { "Mute" })
-                .clicked()
-            {
-                if vol <= 0.001 {
-                    v.actions.push(Action::SetVolume(
-                        v.state.unmute_volume.take().unwrap_or(1.0),
-                    ));
-                } else {
-                    v.state.unmute_volume = Some(vol);
-                    v.actions.push(Action::SetVolume(0.0));
-                }
-            }
-            let mut vol_edit = vol;
-            if widgets::slider(ui, &mut vol_edit, 0.0..=1.5, 130.0).changed() {
-                v.actions.push(Action::SetVolume(vol_edit));
-            }
-            ui.add_space(6.0);
-        });
-
-        let centre_w = 56.0 + 16.0 + 72.0 + 16.0 + 56.0;
-        let centre = egui::Rect::from_center_size(row.center(), Vec2::new(centre_w, row.height()));
-        let mut mid = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(centre)
-                .layout(Layout::left_to_right(Align::Center)),
-        );
-        mid.spacing_mut().item_spacing.x = 16.0;
-        if skip_button(&mut mid, -step).tip("Rewind").clicked() {
-            v.actions.push(Action::SeekRelative(-step));
-        }
-        if play_button(&mut mid, paused)
-            .tip(if paused { "Play" } else { "Pause" })
-            .clicked()
-        {
-            v.actions.push(Action::TogglePause);
-        }
-        if skip_button(&mut mid, step).tip("Forward").clicked() {
-            v.actions.push(Action::SeekRelative(step));
-        }
-
+        widgets::well(&mut left, |ui| browse_and_sound(ui, pb, v.state, v.actions));
+        transport(ui, row, pb, v.settings.seek_step, v.actions);
         let mut right = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(row)
                 .layout(Layout::right_to_left(Align::Center)),
         );
         widgets::well(&mut right, |ui| {
-            if widgets::key(ui, icons::X, 52.0, false)
-                .tip("Close")
-                .clicked()
-            {
-                v.actions.push(Action::ClosePlayback);
-            }
-            if widgets::key(ui, icons::EYE_SLASH, 52.0, false)
-                .tip("Hide")
-                .clicked()
-            {
-                v.actions.push(Action::HideControls);
-            }
-            // Your room only shows around flat videos.
-            if v.passthrough_available
-                && pb.format.projection == Projection::Flat
-                && widgets::key(ui, icons::ARMCHAIR, 52.0, v.settings.passthrough)
-                    .tip("Room")
-                    .clicked()
-            {
-                v.actions.push(Action::TogglePassthrough);
-            }
-            if widgets::key(ui, icons::CROSSHAIR, 52.0, false)
-                .tip("Recenter")
-                .clicked()
-            {
-                v.actions.push(Action::Recenter);
-            }
-            if widgets::key(ui, icons::BOOKMARK_SIMPLE, 52.0, false)
-                .tip("Bookmark")
-                .clicked()
-            {
-                v.actions.push(Action::AddBookmark);
-            }
-            if widgets::key(ui, icons::SLIDERS_HORIZONTAL, 52.0, v.state.adjust_open)
-                .tip("Adjust")
-                .clicked()
-            {
-                v.state.adjust_open = !v.state.adjust_open;
-            }
+            view_keys(
+                ui,
+                pb,
+                v.state,
+                v.settings.passthrough,
+                v.passthrough_available,
+                v.actions,
+            );
         });
     });
+}
+
+/// The format and stream pills open the adjust panel's Format tab (again
+/// closes it).
+fn toggle_format_tab(state: &mut super::UiState) {
+    let showing = state.adjust_open && state.adjust_tab == 0;
+    state.adjust_open = !showing;
+    state.adjust_tab = 0;
+}
+
+/// Title, status and format.
+fn title_row(
+    ui: &mut egui::Ui,
+    pb: &crate::playback::Playback,
+    state: &mut super::UiState,
+    hardware_decoding: bool,
+) {
+    ui.horizontal(|ui| {
+        ui.set_height(30.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if format_pill(ui, &widgets::format_short(&pb.format))
+                .tip("Change the format")
+                .clicked()
+            {
+                toggle_format_tab(state);
+            }
+            if let Some(video) = pb.player.info().video_stream() {
+                let st = pb.player.stats();
+                let (badge_text, tooltip) = stream_info_labels(video, &st, hardware_decoding);
+                if stream_pill(ui, &badge_text, st.hardware)
+                    .tip(&tooltip)
+                    .clicked()
+                {
+                    toggle_format_tab(state);
+                }
+            }
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                let message = match pb.player.error() {
+                    Some(e) => Some((e, theme::ERROR)),
+                    None => pb.notice.clone().map(|n| (n, theme::WARN)),
+                };
+                // With a message, the title leaves it most of the row;
+                // both truncate rather than run under the format pill.
+                let title_width = if message.is_some() {
+                    ui.available_width() * 0.35
+                } else {
+                    ui.available_width()
+                };
+                ui.scope(|ui| {
+                    ui.set_max_width(title_width);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(widgets::display_title(&pb.title))
+                                .font(theme::font(Weight::SemiBold, 21.0))
+                                .color(theme::TEXT),
+                        )
+                        .truncate(),
+                    );
+                });
+                // Sized to fit the 30-point row: the default spinner
+                // (44) grew the row, so every stutter bounced the seek
+                // bar and buttons up and down.
+                if pb.player.state() == PlayerState::Buffering {
+                    ui.add(egui::Spinner::new().size(20.0));
+                }
+                if let Some((text, color)) = message {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(text)
+                                .font(theme::font(Weight::Regular, 15.0))
+                                .color(color),
+                        )
+                        .truncate(),
+                    );
+                }
+            });
+        });
+    });
+}
+
+/// Times either side of the seek bar.
+fn seek_row(
+    ui: &mut egui::Ui,
+    pb: &mut crate::playback::Playback,
+    state: &mut super::UiState,
+    actions: &mut Vec<Action>,
+) {
+    let duration = pb.player.duration();
+    let position = state.scrub.unwrap_or_else(|| pb.player.position());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 14.0;
+        let time = |ui: &mut egui::Ui, t: f64, align: Align| {
+            ui.allocate_ui_with_layout(
+                Vec2::new(68.0, 36.0),
+                Layout::left_to_right(Align::Center).with_main_align(align),
+                |ui| {
+                    ui.label(
+                        RichText::new(fmt_time(t))
+                            .font(theme::font(Weight::Medium, 16.0))
+                            .color(theme::TEXT_2),
+                    )
+                },
+            );
+        };
+        time(ui, position, Align::Min);
+        let w = ui.available_width() - 68.0 - 14.0;
+        seek_bar(ui, w, state, pb, actions);
+        time(ui, duration, Align::Max);
+    });
+}
+
+/// Library, speed and sound.
+fn browse_and_sound(
+    ui: &mut egui::Ui,
+    pb: &crate::playback::Playback,
+    state: &mut super::UiState,
+    actions: &mut Vec<Action>,
+) {
+    if widgets::key(ui, icons::SQUARES_FOUR, 52.0, false)
+        .tip("Library")
+        .clicked()
+    {
+        actions.push(Action::ShowBrowser(true));
+    }
+    let speed = pb.player.speed();
+    if widgets::pill_key(ui, &fmt_speed(speed), (speed - 1.0).abs() > 1e-3)
+        .tip("Speed")
+        .clicked()
+    {
+        actions.push(Action::SetSpeed(next_speed(speed)));
+    }
+    let vol = pb.player.volume();
+    let speaker = if vol <= 0.001 {
+        icons::SPEAKER_X
+    } else if vol < 0.5 {
+        icons::SPEAKER_LOW
+    } else {
+        icons::SPEAKER_HIGH
+    };
+    if widgets::key(ui, speaker, 52.0, false)
+        .tip(if vol <= 0.001 { "Unmute" } else { "Mute" })
+        .clicked()
+    {
+        if vol <= 0.001 {
+            actions.push(Action::SetVolume(state.unmute_volume.take().unwrap_or(1.0)));
+        } else {
+            state.unmute_volume = Some(vol);
+            actions.push(Action::SetVolume(0.0));
+        }
+    }
+    let mut vol_edit = vol;
+    if widgets::slider(ui, &mut vol_edit, 0.0..=1.5, 130.0).changed() {
+        actions.push(Action::SetVolume(vol_edit));
+    }
+    ui.add_space(6.0);
+}
+
+/// Rewind, play and forward, centred on the row.
+fn transport(
+    ui: &mut egui::Ui,
+    row: egui::Rect,
+    pb: &crate::playback::Playback,
+    step: f64,
+    actions: &mut Vec<Action>,
+) {
+    let paused = pb.player.is_paused() || pb.player.state() == PlayerState::Ended;
+    let centre_w = 56.0 + 16.0 + 72.0 + 16.0 + 56.0;
+    let centre = egui::Rect::from_center_size(row.center(), Vec2::new(centre_w, row.height()));
+    let mut mid = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(centre)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    mid.spacing_mut().item_spacing.x = 16.0;
+    if skip_button(&mut mid, -step).tip("Rewind").clicked() {
+        actions.push(Action::SeekRelative(-step));
+    }
+    if play_button(&mut mid, paused)
+        .tip(if paused { "Play" } else { "Pause" })
+        .clicked()
+    {
+        actions.push(Action::TogglePause);
+    }
+    if skip_button(&mut mid, step).tip("Forward").clicked() {
+        actions.push(Action::SeekRelative(step));
+    }
+}
+
+/// Close, hide, room, recenter, bookmark and adjust.
+fn view_keys(
+    ui: &mut egui::Ui,
+    pb: &crate::playback::Playback,
+    state: &mut super::UiState,
+    passthrough: bool,
+    passthrough_available: bool,
+    actions: &mut Vec<Action>,
+) {
+    if widgets::key(ui, icons::X, 52.0, false)
+        .tip("Close")
+        .clicked()
+    {
+        actions.push(Action::ClosePlayback);
+    }
+    if widgets::key(ui, icons::EYE_SLASH, 52.0, false)
+        .tip("Hide")
+        .clicked()
+    {
+        actions.push(Action::HideControls);
+    }
+    // Your room only shows around flat videos.
+    if passthrough_available
+        && pb.format.projection == Projection::Flat
+        && widgets::key(ui, icons::ARMCHAIR, 52.0, passthrough)
+            .tip("Room")
+            .clicked()
+    {
+        actions.push(Action::TogglePassthrough);
+    }
+    if widgets::key(ui, icons::CROSSHAIR, 52.0, false)
+        .tip("Recenter")
+        .clicked()
+    {
+        actions.push(Action::Recenter);
+    }
+    if widgets::key(ui, icons::BOOKMARK_SIMPLE, 52.0, false)
+        .tip("Bookmark")
+        .clicked()
+    {
+        actions.push(Action::AddBookmark);
+    }
+    if widgets::key(ui, icons::SLIDERS_HORIZONTAL, 52.0, state.adjust_open)
+        .tip("Adjust")
+        .clicked()
+    {
+        state.adjust_open = !state.adjust_open;
+    }
 }
 
 const SPEEDS: [f64; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
@@ -601,7 +649,12 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                 .color(theme::TEXT),
         );
         ui.add_space(4.0);
-        if let Some(i) = widgets::segmented(ui, &TABS, v.state.adjust_tab) {
+        // Haptics is the last tab, left out while haptics are off.
+        let tabs = &TABS[..TABS.len() - usize::from(!v.settings.haptics_enabled)];
+        if v.state.adjust_tab >= tabs.len() {
+            v.state.adjust_tab = 0;
+        }
+        if let Some(i) = widgets::segmented(ui, tabs, v.state.adjust_tab) {
             v.state.adjust_tab = i;
         }
         ui.add_space(10.0);
@@ -615,243 +668,11 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 10.0;
                 let before = pb.settings;
-                let s = &mut pb.settings;
-                let d = ViewSettings::default();
                 match v.state.adjust_tab {
-                    0 => {
-                        let user = pb.evidence == fp_core::format::Evidence::User;
-                        widgets::section_label(ui, "Format");
-                        ui.label(
-                            RichText::new(format!(
-                                "Detected {} ({})",
-                                pb.detected.format.label(),
-                                pb.detected.evidence.label()
-                            ))
-                            .color(theme::TEXT_2),
-                        );
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
-                            if widgets::chip_icon(ui, Some(icons::MAGIC_WAND), "Automatic", !user)
-                                .clicked()
-                            {
-                                v.actions.push(Action::SetFormat(None));
-                            }
-                            for (label, f) in format_choices() {
-                                // The chips set the layout; a packed mask stays.
-                                if widgets::chip(ui, label, user && pb.format.same_layout(&f))
-                                    .clicked()
-                                {
-                                    v.actions.push(Action::SetFormat(Some(VideoFormat {
-                                        alpha_packed: pb.format.alpha_packed,
-                                        ..f
-                                    })));
-                                }
-                            }
-                        });
-                        if let Projection::Fisheye { fov } = pb.format.projection {
-                            ui.add_space(6.0);
-                            widgets::section_label(ui, "Fisheye lens");
-                            widgets::rows(ui, |r| {
-                                let mut f = fov;
-                                if r.slider(
-                                    "Field of view",
-                                    None,
-                                    &mut f,
-                                    150.0..=240.0,
-                                    fov,
-                                    "°",
-                                    0,
-                                ) {
-                                    v.actions.push(Action::SetFormat(Some(VideoFormat {
-                                        projection: Projection::Fisheye { fov: f.round() },
-                                        ..pb.format
-                                    })));
-                                }
-                                r.slider("Lens k1", None, &mut s.lens_k1, -0.5..=0.5, 0.0, "", 2);
-                                r.slider("Lens k2", None, &mut s.lens_k2, -0.5..=0.5, 0.0, "", 2);
-                            });
-                        }
-                        if pb.format.projection == Projection::Flat {
-                            ui.add_space(6.0);
-                            widgets::section_label(ui, "Screen");
-                            widgets::rows(ui, |r| {
-                                r.slider(
-                                    "Distance",
-                                    None,
-                                    &mut s.screen_distance,
-                                    1.0..=20.0,
-                                    d.screen_distance,
-                                    " m",
-                                    1,
-                                );
-                                r.slider(
-                                    "Width",
-                                    None,
-                                    &mut s.screen_width,
-                                    0.5..=30.0,
-                                    d.screen_width,
-                                    " m",
-                                    1,
-                                );
-                                r.slider(
-                                    "Curvature",
-                                    None,
-                                    &mut s.screen_curvature,
-                                    0.0..=1.0,
-                                    0.0,
-                                    "",
-                                    2,
-                                );
-                            });
-                        }
-                        if let Some(video) = pb.player.info().video_stream() {
-                            ui.add_space(6.0);
-                            widgets::section_label(ui, "Video stream");
-                            widgets::rows(ui, |r| {
-                                let st = pb.player.stats();
-                                let decoder =
-                                    decoder_text(video, &st, v.settings.hardware_decoding);
-                                r.row("Decoder", None, |ui| {
-                                    ui.label(RichText::new(decoder).color(if st.hardware {
-                                        theme::TEXT
-                                    } else {
-                                        theme::WARN
-                                    }));
-                                });
-                                let codec_name = match video.codec.as_str() {
-                                    "hevc" => "HEVC (H.265)".to_string(),
-                                    "h264" => "H.264 (AVC)".to_string(),
-                                    "av1" => "AV1".to_string(),
-                                    "vp9" => "VP9".to_string(),
-                                    c => c.to_uppercase(),
-                                };
-                                let format_desc = if video.bit_depth > 8 {
-                                    format!(
-                                        "{codec_name} {}-bit ({})",
-                                        video.bit_depth,
-                                        video.chroma()
-                                    )
-                                } else {
-                                    format!("{codec_name} 8-bit ({})", video.chroma())
-                                };
-                                r.row("Format", None, |ui| {
-                                    ui.label(RichText::new(format_desc).color(theme::TEXT_2));
-                                });
-                                r.row("Resolution", None, |ui| {
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "{} × {} @ {:.2} fps",
-                                            video.width, video.height, video.fps
-                                        ))
-                                        .color(theme::TEXT_2),
-                                    );
-                                });
-                                if !video.pixel_format.is_empty() {
-                                    r.row("Pixel format", None, |ui| {
-                                        ui.label(
-                                            RichText::new(&video.pixel_format).color(theme::TEXT_2),
-                                        );
-                                    });
-                                }
-                            });
-                        }
-                    }
-                    1 => {
-                        widgets::rows(ui, |r| {
-                            r.slider("Yaw", None, &mut s.yaw, -180.0..=180.0, 0.0, "°", 0);
-                            r.slider("Pitch", None, &mut s.pitch, -90.0..=90.0, 0.0, "°", 0);
-                            r.slider("Roll", None, &mut s.roll, -45.0..=45.0, 0.0, "°", 0);
-                            r.slider("Zoom", None, &mut s.zoom, 0.5..=2.5, 1.0, "×", 2);
-                            r.slider(
-                                "Height",
-                                Some("Raise or lower yourself in the scene."),
-                                &mut s.height,
-                                -1.0..=1.0,
-                                d.height,
-                                " m",
-                                2,
-                            );
-                            r.slider(
-                                "Forward",
-                                Some("Move closer to or back from the scene."),
-                                &mut s.forward,
-                                -1.0..=1.0,
-                                d.forward,
-                                " m",
-                                2,
-                            );
-                        });
-                        ui.label(
-                            RichText::new(
-                                "Or hold a grip and the trigger and drag the picture; \
-                                 press the thumbstick to undo. Right grip and thumbstick \
-                                 up / down changes your height.",
-                            )
-                            .color(theme::TEXT_3),
-                        );
-                    }
-                    2 => {
-                        widgets::rows(ui, |r| {
-                            r.slider(
-                                "Depth",
-                                Some("Eye separation; lower if it's hard to fuse."),
-                                &mut s.ipd_offset,
-                                -5.0..=5.0,
-                                0.0,
-                                "°",
-                                1,
-                            );
-                            r.slider(
-                                "Vertical align",
-                                None,
-                                &mut s.vertical_align,
-                                -3.0..=3.0,
-                                0.0,
-                                "°",
-                                1,
-                            );
-                            r.slider(
-                                "Rotation align",
-                                None,
-                                &mut s.rotation_align,
-                                -3.0..=3.0,
-                                0.0,
-                                "°",
-                                1,
-                            );
-                            r.switch(
-                                "Swap eyes",
-                                Some("For left/right swapped files."),
-                                &mut s.swap_eyes,
-                            );
-                            r.slider(
-                                "Subtitle depth",
-                                None,
-                                &mut s.subtitle_distance,
-                                0.8..=10.0,
-                                d.subtitle_distance,
-                                " m",
-                                1,
-                            );
-                        });
-                    }
-                    3 => {
-                        widgets::rows(ui, |r| {
-                            r.slider(
-                                "Brightness",
-                                None,
-                                &mut s.brightness,
-                                -0.5..=0.5,
-                                0.0,
-                                "",
-                                2,
-                            );
-                            r.slider("Contrast", None, &mut s.contrast, 0.5..=1.5, 1.0, "", 2);
-                            r.slider("Saturation", None, &mut s.saturation, 0.0..=2.0, 1.0, "", 2);
-                            r.slider("Gamma", None, &mut s.gamma, 0.5..=2.0, 1.0, "", 2);
-                            r.slider("Sharpen", None, &mut s.sharpen, 0.0..=1.0, 0.0, "", 2);
-                        });
-                    }
+                    0 => format_tab(ui, pb, v.settings.hardware_decoding, v.actions),
+                    1 => position_tab(ui, &mut pb.settings),
+                    2 => stereo_tab(ui, &mut pb.settings),
+                    3 => picture_tab(ui, &mut pb.settings),
                     4 => {
                         widgets::section_label(ui, "Passthrough videos");
                         ui.label(
@@ -861,12 +682,12 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                         ui.add_space(6.0);
                         chroma_tab(
                             ui,
-                            s,
+                            &mut pb.settings,
                             pb.format,
                             &v.settings.default_view,
                             v.passthrough_available,
                             v.actions,
-                        )
+                        );
                     }
                     5 => audio_and_text(ui, pb, v.actions),
                     _ => haptics_tab(ui, pb.script_count, v.settings, v.devices),
@@ -876,51 +697,286 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                 }
             });
         if footer {
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                let label = if pb.record_id.is_some() {
-                    "Save for this video"
+            adjust_footer(ui, pb, v.actions);
+        }
+    });
+}
+
+/// Format tab: the detected format and overrides, lens or screen, and
+/// what is decoding the video.
+fn format_tab(
+    ui: &mut egui::Ui,
+    pb: &mut crate::playback::Playback,
+    hardware_decoding: bool,
+    actions: &mut Vec<Action>,
+) {
+    let s = &mut pb.settings;
+    let d = ViewSettings::default();
+    let user = pb.evidence == fp_core::format::Evidence::User;
+    widgets::section_label(ui, "Format");
+    ui.label(
+        RichText::new(format!(
+            "Detected {} ({})",
+            pb.detected.format.label(),
+            pb.detected.evidence.label()
+        ))
+        .color(theme::TEXT_2),
+    );
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+        if widgets::chip_icon(ui, Some(icons::MAGIC_WAND), "Automatic", !user).clicked() {
+            actions.push(Action::SetFormat(None));
+        }
+        for (label, f) in format_choices() {
+            // The chips set the layout; a packed mask stays.
+            if widgets::chip(ui, label, user && pb.format.same_layout(&f)).clicked() {
+                actions.push(Action::SetFormat(Some(VideoFormat {
+                    alpha_packed: pb.format.alpha_packed,
+                    ..f
+                })));
+            }
+        }
+    });
+    if let Projection::Fisheye { fov } = pb.format.projection {
+        ui.add_space(6.0);
+        widgets::section_label(ui, "Fisheye lens");
+        widgets::rows(ui, |r| {
+            let mut f = fov;
+            if r.slider("Field of view", None, &mut f, 150.0..=240.0, fov, "°", 0) {
+                actions.push(Action::SetFormat(Some(VideoFormat {
+                    projection: Projection::Fisheye { fov: f.round() },
+                    ..pb.format
+                })));
+            }
+            r.slider("Lens k1", None, &mut s.lens_k1, -0.5..=0.5, 0.0, "", 2);
+            r.slider("Lens k2", None, &mut s.lens_k2, -0.5..=0.5, 0.0, "", 2);
+        });
+    }
+    if pb.format.projection == Projection::Flat {
+        ui.add_space(6.0);
+        widgets::section_label(ui, "Screen");
+        widgets::rows(ui, |r| {
+            r.slider(
+                "Distance",
+                None,
+                &mut s.screen_distance,
+                1.0..=20.0,
+                d.screen_distance,
+                " m",
+                1,
+            );
+            r.slider(
+                "Width",
+                None,
+                &mut s.screen_width,
+                0.5..=30.0,
+                d.screen_width,
+                " m",
+                1,
+            );
+            r.slider(
+                "Curvature",
+                None,
+                &mut s.screen_curvature,
+                0.0..=1.0,
+                0.0,
+                "",
+                2,
+            );
+        });
+    }
+    if let Some(video) = pb.player.info().video_stream() {
+        ui.add_space(6.0);
+        widgets::section_label(ui, "Video stream");
+        widgets::rows(ui, |r| {
+            let st = pb.player.stats();
+            let decoder = decoder_text(video, &st, hardware_decoding);
+            r.row("Decoder", None, |ui| {
+                ui.label(RichText::new(decoder).color(if st.hardware {
+                    theme::TEXT
                 } else {
-                    "Keep for this session"
-                };
-                if ui
-                    .add_enabled_ui(pb.settings_dirty, |ui| {
-                        widgets::button(ui, Some(icons::CHECK), label, Kind::Primary)
-                    })
-                    .inner
-                    .clicked()
-                {
-                    v.actions.push(Action::SaveView);
-                }
-                if widgets::button(
-                    ui,
-                    Some(icons::ARROW_COUNTER_CLOCKWISE),
-                    "Reset",
-                    Kind::Secondary,
-                )
-                .clicked()
-                {
-                    v.actions.push(Action::ResetView);
-                }
-                if widgets::icon_button(ui, icons::TIMER, 48.0, false)
-                    .tip("Keyframe")
-                    .clicked()
-                {
-                    v.actions.push(Action::AddKeyframe);
-                }
-                if !pb.keyframes.frames.is_empty()
-                    && widgets::button(
-                        ui,
-                        None,
-                        &format!("Clear {} keyframes", pb.keyframes.frames.len()),
-                        Kind::Ghost,
-                    )
-                    .clicked()
-                {
-                    v.actions.push(Action::ClearKeyframes);
-                }
+                    theme::WARN
+                }));
             });
+            let codec_name = match video.codec.as_str() {
+                "hevc" => "HEVC (H.265)".to_string(),
+                "h264" => "H.264 (AVC)".to_string(),
+                "av1" => "AV1".to_string(),
+                "vp9" => "VP9".to_string(),
+                c => c.to_uppercase(),
+            };
+            let format_desc = if video.bit_depth > 8 {
+                format!("{codec_name} {}-bit ({})", video.bit_depth, video.chroma())
+            } else {
+                format!("{codec_name} 8-bit ({})", video.chroma())
+            };
+            r.row("Format", None, |ui| {
+                ui.label(RichText::new(format_desc).color(theme::TEXT_2));
+            });
+            r.row("Resolution", None, |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{} × {} @ {:.2} fps",
+                        video.width, video.height, video.fps
+                    ))
+                    .color(theme::TEXT_2),
+                );
+            });
+            if !video.pixel_format.is_empty() {
+                r.row("Pixel format", None, |ui| {
+                    ui.label(RichText::new(&video.pixel_format).color(theme::TEXT_2));
+                });
+            }
+        });
+    }
+}
+
+fn position_tab(ui: &mut egui::Ui, s: &mut ViewSettings) {
+    let d = ViewSettings::default();
+    widgets::rows(ui, |r| {
+        r.slider("Yaw", None, &mut s.yaw, -180.0..=180.0, 0.0, "°", 0);
+        r.slider("Pitch", None, &mut s.pitch, -90.0..=90.0, 0.0, "°", 0);
+        r.slider("Roll", None, &mut s.roll, -45.0..=45.0, 0.0, "°", 0);
+        r.slider("Zoom", None, &mut s.zoom, 0.5..=2.5, 1.0, "×", 2);
+        r.slider(
+            "Height",
+            Some("Raise or lower yourself in the scene."),
+            &mut s.height,
+            -1.0..=1.0,
+            d.height,
+            " m",
+            2,
+        );
+        r.slider(
+            "Forward",
+            Some("Move closer to or back from the scene."),
+            &mut s.forward,
+            -1.0..=1.0,
+            d.forward,
+            " m",
+            2,
+        );
+    });
+    ui.label(
+        RichText::new(
+            "Or hold a grip and the trigger and drag the picture; \
+             press the thumbstick to undo. Right grip and thumbstick \
+             up / down changes your height.",
+        )
+        .color(theme::TEXT_3),
+    );
+}
+
+fn stereo_tab(ui: &mut egui::Ui, s: &mut ViewSettings) {
+    let d = ViewSettings::default();
+    widgets::rows(ui, |r| {
+        r.slider(
+            "Depth",
+            Some("Eye separation; lower if it's hard to fuse."),
+            &mut s.ipd_offset,
+            -5.0..=5.0,
+            0.0,
+            "°",
+            1,
+        );
+        r.slider(
+            "Vertical align",
+            None,
+            &mut s.vertical_align,
+            -3.0..=3.0,
+            0.0,
+            "°",
+            1,
+        );
+        r.slider(
+            "Rotation align",
+            None,
+            &mut s.rotation_align,
+            -3.0..=3.0,
+            0.0,
+            "°",
+            1,
+        );
+        r.switch(
+            "Swap eyes",
+            Some("For left/right swapped files."),
+            &mut s.swap_eyes,
+        );
+        r.slider(
+            "Subtitle depth",
+            None,
+            &mut s.subtitle_distance,
+            0.8..=10.0,
+            d.subtitle_distance,
+            " m",
+            1,
+        );
+    });
+}
+
+fn picture_tab(ui: &mut egui::Ui, s: &mut ViewSettings) {
+    widgets::rows(ui, |r| {
+        r.slider(
+            "Brightness",
+            None,
+            &mut s.brightness,
+            -0.5..=0.5,
+            0.0,
+            "",
+            2,
+        );
+        r.slider("Contrast", None, &mut s.contrast, 0.5..=1.5, 1.0, "", 2);
+        r.slider("Saturation", None, &mut s.saturation, 0.0..=2.0, 1.0, "", 2);
+        r.slider("Gamma", None, &mut s.gamma, 0.5..=2.0, 1.0, "", 2);
+        r.slider("Sharpen", None, &mut s.sharpen, 0.0..=1.0, 0.0, "", 2);
+    });
+}
+
+/// Save, reset and keyframes, below the page.
+fn adjust_footer(ui: &mut egui::Ui, pb: &crate::playback::Playback, actions: &mut Vec<Action>) {
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        let label = if pb.record_id.is_some() {
+            "Save for this video"
+        } else {
+            "Keep for this session"
+        };
+        if ui
+            .add_enabled_ui(pb.settings_dirty, |ui| {
+                widgets::button(ui, Some(icons::CHECK), label, Kind::Primary)
+            })
+            .inner
+            .clicked()
+        {
+            actions.push(Action::SaveView);
+        }
+        if widgets::button(
+            ui,
+            Some(icons::ARROW_COUNTER_CLOCKWISE),
+            "Reset",
+            Kind::Secondary,
+        )
+        .clicked()
+        {
+            actions.push(Action::ResetView);
+        }
+        if widgets::icon_button(ui, icons::TIMER, 48.0, false)
+            .tip("Keyframe")
+            .clicked()
+        {
+            actions.push(Action::AddKeyframe);
+        }
+        if !pb.keyframes.frames.is_empty()
+            && widgets::button(
+                ui,
+                None,
+                &format!("Clear {} keyframes", pb.keyframes.frames.len()),
+                Kind::Ghost,
+            )
+            .clicked()
+        {
+            actions.push(Action::ClearKeyframes);
         }
     });
 }
@@ -1016,11 +1072,11 @@ pub(super) fn chroma_controls(
         widgets::rows(ui, |r| {
             r.row("Colour", None, |ui| {
                 let [cr, cg, cb] = s.key_color.map(|c| (c.clamp(0.0, 1.0) * 255.0) as u8);
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(64.0, 32.0), egui::Sense::hover());
+                let (rect, _) = ui.allocate_exact_size(Vec2::new(64.0, 32.0), Sense::hover());
                 ui.painter().rect_filled(
                     rect,
                     egui::CornerRadius::same(8),
-                    egui::Color32::from_rgb(cr, cg, cb),
+                    Color32::from_rgb(cr, cg, cb),
                 );
             });
             r.slider(
@@ -1095,11 +1151,7 @@ fn audio_and_text(ui: &mut egui::Ui, pb: &crate::playback::Playback, actions: &m
     } else {
         widgets::rows(ui, |r| {
             for s in &streams {
-                let mut title = s
-                    .title
-                    .clone()
-                    .or_else(|| s.language.clone())
-                    .unwrap_or_else(|| format!("Track {}", s.index));
+                let mut title = crate::subtitles::track_name(s);
                 if s.ambisonic {
                     title += " · spatial";
                 }
@@ -1122,20 +1174,17 @@ fn audio_and_text(ui: &mut egui::Ui, pb: &crate::playback::Playback, actions: &m
                 actions.push(Action::SelectSubtitleStream(None));
             }
         });
-        for (i, (name, _)) in pb.subtitle_files.iter().enumerate() {
-            r.row(name, Some("File"), |ui| {
+        for (i, f) in pb.subtitle_files.iter().enumerate() {
+            let (title, desc) = crate::subtitles::file_label(f);
+            r.row(&title, Some(desc.as_str()), |ui| {
                 if radio(ui, pb.active_subtitle_file == Some(i)).clicked() {
                     actions.push(Action::SelectSubtitleFile(Some(i)));
                 }
             });
         }
         for s in info.subtitle_streams() {
-            let title = s
-                .title
-                .clone()
-                .or_else(|| s.language.clone())
-                .unwrap_or_else(|| format!("Track {}", s.index));
-            let desc = format!("Track {} · {}", s.index, s.codec);
+            let title = crate::subtitles::track_name(s);
+            let desc = crate::subtitles::stream_detail(s);
             r.row(&title, Some(desc.as_str()), |ui| {
                 let on = sub_stream == Some(s.index) && pb.active_subtitle_file.is_none();
                 if radio(ui, on).clicked() {
@@ -1277,11 +1326,14 @@ fn haptics_tab(
     }
 }
 
-/// Subtitle cues, drawn large with an outline on a transparent panel.
+/// Subtitle cues, drawn large on a dark plate on a transparent panel. Text
+/// is set by `shaper` once the fonts have loaded, by egui (Latin, Greek and
+/// Cyrillic only) before.
 pub fn subtitles(
     ctx: &egui::Context,
     cues: &[fp_media::subtitle::Cue],
     textures: &mut Vec<egui::TextureHandle>,
+    shaper: Option<&mut super::subtitle_text::SubtitleText>,
 ) {
     let frame = egui::Frame::new().fill(Color32::TRANSPARENT);
     egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
@@ -1318,16 +1370,34 @@ pub fn subtitles(
                 return;
             }
             let joined = text.join("\n");
-            let font = egui::FontId::proportional(54.0);
-            let galley =
+            let (size, width) = (54.0, ui.available_width() - 40.0);
+            let pad = Vec2::new(18.0, 8.0);
+            if let Some(shaper) = shaper {
+                let ppp = ctx.pixels_per_point();
+                let img = shaper.render(&joined, size * ppp, width * ppp);
+                if img.size[0] == 0 {
+                    return;
+                }
+                let lines = Vec2::new(img.size[0] as f32, img.size[1] as f32) / ppp;
+                let tex = ctx.load_texture("sub-text", img, egui::TextureOptions::LINEAR);
+                let (rect, _) = ui.allocate_exact_size(lines + pad * 2.0, Sense::hover());
                 ui.painter()
-                    .layout(joined, font, Color32::WHITE, ui.available_width() - 40.0);
-            let (rect, _) =
-                ui.allocate_exact_size(galley.size() + Vec2::new(36.0, 16.0), Sense::hover());
+                    .rect_filled(rect, 12.0, Color32::from_black_alpha(150));
+                ui.painter().image(
+                    tex.id(),
+                    egui::Rect::from_center_size(rect.center(), lines),
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+                textures.push(tex);
+                return;
+            }
+            let font = egui::FontId::proportional(size);
+            let galley = ui.painter().layout(joined, font, Color32::WHITE, width);
+            let (rect, _) = ui.allocate_exact_size(galley.size() + pad * 2.0, Sense::hover());
             ui.painter()
                 .rect_filled(rect, 12.0, Color32::from_black_alpha(150));
-            ui.painter()
-                .galley(rect.min + Vec2::new(18.0, 8.0), galley, Color32::WHITE);
+            ui.painter().galley(rect.min + pad, galley, Color32::WHITE);
         });
     });
 }

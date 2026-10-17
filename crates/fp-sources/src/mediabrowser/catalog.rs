@@ -7,10 +7,10 @@
 //! request per page.
 
 use super::{
-    MediaBrowserSource, array, boolean, detect_from_name, encode_location, get, num, text,
-    ticks_to_seconds, video_3d_format,
+    MediaBrowserSource, detect_from_name, encode_location, ticks_to_seconds, video_3d_format,
 };
 use crate::error::Result;
+use crate::json::{array, boolean, get, num, text};
 use crate::timeutil::parse_iso8601;
 use crate::urlutil::encode_form_value;
 use fp_core::format::VideoFormat;
@@ -41,7 +41,6 @@ const NOT_VIDEO: [&str; 6] = [
 /// What a library item is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MbKind {
-    /// A film.
     Movie,
     /// A TV series (holds seasons).
     Series,
@@ -51,11 +50,9 @@ pub enum MbKind {
     Episode,
     /// Any other video (home videos, mixed libraries).
     Video,
-    /// A music video.
     MusicVideo,
     /// A collection of films.
     BoxSet,
-    /// A plain folder.
     Folder,
     /// One of the user's libraries (a view).
     Library,
@@ -102,9 +99,7 @@ impl MbKind {
 pub struct MbItem {
     /// Server id.
     pub id: String,
-    /// Title.
     pub name: String,
-    /// What it is.
     pub kind: MbKind,
     /// Of a library: `movies`, `tvshows`, `boxsets`, `homevideos`...
     pub collection_type: Option<String>,
@@ -118,7 +113,6 @@ pub struct MbItem {
     pub community_rating: Option<f32>,
     /// Age rating ("PG-13").
     pub official_rating: Option<String>,
-    /// Genres.
     pub genres: Vec<String>,
     /// Studios (details only).
     pub studios: Vec<String>,
@@ -152,7 +146,7 @@ pub struct MbItem {
     pub landscape: Option<String>,
     /// Large wide art for the top of a details page.
     pub backdrop: Option<String>,
-    /// Location for [`MediaBrowserSource::open`] and browsing.
+    /// Location for [`Source::open`](crate::Source::open) and browsing.
     pub location: String,
     /// Projection and stereo layout from the file name or 3D metadata.
     pub format: Option<VideoFormat>,
@@ -272,7 +266,6 @@ pub struct MbQuery {
     pub recursive: bool,
     /// Words to search for; empty lists everything.
     pub search: String,
-    /// Order.
     pub sort: MbSort,
     /// Largest first.
     pub descending: bool,
@@ -315,7 +308,7 @@ impl MbQuery {
         };
         MbQuery {
             parent: Some(item.id.clone()),
-            types: types.iter().map(|t| t.to_string()).collect(),
+            types: types.iter().map(ToString::to_string).collect(),
             recursive: item.kind == MbKind::Library,
             ..MbQuery::default()
         }
@@ -356,7 +349,7 @@ impl MbQuery {
 /// What a search of the whole server looks through, a section each, as
 /// Jellyfin's own search shows it: the titles of films, series, collections
 /// and other videos. Episodes are left out; a series is found by its name.
-pub const SEARCH_SECTIONS: [(&str, &[&str]); 4] = [
+pub(crate) const SEARCH_SECTIONS: [(&str, &[&str]); 4] = [
     ("Movies", &["Movie"]),
     ("Shows", &["Series"]),
     ("Collections", &["BoxSet"]),
@@ -638,7 +631,7 @@ impl MediaBrowserSource {
             .ok_or_else(|| crate::Error::NotFound(format!("item {id} on {}", self.name)))
     }
 
-    /// The titles matching `text`, by section ([`SEARCH_SECTIONS`]), best
+    /// The titles matching `text`, by section (`SEARCH_SECTIONS`), best
     /// matches first and at most `limit` a section. Sections without a
     /// match are left out.
     pub fn search(&self, text: &str, limit: usize) -> Result<Vec<(&'static str, Vec<MbItem>)>> {

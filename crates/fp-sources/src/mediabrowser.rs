@@ -9,15 +9,17 @@
 //! Playback progress can be reported back to the server using the session API.
 
 use crate::Source;
-use crate::cache::lock;
 use crate::config::{Credentials, MediaBrowserConfig, SourceKind};
 use crate::dir_entry;
 use crate::error::{Error, Result};
 use crate::http::{HttpClient, HttpOptions, HttpReply};
+use crate::json::{array, boolean, get, num, text, uint};
 use crate::sidecar::Sidecars;
 use crate::urlutil::redact;
+use crate::watch::{WatchEvent, WatchKind, WatchSession};
 use fp_core::format::{Projection, StereoLayout, VideoFormat, detect_from_name};
 use fp_core::source::{ByteSource, Entry, EntryKind};
+use fp_core::sync::lock;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt;
@@ -38,10 +40,20 @@ const CLIENT_NAME: &str = "FramePlayerX";
 /// Device name reported in the MediaBrowser authorization header.
 const DEVICE_NAME: &str = "SteamFrame";
 
-/// Returns a stable identifier for this device.
+static DEVICE_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Sets the id this installation gives servers, before the first request.
+/// Jellyfin and Emby sign a user's sessions on a device out when the same
+/// device id signs in again, so two installations must not share one.
+pub fn set_device_id(id: String) {
+    if DEVICE_ID.set(id).is_err() {
+        log::warn!("the device id was set after the first request");
+    }
+}
+
+/// The id from [`set_device_id`]; else one from the host name.
 fn device_id() -> &'static str {
-    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    ID.get_or_init(|| {
+    DEVICE_ID.get_or_init(|| {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let host = std::env::var("HOSTNAME")
@@ -59,12 +71,10 @@ pub(crate) fn mediabrowser_header(token: Option<&str>) -> String {
     let version = env!("CARGO_PKG_VERSION");
     match token {
         Some(tok) => format!(
-            "MediaBrowser Client=\"{}\", Device=\"{}\", DeviceId=\"{}\", Version=\"{}\", Token=\"{}\"",
-            CLIENT_NAME, DEVICE_NAME, dev_id, version, tok
+            "MediaBrowser Client=\"{CLIENT_NAME}\", Device=\"{DEVICE_NAME}\", DeviceId=\"{dev_id}\", Version=\"{version}\", Token=\"{tok}\""
         ),
         None => format!(
-            "MediaBrowser Client=\"{}\", Device=\"{}\", DeviceId=\"{}\", Version=\"{}\"",
-            CLIENT_NAME, DEVICE_NAME, dev_id, version
+            "MediaBrowser Client=\"{CLIENT_NAME}\", Device=\"{DEVICE_NAME}\", DeviceId=\"{dev_id}\", Version=\"{version}\""
         ),
     }
 }
@@ -87,59 +97,6 @@ pub(crate) fn item_id(loc: &str) -> Result<String> {
     decode_location(loc)
         .map(|(_, id)| id.to_string())
         .ok_or_else(|| Error::invalid(loc, "not a MediaBrowser location"))
-}
-
-// ---- tolerant JSON accessors ----
-
-fn get<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
-    v.get(key).filter(|x| !x.is_null())
-}
-
-fn as_f64(v: &Value) -> Option<f64> {
-    match v {
-        Value::Number(n) => n.as_f64(),
-        Value::String(s) => s.trim().parse().ok(),
-        _ => None,
-    }
-    .filter(|x| x.is_finite())
-}
-
-fn num(v: &Value, key: &str) -> Option<f64> {
-    get(v, key).and_then(as_f64)
-}
-
-fn uint(v: &Value, key: &str) -> Option<u32> {
-    num(v, key)
-        .filter(|x| *x > 0.0 && *x < 1e7)
-        .map(|x| x as u32)
-}
-
-fn text(v: &Value, key: &str) -> Option<String> {
-    match get(v, key)? {
-        Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
-        Value::Number(n) => Some(n.to_string()),
-        _ => None,
-    }
-}
-
-fn boolean(v: &Value, key: &str) -> Option<bool> {
-    match get(v, key)? {
-        Value::Bool(b) => Some(*b),
-        Value::Number(n) => n.as_f64().map(|x| x != 0.0),
-        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" => Some(true),
-            "false" | "0" | "no" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn array<'a>(v: &'a Value, key: &str) -> &'a [Value] {
-    get(v, key)
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
 }
 
 /// Converts MediaBrowser ticks (1 tick = 100 ns = 10^-7 s) to seconds.
@@ -316,6 +273,13 @@ pub(crate) fn apply_item_details(
     if let Some(ticks) = num(v, "RunTimeTicks") {
         entry.duration = Some(ticks_to_seconds(ticks));
     }
+    if let Some(user) = get(v, "UserData") {
+        entry.resume = Some(
+            num(user, "PlaybackPositionTicks")
+                .filter(|t| *t > 0.0)
+                .map_or(0.0, ticks_to_seconds),
+        );
+    }
 
     let media_sources = array(v, "MediaSources");
     let ms = best_media_source(media_sources, max_height).or_else(|| media_sources.first());
@@ -325,15 +289,37 @@ pub(crate) fn apply_item_details(
             entry.size = num(ms, "Size").filter(|s| *s > 0.0).map(|s| s as u64);
         }
         let media_source_id = text(ms, "Id").unwrap_or_else(|| item_id.to_string());
+        // Embedded subtitles come with the file (it streams as is); the
+        // server only has to hand over the ones beside it. Asking it for an
+        // embedded one makes it extract that from the whole file first,
+        // which can take minutes.
         for stream in array(ms, "MediaStreams") {
-            if text(stream, "Type").as_deref() == Some("Subtitle") {
-                let codec = text(stream, "Codec").unwrap_or_else(|| "srt".to_string());
-                let index = num(stream, "Index").map(|n| n as u32).unwrap_or(0);
-                let sub_url = format!(
-                    "{base_url}/Videos/{item_id}/{media_source_id}/Subtitles/{index}/Stream.{codec}"
-                );
-                entry.subtitles.push(sub_url);
+            if text(stream, "Type").as_deref() != Some("Subtitle")
+                || boolean(stream, "IsExternal") != Some(true)
+            {
+                continue;
             }
+            let codec = text(stream, "Codec").unwrap_or_else(|| "srt".to_string());
+            let index = num(stream, "Index").map(|n| n as u32).unwrap_or(0);
+            let location = format!(
+                "{base_url}/Videos/{item_id}/{media_source_id}/Subtitles/{index}/Stream.{codec}"
+            );
+            let mut file = crate::sidecar::subtitle_file(&location, "");
+            if let Some(name) = text(stream, "Path")
+                .map(|p| crate::urlutil::last_segment(&p))
+                .or_else(|| text(stream, "Title"))
+                .filter(|n| !n.is_empty())
+            {
+                file.name = name;
+            }
+            file.language = text(stream, "Language").map(|l| {
+                if boolean(stream, "IsForced") == Some(true) {
+                    format!("{l}.forced")
+                } else {
+                    l
+                }
+            });
+            entry.subtitles.push(file);
         }
     }
 
@@ -442,7 +428,7 @@ impl MediaBrowserSource {
         let creds = self
             .credentials
             .as_ref()
-            .ok_or_else(|| Error::Auth(redact(&self.base_url)))?;
+            .ok_or_else(|| Error::SignedOut(redact(&self.base_url)))?;
         let opts = HttpOptions {
             insecure_tls: self.insecure_tls,
             ..HttpOptions::default()
@@ -548,12 +534,13 @@ impl MediaBrowserSource {
                 let mut auth = lock(&self.auth);
                 *auth = None;
             }
-            if self.credentials.is_some() {
-                self.authenticate()?;
-                let (client, _) = self.client()?;
-                let reply = client.request(method, &url, headers, body, JSON_LIMIT)?;
-                return reply.error_for_status(&url);
+            if self.credentials.is_none() {
+                return Err(Error::SignedOut(redact(&self.base_url)));
             }
+            self.authenticate()?;
+            let (client, _) = self.client()?;
+            let reply = client.request(method, &url, headers, body, JSON_LIMIT)?;
+            return reply.error_for_status(&url);
         }
         reply.error_for_status(&url)
     }
@@ -738,60 +725,6 @@ impl MediaBrowserSource {
         Ok(self.quick_connect_poll_auth(secret)?.is_some())
     }
 
-    /// Reports that playback of an item has started.
-    pub fn report_playback_start(&self, item_id: &str) -> Result<()> {
-        let id = decode_location(item_id)
-            .map(|(_, id)| id)
-            .unwrap_or(item_id);
-        let body = serde_json::json!({
-            "ItemId": id,
-            "PlayMethod": "DirectPlay",
-            "CanSeek": true,
-        });
-        if let Err(e) = self.api_post_json("/Sessions/Playing", &body) {
-            log::debug!("failed to report playback start for {id}: {e}");
-        }
-        Ok(())
-    }
-
-    /// Reports current playback position (call every ~10s).
-    pub fn report_playback_progress(
-        &self,
-        item_id: &str,
-        position_secs: f64,
-        is_paused: bool,
-    ) -> Result<()> {
-        let id = decode_location(item_id)
-            .map(|(_, id)| id)
-            .unwrap_or(item_id);
-        let body = serde_json::json!({
-            "ItemId": id,
-            "PositionTicks": seconds_to_ticks(position_secs),
-            "IsPaused": is_paused,
-            "PlayMethod": "DirectPlay",
-            "CanSeek": true,
-        });
-        if let Err(e) = self.api_post_json("/Sessions/Playing/Progress", &body) {
-            log::debug!("failed to report playback progress for {id}: {e}");
-        }
-        Ok(())
-    }
-
-    /// Reports that playback has stopped.
-    pub fn report_playback_stopped(&self, item_id: &str, position_secs: f64) -> Result<()> {
-        let id = decode_location(item_id)
-            .map(|(_, id)| id)
-            .unwrap_or(item_id);
-        let body = serde_json::json!({
-            "ItemId": id,
-            "PositionTicks": seconds_to_ticks(position_secs),
-        });
-        if let Err(e) = self.api_post_json("/Sessions/Playing/Stopped", &body) {
-            log::debug!("failed to report playback stopped for {id}: {e}");
-        }
-        Ok(())
-    }
-
     /// Returns the current access token and user ID if authenticated.
     pub fn auth_credentials(&self) -> Option<(String, String)> {
         let auth = lock(&self.auth);
@@ -899,6 +832,45 @@ impl Source for MediaBrowserSource {
             video.clone()
         };
         Ok(Sidecars::from_entry(&full))
+    }
+
+    fn watch_session(&self, video: &Entry) -> Option<WatchSession> {
+        let id = item_id(&video.location).ok()?;
+        Some(WatchSession::new(id, video.name.clone(), None))
+    }
+
+    /// The server's own playback reports: started, progress (with what
+    /// changed) and stopped, which sets the resume point or marks the item
+    /// played.
+    fn report_watch(&self, session: &WatchSession, event: WatchEvent) -> Result<()> {
+        let mut body = serde_json::json!({
+            "ItemId": session.item,
+            "PlaySessionId": session.id,
+            "PositionTicks": seconds_to_ticks(event.position),
+            "IsPaused": event.paused,
+            "PlaybackRate": event.speed,
+            "CanSeek": true,
+            "PlayMethod": "DirectPlay",
+        });
+        let path = match event.kind {
+            WatchKind::Start => "/Sessions/Playing",
+            WatchKind::Stop => "/Sessions/Playing/Stopped",
+            kind => {
+                body["EventName"] = match kind {
+                    WatchKind::Pause => "Pause",
+                    WatchKind::Resume => "Unpause",
+                    WatchKind::Speed => "PlaybackRateChange",
+                    _ => "TimeUpdate",
+                }
+                .into();
+                "/Sessions/Playing/Progress"
+            }
+        };
+        self.api_post_json(path, &body)
+    }
+
+    fn as_media_browser(&self) -> Option<&MediaBrowserSource> {
+        Some(self)
     }
 }
 
@@ -1148,12 +1120,24 @@ mod tests {
                         {
                             "Type": "Subtitle",
                             "Index": 2,
-                            "Codec": "subrip"
+                            "Codec": "subrip",
+                            "Language": "ara"
                         },
                         {
                             "Type": "Subtitle",
                             "Index": 3,
-                            "Codec": "ass"
+                            "Codec": "ass",
+                            "Language": "eng",
+                            "IsExternal": true,
+                            "Path": "/media/demo_180_sbs.en.ass"
+                        },
+                        {
+                            "Type": "Subtitle",
+                            "Index": 4,
+                            "Codec": "subrip",
+                            "Language": "ger",
+                            "IsForced": true,
+                            "IsExternal": true
                         }
                     ]
                 }
@@ -1180,14 +1164,26 @@ mod tests {
         assert_eq!(entry.duration, Some(600.0));
         assert_eq!(entry.size, Some(104857600));
         assert!(entry.format.is_some());
-        assert_eq!(entry.subtitles.len(), 2);
+        // The embedded Arabic track comes with the file, not as a download.
+        let subs: Vec<_> = entry
+            .subtitles
+            .iter()
+            .map(|s| (s.location.as_str(), s.name.as_str(), s.language.as_deref()))
+            .collect();
         assert_eq!(
-            entry.subtitles[0],
-            "http://server:8096/Videos/item100/ms1/Subtitles/2/Stream.subrip"
-        );
-        assert_eq!(
-            entry.subtitles[1],
-            "http://server:8096/Videos/item100/ms1/Subtitles/3/Stream.ass"
+            subs,
+            [
+                (
+                    "http://server:8096/Videos/item100/ms1/Subtitles/3/Stream.ass",
+                    "demo_180_sbs.en.ass",
+                    Some("eng")
+                ),
+                (
+                    "http://server:8096/Videos/item100/ms1/Subtitles/4/Stream.subrip",
+                    "Stream.subrip",
+                    Some("ger.forced")
+                ),
+            ]
         );
         assert_eq!(entry.markers.len(), 2);
         assert_eq!(entry.markers[0], (0.0, "Intro".to_string()));

@@ -1,16 +1,33 @@
 //! Long-lived subsystems: media sources, the library and its metadata
 //! worker, haptic devices and the remote-control servers.
 
+use crate::drives::REMOVABLE_ROOT;
 use crate::settings::{HapticDeviceConfig, Settings};
 use fp_core::ByteSource;
 use fp_core::source::FileSource;
+use fp_core::sync::{read, write};
 use fp_haptics::HapticsEngine;
 use fp_library::Library;
 use fp_remote::{RemoteEvent, RemoteHub, RemoteItem, RemoteLibrary};
 use fp_sources::{Source, SourceConfig};
+use ring::rand::SecureRandom;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+
+/// A configured source that could not be built.
+#[derive(Debug)]
+pub struct SourceError {
+    pub id: String,
+    pub name: String,
+    pub error: fp_sources::Error,
+}
+
+impl std::fmt::Display for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.name, self.error)
+    }
+}
 
 /// Resolves locations to readable byte sources: local paths directly,
 /// everything else through the configured source that owns it.
@@ -27,7 +44,7 @@ impl Opener {
         }
     }
 
-    pub fn set_sources(&self, configs: &[SourceConfig]) -> Vec<String> {
+    pub fn set_sources(&self, configs: &[SourceConfig]) -> Vec<SourceError> {
         let mut map = HashMap::new();
         let mut errors = Vec::new();
         for c in builtin_sources().iter().chain(configs) {
@@ -35,17 +52,19 @@ impl Opener {
                 Ok(s) => {
                     map.insert(c.id().to_string(), Arc::<dyn Source>::from(s));
                 }
-                Err(e) => errors.push(format!("{}: {e}", c.name())),
+                Err(error) => errors.push(SourceError {
+                    id: c.id().to_string(),
+                    name: c.name().to_string(),
+                    error,
+                }),
             }
         }
-        if let Ok(mut s) = self.sources.write() {
-            *s = map;
-        }
+        *write(&self.sources) = map;
         errors
     }
 
     pub fn source(&self, id: &str) -> Option<Arc<dyn Source>> {
-        self.sources.read().ok()?.get(id).cloned()
+        read(&self.sources).get(id).cloned()
     }
 
     /// Opens `location`, preferring the source `source_id` when given.
@@ -55,7 +74,7 @@ impl Opener {
         location: &str,
     ) -> Result<Arc<dyn ByteSource>, String> {
         if location.starts_with('/') {
-            let path = std::path::Path::new(location);
+            let path = Path::new(location);
             if !path.exists() && location.starts_with(&format!("{REMOVABLE_ROOT}/")) {
                 return Err(
                     "This video is on a microSD card or USB drive that is not inserted.".into(),
@@ -72,11 +91,7 @@ impl Opener {
             return src.open(location).map_err(|e| e.to_string());
         }
         // Try sources whose scheme fits, then plain HTTP.
-        let sources: Vec<Arc<dyn Source>> = self
-            .sources
-            .read()
-            .map(|s| s.values().cloned().collect())
-            .unwrap_or_default();
+        let sources: Vec<Arc<dyn Source>> = read(&self.sources).values().cloned().collect();
         let mut last = String::from("no source can open this location");
         for s in sources {
             match s.open(location) {
@@ -84,7 +99,7 @@ impl Opener {
                 Err(e) => last = e.to_string(),
             }
         }
-        if location.starts_with("http://") || location.starts_with("https://") {
+        if fp_sources::urlutil::is_http_url(location) {
             return self
                 .http
                 .open(location)
@@ -132,156 +147,13 @@ pub fn builtin_sources() -> Vec<SourceConfig> {
     out
 }
 
+/// The source id the library's folder scans record videos under.
+pub const LIBRARY_SOURCE: &str = "local";
 pub const HOME_SOURCE: &str = "device-home";
 pub const REMOVABLE_SOURCE: &str = "device-removable";
 /// The headset as one place to browse: its indexed videos, and the home
 /// folder and removable drives (not a [`Source`] of its own).
 pub const LOCAL_HUB: &str = "on-device";
-/// Where SteamOS (udisks) mounts microSD cards and USB drives:
-/// `/run/media/deck/<label>` (older images: `/run/media/<device>`).
-pub const REMOVABLE_ROOT: &str = "/run/media";
-
-/// Mount points of removable drives, from a `/proc/mounts` listing.
-pub fn parse_removable_mounts(mounts: &str) -> Vec<PathBuf> {
-    let prefix = format!("{REMOVABLE_ROOT}/");
-    let mut out: Vec<PathBuf> = mounts
-        .lines()
-        .filter_map(|l| l.split_whitespace().nth(1))
-        .map(unescape_mount)
-        .filter(|p| p.starts_with(&prefix))
-        .map(PathBuf::from)
-        .collect();
-    out.sort();
-    out.dedup();
-    out
-}
-
-/// `/proc/mounts` writes spaces and a few other bytes as `\ooo` octal.
-fn unescape_mount(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        let octal = b[i] == b'\\'
-            && i + 3 < b.len()
-            && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c));
-        if octal {
-            out.push((b[i + 1] - b'0') * 64 + (b[i + 2] - b'0') * 8 + (b[i + 3] - b'0'));
-            i += 4;
-        } else {
-            out.push(b[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Currently mounted microSD cards and USB drives.
-pub fn removable_mounts() -> Vec<PathBuf> {
-    std::fs::read_to_string("/proc/mounts")
-        .map(|m| parse_removable_mounts(&m))
-        .unwrap_or_default()
-}
-
-/// A drive partition SteamOS left unmounted that FramePlayerX mounts itself.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UnmountedDrive {
-    /// Kernel name, e.g. `mmcblk0p1`.
-    pub device: String,
-    pub fs_type: String,
-}
-
-/// Whether FramePlayerX should mount this partition. The Frame's SteamOS
-/// automounts only ext4 microSD cards (Steam libraries need symlinks) and
-/// no USB drives at all (`sd*` also names its internal OS slots), so a card
-/// formatted on Windows is never mounted. `sys_path` is the resolved
-/// `/sys/class/block/<device>` link; USB drives are told apart from the
-/// internal UFS disks by it.
-pub fn should_mount(device: &str, sys_path: &str, fs_type: &str) -> bool {
-    const FOREIGN: [&str; 4] = ["exfat", "vfat", "ntfs", "ntfs3"];
-    if device.starts_with("mmcblk") {
-        // ext4 cards are SteamOS's: it checks them before mounting.
-        FOREIGN.contains(&fs_type)
-    } else {
-        sys_path.contains("/usb") && (FOREIGN.contains(&fs_type) || fs_type == "ext4")
-    }
-}
-
-/// `ID_FS_TYPE` from a udev database record (`/run/udev/data/b<maj>:<min>`).
-pub fn udev_fs_type(record: &str) -> Option<&str> {
-    record
-        .lines()
-        .find_map(|l| l.strip_prefix("E:ID_FS_TYPE="))
-        .filter(|t| !t.is_empty())
-}
-
-/// microSD cards and USB drives with a readable filesystem that nothing
-/// has mounted.
-pub fn unmounted_drives() -> Vec<UnmountedDrive> {
-    let mounted = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
-    let mounted: Vec<&str> = mounted
-        .lines()
-        .filter_map(|l| l.split_whitespace().next())
-        .collect();
-    let Ok(dir) = std::fs::read_dir("/sys/class/block") else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for e in dir.flatten() {
-        let device = e.file_name().to_string_lossy().into_owned();
-        if !device.starts_with("mmcblk") && !device.starts_with("sd") {
-            continue;
-        }
-        let sys_path = std::fs::canonicalize(e.path())
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if !device.starts_with("mmcblk") && !sys_path.contains("/usb") {
-            continue;
-        }
-        let Ok(devnum) = std::fs::read_to_string(e.path().join("dev")) else {
-            continue;
-        };
-        let Ok(record) = std::fs::read_to_string(format!("/run/udev/data/b{}", devnum.trim()))
-        else {
-            continue;
-        };
-        let Some(fs_type) = udev_fs_type(&record) else {
-            continue;
-        };
-        if should_mount(&device, &sys_path, fs_type)
-            && !mounted.contains(&format!("/dev/{device}").as_str())
-        {
-            out.push(UnmountedDrive {
-                fs_type: fs_type.to_string(),
-                device,
-            });
-        }
-    }
-    out.sort_by(|a, b| a.device.cmp(&b.device));
-    out
-}
-
-/// Mounts a drive through udisks, as SteamOS does, under
-/// `/run/media/<user>/<label>`. The Frame's polkit rules let the logged-in
-/// user do this without a password. Blocking: call from a job thread.
-pub fn mount_drive(drive: &UnmountedDrive) -> Result<PathBuf, String> {
-    let out = std::process::Command::new("udisksctl")
-        .args(["mount", "--no-user-interaction", "-o", "noatime", "-b"])
-        .arg(format!("/dev/{}", drive.device))
-        .output()
-        .map_err(|e| format!("udisksctl: {e}"))?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(err.trim().to_string());
-    }
-    // "Mounted /dev/mmcblk0p1 at /run/media/steamos/SDCARD"
-    text.trim()
-        .split_once(" at ")
-        .map(|(_, p)| PathBuf::from(p.trim_end_matches('.')))
-        .ok_or_else(|| format!("unexpected udisksctl output: {}", text.trim()))
-}
-
 /// Video folders worth offering for the library that are not in it yet
 /// (removable drives are indexed automatically).
 pub fn suggested_folders(existing: &[PathBuf]) -> Vec<PathBuf> {
@@ -303,14 +175,23 @@ pub struct Services {
     pub worker_events: Option<std::sync::mpsc::Receiver<fp_library::WorkerEvent>>,
     /// Holds the metadata worker off (see [`crate::prober::FfmpegProber`]).
     worker_busy: Arc<std::sync::atomic::AtomicBool>,
-    pub haptics: HapticsEngine,
-    pub haptic_devices: Vec<(
-        HapticDeviceConfig,
-        Option<fp_haptics::DeviceId>,
-        Option<String>,
-    )>,
+    /// Plays scripts on the devices; only while haptics are turned on.
+    haptics: Option<HapticsEngine>,
+    /// The configured devices that were tried, in the order they answered.
+    haptic_devices: Vec<HapticDeviceSlot>,
     pub remote: Option<RemoteHub>,
     pub remote_error: Option<String>,
+    /// Sends watch sync reports to servers.
+    pub watch: crate::watch::Reports,
+}
+
+/// A configured haptic device and how connecting it went.
+pub struct HapticDeviceSlot {
+    pub config: HapticDeviceConfig,
+    /// Its id in the haptics engine, once connected.
+    pub id: Option<fp_haptics::DeviceId>,
+    /// Why it could not connect.
+    pub error: Option<String>,
 }
 
 /// Library access for the web remote.
@@ -348,8 +229,41 @@ impl RemoteLibrary for WebLibrary {
     }
 }
 
+/// This installation's id for servers that tell devices apart, made once
+/// and kept in `path`: Jellyfin and Emby sign a device out when another
+/// installation signs in with the same id.
+fn device_id(path: &Path) -> String {
+    if let Ok(saved) = std::fs::read_to_string(path) {
+        let id = saved.trim();
+        let valid = |c: char| c.is_ascii_alphanumeric() || c == '-';
+        if !id.is_empty() && id.len() <= 64 && id.chars().all(valid) {
+            return id.to_string();
+        }
+    }
+    let mut bytes = [0u8; 16];
+    if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        bytes = (nanos ^ u128::from(std::process::id())).to_le_bytes();
+    }
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let id = format!("frameplayerx-{hex}");
+    let saved = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(path, &id));
+    if let Err(e) = saved {
+        log::warn!("cannot keep this device's id in {}: {e}", path.display());
+    }
+    id
+}
+
 impl Services {
     pub fn new(settings: &Settings, library: Library) -> Services {
+        fp_sources::mediabrowser::set_device_id(device_id(
+            &fp_core::dirs::config_dir().join("device-id"),
+        ));
         let opener = Arc::new(Opener::new());
         let source_configs = match fp_sources::load_configs(&Settings::sources_path()) {
             Ok(c) => c,
@@ -363,8 +277,6 @@ impl Services {
         for e in opener.set_sources(&source_configs) {
             log::warn!("source unavailable: {e}");
         }
-        let haptics = HapticsEngine::new();
-        haptics.set_settings(settings.haptics.clone());
         let mut s = Services {
             library,
             opener,
@@ -372,11 +284,13 @@ impl Services {
             worker: None,
             worker_events: None,
             worker_busy: Default::default(),
-            haptics,
+            haptics: None,
             haptic_devices: Vec::new(),
             remote: None,
             remote_error: None,
+            watch: crate::watch::Reports::start(),
         };
+        s.set_haptics(settings);
         s.start_worker();
         s.apply_remote(&settings.remote);
         s
@@ -416,8 +330,13 @@ impl Services {
         }
     }
 
+    /// The configuration of source `id`, if the user added it.
+    pub fn source_config(&self, id: &str) -> Option<&SourceConfig> {
+        self.source_configs.iter().find(|c| c.id() == id)
+    }
+
     /// Persists the source list (mode 0600) and rebuilds the sources.
-    pub fn set_sources(&mut self, configs: Vec<SourceConfig>) -> Vec<String> {
+    pub fn set_sources(&mut self, configs: Vec<SourceConfig>) -> Vec<SourceError> {
         if let Err(e) = fp_sources::save_configs(&Settings::sources_path(), &configs) {
             log::error!("saving sources: {e}");
         }
@@ -428,35 +347,115 @@ impl Services {
 
     /// Connects one haptic device (blocking: call from a job thread).
     pub fn connect_device(cfg: &HapticDeviceConfig) -> Result<Box<dyn fp_haptics::Device>, String> {
+        use fp_haptics::{buttplug, handy, tcode};
+        fn boxed<D: fp_haptics::Device + 'static>(
+            r: Result<D, impl std::fmt::Display>,
+        ) -> Result<Box<dyn fp_haptics::Device>, String> {
+            r.map(|d| Box::new(d) as Box<dyn fp_haptics::Device>)
+                .map_err(|e| e.to_string())
+        }
         match cfg {
             HapticDeviceConfig::Tcode { endpoint } => {
-                let endpoint =
-                    fp_haptics::tcode::TcodeEndpoint::parse(endpoint).map_err(|e| e.to_string())?;
-                fp_haptics::tcode::TcodeDevice::connect(fp_haptics::tcode::TcodeConfig {
+                let endpoint = tcode::TcodeEndpoint::parse(endpoint).map_err(|e| e.to_string())?;
+                boxed(tcode::TcodeDevice::connect(tcode::TcodeConfig {
                     endpoint,
                     ..Default::default()
-                })
-                .map(|d| Box::new(d) as Box<dyn fp_haptics::Device>)
-                .map_err(|e| e.to_string())
+                }))
             }
-            HapticDeviceConfig::Buttplug { url } => fp_haptics::buttplug::ButtplugDevice::connect(
-                fp_haptics::buttplug::ButtplugConfig {
+            HapticDeviceConfig::Buttplug { url } => boxed(buttplug::ButtplugDevice::connect(
+                buttplug::ButtplugConfig {
                     url: url.clone(),
                     client_name: "FramePlayerX".into(),
                     ..Default::default()
                 },
-            )
-            .map(|d| Box::new(d) as Box<dyn fp_haptics::Device>)
-            .map_err(|e| e.to_string()),
+            )),
             HapticDeviceConfig::Handy { key } => {
-                fp_haptics::handy::HandyDevice::connect(fp_haptics::handy::HandyConfig {
+                boxed(handy::HandyDevice::connect(handy::HandyConfig {
                     connection_key: key.clone(),
                     ..Default::default()
-                })
-                .map(|d| Box::new(d) as Box<dyn fp_haptics::Device>)
-                .map_err(|e| e.to_string())
+                }))
             }
         }
+    }
+
+    /// Starts the haptics engine when haptics are turned on and stops it,
+    /// with every device, when they are turned off; applies their settings.
+    pub fn set_haptics(&mut self, settings: &Settings) {
+        if !settings.haptics_enabled {
+            self.remove_devices();
+            self.haptics = None;
+            return;
+        }
+        if self.haptics.is_none() {
+            match HapticsEngine::with_clock(
+                Arc::new(fp_haptics::engine::SystemClock),
+                fp_haptics::engine::DEFAULT_TICK,
+            ) {
+                Ok(engine) => self.haptics = Some(engine),
+                Err(e) => log::error!("haptics engine: {e}"),
+            }
+        }
+        if let Some(h) = &self.haptics {
+            h.set_settings(settings.haptics.clone());
+        }
+    }
+
+    /// The haptics engine, while haptics are turned on.
+    pub fn haptics(&self) -> Option<&HapticsEngine> {
+        self.haptics.as_ref()
+    }
+
+    /// The connected devices' state, for the haptics settings.
+    pub fn haptic_statuses(&self) -> Vec<fp_haptics::DeviceStatus> {
+        self.haptics
+            .as_ref()
+            .map(HapticsEngine::devices)
+            .unwrap_or_default()
+    }
+
+    /// Records how connecting `config` went, replacing an earlier attempt
+    /// (and its device in the engine). A device that connects after
+    /// haptics were turned off is let go.
+    pub fn device_connected(
+        &mut self,
+        config: HapticDeviceConfig,
+        result: Result<Box<dyn fp_haptics::Device>, String>,
+    ) {
+        self.remove_device(&config);
+        let Some(engine) = &self.haptics else {
+            return;
+        };
+        let (id, error) = match result {
+            Ok(d) => (Some(engine.add_device(d)), None),
+            Err(e) => (None, Some(e)),
+        };
+        self.haptic_devices
+            .push(HapticDeviceSlot { config, id, error });
+    }
+
+    /// Disconnects `config`'s device and forgets how connecting it went.
+    pub fn remove_device(&mut self, config: &HapticDeviceConfig) {
+        self.haptic_devices.retain(|s| {
+            let same = s.config == *config;
+            if same && let (Some(id), Some(h)) = (s.id, &self.haptics) {
+                h.remove_device(id);
+            }
+            !same
+        });
+    }
+
+    /// Disconnects every device.
+    pub fn remove_devices(&mut self) {
+        for s in self.haptic_devices.drain(..) {
+            if let (Some(id), Some(h)) = (s.id, &self.haptics) {
+                h.remove_device(id);
+            }
+        }
+    }
+
+    /// How connecting `config` went; `None` while it is being tried.
+    pub fn haptic_device(&self, config: &HapticDeviceConfig) -> Option<&HapticDeviceSlot> {
+        self.haptic_devices.iter().find(|s| s.config == *config)
     }
 
     /// Starts or stops the remote-control servers to match `config`.
@@ -503,43 +502,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn removable_mounts_from_proc() {
-        let m = "/dev/nvme0n1p8 /home ext4 rw 0 0\n\
-                 /dev/mmcblk0p1 /run/media/deck/SD\\040Card ext4 rw,nosuid 0 0\n\
-                 /dev/sda1 /run/media/deck/USB exfat rw 0 0\n\
-                 /dev/mmcblk0p1 /run/media/mmcblk0p1 ext4 rw 0 0\n\
-                 tmpfs /run/user/1000 tmpfs rw 0 0\n";
-        assert_eq!(
-            parse_removable_mounts(m),
-            vec![
-                PathBuf::from("/run/media/deck/SD Card"),
-                PathBuf::from("/run/media/deck/USB"),
-                PathBuf::from("/run/media/mmcblk0p1")
-            ]
+    fn device_id_is_made_once_and_kept() {
+        let dir = std::env::temp_dir().join(format!("fpx-device-id-{}", std::process::id()));
+        let path = dir.join("config").join("device-id");
+        let first = device_id(&path);
+        assert!(
+            first.starts_with("frameplayerx-") && first.len() == 45,
+            "{first}"
         );
-    }
-
-    #[test]
-    fn mounts_what_steamos_leaves_alone() {
-        let card = "/sys/devices/platform/soc@0/8804000.mmc/mmc_host/mmc0/mmc0:d555/block/mmcblk0/mmcblk0p1";
-        let usb = "/sys/devices/platform/soc@0/a600000.usb/xhci-hcd.1.auto/usb1/1-1/1-1:1.0/host0/target0:0:0/0:0:0:0/block/sde/sde1";
-        let ufs =
-            "/sys/devices/platform/soc@0/1d84000.ufshc/host0/target0:0:0/0:0:0:0/block/sda/sda8";
-        assert!(should_mount("mmcblk0p1", card, "exfat"));
-        assert!(should_mount("mmcblk0p1", card, "vfat"));
-        assert!(!should_mount("mmcblk0p1", card, "ext4"));
-        assert!(should_mount("sde1", usb, "exfat"));
-        assert!(should_mount("sde1", usb, "ext4"));
-        assert!(!should_mount("sda8", ufs, "ext4"));
-        assert!(!should_mount("sda1", ufs, "vfat"));
-        assert!(!should_mount("sde1", usb, "swap"));
-    }
-
-    #[test]
-    fn fs_type_from_udev_record() {
-        let r = "S:disk/by-label/SDCARD\nE:ID_FS_LABEL=SDCARD\nE:ID_FS_TYPE=exfat\nE:ID_FS_USAGE=filesystem\n";
-        assert_eq!(udev_fs_type(r), Some("exfat"));
-        assert_eq!(udev_fs_type("E:ID_FS_TYPE=\n"), None);
-        assert_eq!(udev_fs_type("E:ID_PART_TABLE_TYPE=dos\n"), None);
+        assert_eq!(device_id(&path), first);
+        // Another installation gets its own.
+        assert_ne!(device_id(&dir.join("other")), first);
+        std::fs::write(&path, "not an id!\n").unwrap();
+        assert_ne!(device_id(&path), "not an id!");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

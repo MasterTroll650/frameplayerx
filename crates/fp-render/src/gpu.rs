@@ -2,6 +2,7 @@
 
 use crate::{Error, Result, VkContext};
 use ash::vk;
+use fp_core::sync::lock;
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
 use std::ffi::CString;
 use std::mem::ManuallyDrop;
@@ -169,7 +170,7 @@ impl Gpu {
     }
 
     pub(crate) fn alloc(&self) -> std::sync::MutexGuard<'_, Allocator> {
-        self.allocator.lock().unwrap_or_else(|e| e.into_inner())
+        lock(&self.allocator)
     }
 
     pub fn wait_idle(&self) {

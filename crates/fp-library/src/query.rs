@@ -27,9 +27,7 @@ pub enum Sort {
     LastPlayed,
     /// Duration (unknown sorts last in either direction).
     Duration,
-    /// Star rating.
     Rating,
-    /// Times watched.
     PlayCount,
     /// Shuffled, stable for a given [`Query::random_seed`] so paging works.
     Random,
@@ -46,7 +44,6 @@ impl Sort {
     }
 }
 
-/// Sort direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortDirection {
@@ -81,7 +78,6 @@ pub struct Query {
     pub text: String,
     /// Tags that must all be present (case-insensitive).
     pub tags: Vec<String>,
-    /// Only favourites.
     pub favorites_only: bool,
     /// Only videos played at least once (the watch history).
     pub watched_only: bool,
@@ -100,13 +96,11 @@ pub struct Query {
     pub sources: Vec<String>,
     /// Also return videos the last scan could not find.
     pub include_missing: bool,
-    /// Sort key.
     pub sort: Sort,
     /// Sort direction; `None` uses [`Sort::default_direction`].
     pub direction: Option<SortDirection>,
     /// Seed for [`Sort::Random`].
     pub random_seed: u64,
-    /// Maximum number of results.
     pub limit: Option<usize>,
     /// Results to skip (paging).
     pub offset: usize,
@@ -172,10 +166,10 @@ fn filter_sql(q: &Query, hidden: &Hidden) -> (String, Vec<Value>) {
         Some(StereoFilter::Mono) => clauses.push("m.stereo = 'mono'".into()),
         Some(StereoFilter::Stereo) => clauses.push("m.stereo <> 'mono'".into()),
         Some(StereoFilter::SideBySide) => {
-            clauses.push("m.stereo IN ('side_by_side', 'half_side_by_side')".into())
+            clauses.push("m.stereo IN ('side_by_side', 'half_side_by_side')".into());
         }
         Some(StereoFilter::TopBottom) => {
-            clauses.push("m.stereo IN ('top_bottom', 'half_top_bottom')".into())
+            clauses.push("m.stereo IN ('top_bottom', 'half_top_bottom')".into());
         }
     }
     if let Some(min) = q.min_duration.filter(|v| v.is_finite()) {

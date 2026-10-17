@@ -11,11 +11,12 @@
 //!   [`std::io::ErrorKind::Unsupported`].
 //! - TLS is rustls with the ring provider and webpki roots.
 
-use crate::cache::{CacheOptions, CacheStats, CachedSource, RangeFetch, lock};
+use crate::cache::{CacheOptions, CacheStats, CachedSource, RangeFetch};
 use crate::config::Credentials;
 use crate::error::{Error, Result};
 use crate::urlutil::{basic_auth_value, redact, split_credentials};
 use fp_core::ByteSource;
+use fp_core::sync::lock;
 use std::io::{self, Read};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -62,11 +63,9 @@ impl Default for HttpOptions {
 /// A complete HTTP response with a bounded body.
 #[derive(Clone, Debug)]
 pub struct HttpReply {
-    /// Status code.
     pub status: u16,
     /// Headers with lower-case names.
     pub headers: Vec<(String, String)>,
-    /// Response body.
     pub body: Vec<u8>,
 }
 

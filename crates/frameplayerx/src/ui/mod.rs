@@ -16,6 +16,7 @@ pub mod player;
 pub mod premium;
 pub mod settings;
 pub mod sources;
+pub mod subtitle_text;
 pub mod theme;
 pub mod thumbs;
 pub mod widgets;
@@ -151,6 +152,12 @@ pub enum Action {
     FeedScene {
         source: String,
         url: String,
+    },
+    /// Marks or unmarks a feed scene as a favourite on the server.
+    FeedFavorite {
+        source: String,
+        url: String,
+        on: bool,
     },
     DiscoverDlna,
     /// Request a Quick Connect code from a Jellyfin/Emby server.
@@ -345,7 +352,7 @@ impl LibraryGrid {
     pub fn local() -> LibraryGrid {
         let base = Query {
             sources: [
-                "local",
+                crate::services::LIBRARY_SOURCE,
                 crate::services::HOME_SOURCE,
                 crate::services::REMOVABLE_SOURCE,
             ]
@@ -406,14 +413,31 @@ pub struct SourceForm {
     pub username: String,
     pub password: String,
     pub insecure_tls: bool,
+    /// Signing in to a Jellyfin/Emby server with Quick Connect rather than a
+    /// password.
     pub use_quick_connect: bool,
-    pub qc_loading: bool,
-    pub qc_code: Option<String>,
-    pub qc_secret: Option<String>,
-    pub qc_token: Option<String>,
-    pub qc_user_id: Option<String>,
-    pub qc_error: Option<String>,
-    pub qc_last_poll: Option<std::time::Instant>,
+    pub quick_connect: QuickConnect,
+}
+
+/// Signing in to a Jellyfin/Emby server with Quick Connect.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum QuickConnect {
+    #[default]
+    Idle,
+    /// Asking the server for a pairing code.
+    Requesting,
+    /// Showing `code` until it is approved in another app; the server is
+    /// asked with `secret` every few seconds.
+    Waiting {
+        code: String,
+        secret: String,
+        polled: std::time::Instant,
+    },
+    Authorized {
+        token: String,
+        user_id: Option<String>,
+    },
+    Failed(String),
 }
 
 impl Default for SourceForm {
@@ -427,13 +451,7 @@ impl Default for SourceForm {
             password: String::new(),
             insecure_tls: false,
             use_quick_connect: true,
-            qc_loading: false,
-            qc_code: None,
-            qc_secret: None,
-            qc_token: None,
-            qc_user_id: None,
-            qc_error: None,
-            qc_last_poll: None,
+            quick_connect: QuickConnect::Idle,
         }
     }
 }
@@ -472,6 +490,8 @@ pub struct UiState {
     pub settings_tab: SettingsTab,
     /// The controller input whose choices are open in Settings > Controller.
     pub remap_open: Option<RemapSlot>,
+    /// The subtitle languages are listed in Settings > Playback.
+    pub languages_open: bool,
     pub history: LibraryGrid,
     /// "Clear history" was pressed once: pressing again within a few
     /// seconds clears it.
@@ -524,6 +544,7 @@ impl Default for UiState {
             screen: Screen::Home,
             settings_tab: SettingsTab::Playback,
             remap_open: None,
+            languages_open: false,
             history: LibraryGrid::history(),
             clear_armed: None,
             home: None,
@@ -582,6 +603,30 @@ impl UiState {
     /// The folder listing on screen, if any.
     pub fn folder_mut(&mut self) -> Option<&mut Browse> {
         self.source.as_mut().and_then(SourceView::folder_mut)
+    }
+
+    /// The Jellyfin/Emby page of `source`, if that is what is open.
+    pub fn jellyfin_page(&mut self, source: &str) -> Option<&mut jellyfin::JellyfinView> {
+        match self.source.as_mut()? {
+            SourceView {
+                source: s,
+                page: SourcePage::Jellyfin(j),
+                ..
+            } if s == source => Some(j),
+            _ => None,
+        }
+    }
+
+    /// The scene feed page of `source`, if that is what is open.
+    pub fn feed_page(&mut self, source: &str) -> Option<&mut feeds::FeedView> {
+        match self.source.as_mut()? {
+            SourceView {
+                source: s,
+                page: SourcePage::Feed(f),
+                ..
+            } if s == source => Some(f),
+            _ => None,
+        }
     }
 
     /// One step back in the source browser; leaving it returns to the
@@ -725,7 +770,12 @@ mod tests {
         assert_eq!(q.projections, [fp_library::ProjectionKind::Equirect180]);
         let local = LibraryGrid::local().query();
         assert!(!local.watched_only);
-        assert!(local.sources.iter().any(|s| s == "local"));
+        assert!(
+            local
+                .sources
+                .iter()
+                .any(|s| s == crate::services::LIBRARY_SOURCE)
+        );
         assert_eq!(local.sort, fp_library::Sort::Added);
     }
 }

@@ -19,7 +19,7 @@ or your network.
 **On the headset, in Desktop Mode (no PC).** Open this page in the
 headset's browser and press the button to download the installer:
 
-<a href="https://github.com/remotesojourner/frameplayerx/releases/latest/download/Install-FramePlayerX.desktop"><img src="../assets/install-button.svg" alt="Download the installer: Install-FramePlayerX.desktop" width="300" /></a>
+<a href="https://github.com/remotesojourner/frameplayerx/releases/latest/download/Install-FramePlayerX.desktop"><img src="../assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
 
 Open `Install-FramePlayerX.desktop` from your Downloads folder and confirm
 when Desktop Mode asks whether to trust it. A terminal window opens and:
@@ -44,8 +44,8 @@ FrameDrop or Valve's SteamOS Devkit Client.
 **With FrameDrop or Frame Control, from a PC.** With the app running on
 your PC and the headset paired, press the button in your PC's browser:
 
-<a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fremotesojourner%2Fframeplayerx%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="../assets/framedrop-button.svg" alt="Install with FrameDrop" width="253" /></a>
-<a href="https://remotesojourner.github.io/frameplayerx/frame-control.html"><img src="../assets/frame-control-button.svg" alt="Install with Frame Control" width="266" /></a>
+<a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fremotesojourner%2Fframeplayerx%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="../assets/framedrop-button.svg" alt="Install with FrameDrop" width="240" /></a>
+<a href="https://remotesojourner.github.io/frameplayerx/frame-control.html"><img src="../assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
 
 GitHub doesn't keep links that open apps, so the Frame Control button opens a
 small page that opens Frame Control. If that doesn't work, paste this link
@@ -107,7 +107,7 @@ left off. Your videos are never touched.
 **On the headset, in Desktop Mode (no PC).** Open this page in the
 headset's browser and press the button to download the uninstaller:
 
-<a href="https://github.com/remotesojourner/frameplayerx/releases/latest/download/Uninstall-FramePlayerX.desktop"><img src="../assets/uninstall-button.svg" alt="Download the uninstaller: Uninstall-FramePlayerX.desktop" width="276" /></a>
+<a href="https://github.com/remotesojourner/frameplayerx/releases/latest/download/Uninstall-FramePlayerX.desktop"><img src="../assets/uninstall-button.svg" alt="Uninstall in Desktop Mode" width="240" /></a>
 
 Open `Uninstall-FramePlayerX.desktop` from your Downloads folder and
 confirm when Desktop Mode asks whether to trust it. A terminal window
@@ -164,7 +164,7 @@ that pairing, you can also delete `~/.ssh/id_rsa_frame_devkit` and
 | `~/Videos`, `~/Downloads` | Found automatically (Home › On this device) |
 | microSD card / USB drive (exFAT from a PC, or ext4) | Found automatically when inserted (Settings › On this device) |
 | Other folders on the headset | Settings › On this device › Add folder |
-| XBVR, Stash and other DeoVR / HereSphere servers | Sources › Add source › DeoVR feed or HereSphere API |
+| Any server with a DeoVR feed or HereSphere API | Sources › Add source › DeoVR feed or HereSphere API |
 | NAS / Windows share | Sources › Add source › SMB share (`smb://nas/videos`) |
 | Nextcloud and other WebDAV | Sources › Add source › WebDAV |
 | Jellyfin, Emby | Sources › Add source › Jellyfin / Emby (Quick Connect or password) |
@@ -191,8 +191,8 @@ videos, except those you watched or marked.
 | Source | What browsing it offers |
 |---|---|
 | On this device | **Videos**: everything found on the headset, its cards and drives, with search, format filters and sorting. **Folders**: the home folder and the drives as folders |
-| Jellyfin / Emby | Your libraries, *Continue watching*, *Next up* and the latest additions; a search of the whole server by title, as Jellyfin's own search shows it: a row each of movies, shows, collections and other videos, best matches first (episodes are found through their show); poster grids searched, sorted and filtered by the server (unwatched, in progress, favorites); series by season and episode; details with the story, cast and genres. Watched marks, favorites and resume points are the server's, and what you watch is reported back to it |
-| DeoVR feed / HereSphere API (XBVR, Stash) | The server's scene groups as chips over a grid of scenes; search the chosen group (or *All*) across titles, studios, performers and tags; order by title, date, rating or length; *Scripted* and *Favorites* filters. ⋯ opens a scene's details: description, performers and tags (tap one to see all their scenes), and chapters to start from. The page opens with the scenes from last time while the server sends the current list ("updating…" under the title) |
+| Jellyfin / Emby | Your libraries, *Continue watching*, *Next up* and the latest additions; a search of the whole server by title, as Jellyfin's own search shows it: a row each of movies, shows, collections and other videos, best matches first (episodes are found through their show); poster grids searched, sorted and filtered by the server (unwatched, in progress, favorites); series by season and episode; details with the story, cast and genres. Watched marks, favorites and resume points are the server's (see [Watch sync](#watch-sync-with-jellyfin-emby-and-heresphere)) |
+| DeoVR feed / HereSphere API | The server's scene groups as chips over a grid of scenes; search the chosen group (or *All*) across titles, studios, performers and tags; order by title, date, rating or length; a *Favorites* filter (and *Scripted*, with haptics on). ⋯ opens a scene's details: description, performers and tags (tap one to see all their scenes), chapters to start from, and ♡ to make it a favourite on a HereSphere API that takes favourites. The page opens with the scenes from last time while the server sends the current list ("updating…" under the title). A HereSphere API can also follow what you watch (see [Watch sync](#watch-sync-with-jellyfin-emby-and-heresphere)) |
 | SMB, WebDAV, HTTP folders, DLNA, local folders | Folders and files: search the folder you are in, order by name, date or size, *Play all* |
 
 ### Locking a source with a PIN
@@ -218,6 +218,31 @@ To lock one folder of a NAS, add that folder as its own source
 (`smb://nas/videos/private`) and lock it. Everything in it is then hidden
 everywhere, also when browsing a source for the whole share, and from the
 watch history even if it was played through that source.
+
+### Watch sync with Jellyfin, Emby and HereSphere
+
+These servers keep track of what you watch, and FramePlayerX keeps them in
+step with the headset:
+
+- **Jellyfin and Emby** hear when a video starts, pauses, resumes, jumps or
+  changes speed, where it is every 10 seconds, and where it stopped. The
+  server keeps the resume point, counts the play and marks the video
+  watched when you stop near the end; its dashboard shows it playing on the
+  headset. A video starts at the server's resume point, also when opened
+  from Watch history or Home, so you can carry on where you left off on
+  another device. ♡ and ✓ *Watched* on a Jellyfin page change the marks on
+  the server at once.
+- **HereSphere APIs** that ask for playback events get the ones HereSphere
+  itself sends (open, play, pause and close, with the position), from which
+  the server counts plays and keeps resume points. ♡ on a scene's page
+  makes it a favourite on a server that takes favourites.
+
+Reports go out in the background and in order. Quitting waits a few
+seconds for the last ones; one the server doesn't take (it is offline, or
+the sign-in expired) is noted in frameplayerx.log and not sent again.
+
+DeoVR feeds, DLNA, network shares and folders keep no watch state on the
+server: their resume points, favorites and ratings stay on the headset.
 
 ### microSD cards and USB drives (VR180 and everything else)
 
@@ -271,6 +296,33 @@ VC-1, MPEG-4, MPEG-2, ProRes. Audio: AAC, AC-3/E-AC-3, Opus, Vorbis, FLAC,
 MP3, DTS, TrueHD, PCM (Blu-ray and DVD LPCM too), and spatial (ambisonic)
 audio that follows your head.
 Subtitles: SRT, ASS/SSA, WebVTT, and embedded text or picture subtitles.
+
+### Subtitles
+
+Subtitles come from inside the video or from files beside it, named after
+it: `Movie.srt`, `Movie.en.srt`, `Movie.de.forced.ass`. Jellyfin and Emby
+servers offer the subtitle files they keep, and DeoVR feeds and HereSphere
+APIs those they list.
+
+Settings › Playback › **Subtitles** sets what a video starts with:
+
+- **Automatic** (the default): subtitles in your language when the audio
+  is in another one, forced subtitles for the parts in another language
+  (signs, a few lines of foreign dialogue), and a subtitle file named
+  exactly like the video.
+- **Always**: subtitles in your language whenever the video has them.
+- **Off**: none.
+
+**Your language** starts as the system's (English when it has none). While
+a video plays, **⚙** › **Audio & subs** lists all its subtitles by
+language and switches between them.
+
+Subtitles show in any script, with the fonts on the headset: Arabic and
+Hebrew read right to left, and Chinese, Japanese or Korean need a font
+that covers them. If subtitles in a language show nothing or boxes, copy a
+font for it (the Noto fonts cover every language) into
+`~/.local/share/fonts` and restart FramePlayerX; frameplayerx.log names
+the characters it had no font for.
 
 ### Videos that stutter: 10-bit HEVC and AV1
 
@@ -389,12 +441,15 @@ adjustment), and turning **Own settings for this video** off makes it follow
 Settings again.
 ## Haptics
 
+Haptics are off until you turn on **Settings › Playback › Haptic devices**.
+Until then FramePlayerX shows nothing about them and loads no scripts.
+
 Scripts (`.funscript`, including multi-axis `video.surge.funscript` etc.)
 are found next to the video, in `~/.local/share/frameplayerx/Interactive`
 (Settings › On this device shows it), or supplied by the server.
-Add a device in **Settings › Haptics**: Intiface Central (Buttplug), TCode
-devices (OSR2/SR6 over USB serial, TCP or UDP), or The Handy (connection
-key). The seek bar shows the script's intensity.
+Add a device in **Settings › Haptics**: Intiface Central, TCode devices
+(OSR2/SR6 over USB serial, TCP or UDP), or The Handy (connection key). The
+seek bar shows the script's intensity.
 
 ## Remote control
 
@@ -413,3 +468,7 @@ protocol. Both only answer devices on your local network.
   (readable only by you)
 - "Is SteamVR running?": FramePlayerX needs the headset's OpenXR runtime;
   start it from the Steam library, not a desktop terminal.
+- "… has signed this headset out": a Jellyfin or Emby server ends a Quick
+  Connect sign-in when the account's password changes or the device is
+  signed out on the server. Pair again: the pencil next to the source under
+  **Sources**, *Clear* next to Quick Connect, then *Get pairing code*.

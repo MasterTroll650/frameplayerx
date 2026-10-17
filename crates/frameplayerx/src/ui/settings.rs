@@ -24,6 +24,10 @@ const TABS: [(SettingsTab, &str, &str); 8] = [
 ];
 
 pub fn settings(ui: &mut egui::Ui, v: &mut View) {
+    let haptics_on = v.settings.haptics_enabled;
+    if v.state.settings_tab == SettingsTab::Haptics && !haptics_on {
+        v.state.settings_tab = SettingsTab::Playback;
+    }
     ui.add_space(12.0);
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 28.0;
@@ -31,6 +35,9 @@ pub fn settings(ui: &mut egui::Ui, v: &mut View) {
             ui.set_width(240.0);
             ui.spacing_mut().item_spacing.y = 4.0;
             for (t, icon, label) in TABS {
+                if t == SettingsTab::Haptics && !haptics_on {
+                    continue;
+                }
                 if side_tab(ui, icon, label, v.state.settings_tab == t).clicked() {
                     v.state.settings_tab = t;
                 }
@@ -200,6 +207,11 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
             " s",
             0,
         );
+        r.switch(
+            "Haptic devices",
+            Some("Sync connected haptic devices with videos that have scripts."),
+            &mut s.haptics_enabled,
+        );
     });
     heading(ui, "Default format");
     note(
@@ -244,7 +256,8 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
             2,
         );
     });
-    heading(ui, "Flat videos and subtitles");
+    subtitles(ui, s, &mut v.state.languages_open);
+    heading(ui, "Flat videos");
     let d = &mut s.default_view;
     widgets::rows(ui, |r| {
         r.slider(
@@ -274,15 +287,6 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
             "",
             2,
         );
-        r.slider(
-            "Subtitle depth",
-            Some("How far away subtitles float."),
-            &mut d.subtitle_distance,
-            0.8..=10.0,
-            2.5,
-            " m",
-            1,
-        );
     });
     heading(ui, "Comfort");
     widgets::rows(ui, |r| {
@@ -294,6 +298,70 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
             1.0,
             "×",
             2,
+        );
+    });
+}
+
+/// Which subtitles videos start with, in which language, and how far away.
+fn subtitles(ui: &mut egui::Ui, s: &mut crate::settings::Settings, languages_open: &mut bool) {
+    use crate::settings::SubtitleMode;
+    heading(ui, "Subtitles");
+    note(
+        ui,
+        match s.subtitles {
+            SubtitleMode::Off => "Videos start without subtitles.",
+            SubtitleMode::Automatic => {
+                "Subtitles in your language when a video's audio is in another one, \
+                 forced subtitles for the parts in another language, and a subtitle \
+                 file named like the video."
+            }
+            SubtitleMode::Always => "Subtitles in your language whenever a video has them.",
+        },
+    );
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+        for (label, mode) in [
+            ("Off", SubtitleMode::Off),
+            ("Automatic", SubtitleMode::Automatic),
+            ("Always", SubtitleMode::Always),
+        ] {
+            if widgets::chip(ui, label, s.subtitles == mode).clicked() {
+                s.subtitles = mode;
+            }
+        }
+    });
+    ui.add_space(6.0);
+    widgets::rows(ui, |r| {
+        if s.subtitles != SubtitleMode::Off {
+            let name = fp_core::language::name(&s.subtitle_language).unwrap_or("Not set");
+            r.row("Your language", Some(name), |ui| {
+                let label = if *languages_open { "Done" } else { "Change" };
+                if widgets::button(ui, None, label, Kind::Secondary).clicked() {
+                    *languages_open = !*languages_open;
+                }
+            });
+            if *languages_open {
+                r.content(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                        for (code, name, _) in fp_core::language::LANGUAGES {
+                            if widgets::chip(ui, name, s.subtitle_language == *code).clicked() {
+                                s.subtitle_language = code.to_string();
+                            }
+                        }
+                    });
+                });
+            }
+        }
+        r.slider(
+            "Subtitle depth",
+            Some("How far away subtitles float."),
+            &mut s.default_view.subtitle_distance,
+            0.8..=10.0,
+            2.5,
+            " m",
+            1,
         );
     });
 }
@@ -401,7 +469,7 @@ fn device(ui: &mut egui::Ui, v: &mut View) {
     }
     heading(ui, "microSD cards and USB drives");
     widgets::rows(ui, |r| {
-        let mounts = crate::services::removable_mounts();
+        let mounts = crate::drives::removable_mounts();
         let names: Vec<String> = mounts.iter().map(|m| m.display().to_string()).collect();
         let desc = if names.is_empty() {
             "None plugged in.".to_string()
@@ -476,14 +544,18 @@ fn haptics(ui: &mut egui::Ui, v: &mut View) {
     let configs = v.settings.haptic_devices.clone();
     widgets::rows(ui, |r| {
         for (i, cfg) in configs.iter().enumerate() {
-            let status = v.devices.get(i);
-            let desc = match status {
-                Some(d) if d.connected => format!("Connected · axes {:?}", d.axes),
-                Some(d) => d
+            let slot = v.services.haptic_device(cfg);
+            let status = slot
+                .and_then(|s| s.id)
+                .and_then(|id| v.devices.iter().find(|d| d.id == id));
+            let desc = match (status, slot) {
+                (Some(d), _) if d.connected => format!("Connected · axes {:?}", d.axes),
+                (Some(d), _) => d
                     .last_error
                     .clone()
                     .unwrap_or_else(|| "Not connected".into()),
-                None => "Not connected".into(),
+                (None, Some(s)) => s.error.clone().unwrap_or_else(|| "Not connected".into()),
+                (None, None) => "Connecting…".into(),
             };
             r.row(&cfg.label(), Some(desc.as_str()), |ui| {
                 if widgets::icon_button(ui, icons::TRASH, 40.0, false)
@@ -588,7 +660,7 @@ fn haptics(ui: &mut egui::Ui, v: &mut View) {
         );
         r.switch(
             "Strokes as vibration",
-            Some("For vibrate-only toys."),
+            Some("For devices that only vibrate."),
             &mut h.stroke_to_vibration,
         );
     });
@@ -699,6 +771,7 @@ fn draw_qr(ui: &mut egui::Ui, qr: &fp_remote::QrMatrix, size: f32) {
 
 fn updates(ui: &mut egui::Ui, v: &mut View) {
     use super::UpdateStatus as U;
+    use fp_updater::Channel;
     heading(ui, &format!("FramePlayerX {}", env!("CARGO_PKG_VERSION")));
     widgets::rows(ui, |r| {
         r.switch(
@@ -707,20 +780,20 @@ fn updates(ui: &mut egui::Ui, v: &mut View) {
             &mut v.settings.check_updates,
         );
         let beta_build = env!("CARGO_PKG_VERSION").contains('-');
-        let about = match (v.settings.update_channel == "beta", beta_build) {
-            (true, _) => "Gets test versions too, before they are released.",
-            (false, false) => "Only finished releases.",
-            (false, true) => {
+        let about = match (v.settings.update_channel, beta_build) {
+            (Channel::Beta, _) => "Gets test versions too, before they are released.",
+            (Channel::Stable, false) => "Only finished releases.",
+            (Channel::Stable, true) => {
                 "Only finished releases: this test version stays until a newer one is out."
             }
         };
         r.row("Channel", Some(about), |ui| {
-            for c in ["beta", "stable"] {
-                let label = if c == "beta" { "Beta" } else { "Stable" };
+            // Right to left: Stable shows first.
+            for (c, label) in [(Channel::Beta, "Beta"), (Channel::Stable, "Stable")] {
                 if widgets::chip(ui, label, v.settings.update_channel == c).clicked()
                     && v.settings.update_channel != c
                 {
-                    v.settings.update_channel = c.into();
+                    v.settings.update_channel = c;
                     // What's on offer depends on the channel: ask again.
                     if fp_updater::RELEASE_PUBLIC_KEY.is_some()
                         && !matches!(v.state.update, U::Downloading { .. } | U::Installed { .. })
@@ -802,7 +875,7 @@ fn updates(ui: &mut egui::Ui, v: &mut View) {
         }
         U::Failed(e) => {
             r.row("The update failed", Some(e.as_str()), |ui| {
-                check_button(ui, v.actions)
+                check_button(ui, v.actions);
             });
         }
     });
@@ -833,21 +906,13 @@ fn about(ui: &mut egui::Ui, v: &mut View) {
     heading(ui, "This headset");
     widgets::rows(ui, |r| {
         for (k, val) in &v.state.about {
-            r.row(k, None, |ui| {
-                ui.label(RichText::new(val).color(theme::TEXT_2));
-            });
+            r.info(k, val);
         }
-        r.row("Settings file", None, |ui| {
-            ui.label(
-                RichText::new(crate::settings::Settings::path().display().to_string())
-                    .color(theme::TEXT_2),
-            );
-        });
-        r.row("Log", None, |ui| {
-            ui.label(
-                RichText::new(crate::logger::log_path().display().to_string()).color(theme::TEXT_2),
-            );
-        });
+        r.info(
+            "Settings file",
+            &crate::settings::Settings::path().display().to_string(),
+        );
+        r.info("Log", &crate::logger::log_path().display().to_string());
     });
     ui.add_space(6.0);
     note(

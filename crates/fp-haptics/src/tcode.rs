@@ -24,10 +24,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// The stop command.
 pub const TCODE_STOP: &str = "DSTOP\n";
 
-/// Default serial speed.
 pub const DEFAULT_BAUD: u32 = 115_200;
 
 /// Formats a position as a 4-digit TCode magnitude (`0.5` → `"5000"`,
@@ -66,7 +64,6 @@ pub fn format_tcode(moves: &[AxisMove]) -> String {
 pub enum TcodeEndpoint {
     /// A serial device such as `/dev/ttyACM0`.
     Serial {
-        /// Device path.
         path: PathBuf,
         /// Baud rate (115200 for every common firmware).
         baud: u32,
@@ -125,7 +122,6 @@ impl TcodeEndpoint {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TcodeConfig {
-    /// Where the device is.
     pub endpoint: TcodeEndpoint,
     /// Axes the device has. TCode cannot report them, so the user picks:
     /// OSR2 is L0 R0 R1 R2, SR6 adds L1 L2.
@@ -358,7 +354,7 @@ pub fn list_serial_ports() -> Vec<SerialPortInfo> {
 fn list_serial_ports_in(dev: &Path) -> Vec<SerialPortInfo> {
     let by_id: Vec<(PathBuf, String)> = std::fs::read_dir(dev.join("serial/by-id"))
         .map(|rd| {
-            rd.filter_map(|e| e.ok())
+            rd.filter_map(std::result::Result::ok)
                 .filter_map(|e| {
                     let target = std::fs::canonicalize(e.path()).ok()?;
                     Some((target, e.file_name().to_string_lossy().into_owned()))
@@ -368,7 +364,7 @@ fn list_serial_ports_in(dev: &Path) -> Vec<SerialPortInfo> {
         .unwrap_or_default();
     let mut ports: Vec<SerialPortInfo> = std::fs::read_dir(dev)
         .map(|rd| {
-            rd.filter_map(|e| e.ok())
+            rd.filter_map(std::result::Result::ok)
                 .filter(|e| {
                     let n = e.file_name();
                     let n = n.to_string_lossy();

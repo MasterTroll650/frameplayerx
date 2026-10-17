@@ -37,7 +37,6 @@ pub fn script_axis(location: &str) -> Option<String> {
     SCRIPT_AXES.contains(&axis.as_str()).then_some(axis)
 }
 
-/// How a scan behaves.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScanOptions {
     /// DeoVR-style fallback folder searched for `stem.funscript` (and axis
@@ -79,7 +78,6 @@ pub enum ScanPhase {
 /// Progress passed to the scan callback.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScanProgress {
-    /// Current stage.
     pub phase: ScanPhase,
     /// Files looked at so far.
     pub files_seen: usize,
@@ -96,7 +94,6 @@ pub struct ScanProgress {
 pub struct ScanError {
     /// File or folder.
     pub path: PathBuf,
-    /// What went wrong.
     pub message: String,
 }
 
@@ -107,11 +104,9 @@ pub struct ScanReport {
     pub root: PathBuf,
     /// Videos found on disk.
     pub videos: usize,
-    /// New rows.
     pub added: usize,
     /// Rows whose file or side files changed.
     pub updated: usize,
-    /// Rows left untouched.
     pub unchanged: usize,
     /// Rows that were missing and are back (also counted in `updated`).
     pub restored: usize,
@@ -236,7 +231,7 @@ fn list_interactive(dir: &Path) -> Vec<String> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    rd.filter_map(|e| e.ok())
+    rd.filter_map(std::result::Result::ok)
         .filter_map(|e| e.file_name().into_string().ok())
         .filter(|n| is_script_name(n) && !n.starts_with('.'))
         .collect()
@@ -602,7 +597,7 @@ mod tests {
         let mut calls = Vec::new();
         let report = lib
             .scan_folder(&root, "local", &opts(Some(interactive.clone())), |p| {
-                calls.push(p.clone())
+                calls.push(p.clone());
             })
             .unwrap();
         assert_eq!(report.videos, 3);

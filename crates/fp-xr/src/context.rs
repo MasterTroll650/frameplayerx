@@ -1,8 +1,8 @@
 //! OpenXR instance and system, and Vulkan creation through the runtime.
 
-use crate::loader::{self, RuntimeManifest};
 use crate::{Error, Result, XrContextExt};
 use ash::vk::{self, Handle};
+use fp_xr_loader::{self as loader, RuntimeManifest};
 use openxr as xr;
 
 /// Defines `/interaction_profiles/valve/frame_controller_valve`. Not in the
@@ -69,14 +69,11 @@ impl XrContext {
                 Err(err) => last = Some(err),
             }
         }
-        let instance = match instance {
-            Some(i) => i,
-            None => {
-                return Err(Error::Xr(
-                    "xrCreateInstance",
-                    last.unwrap_or(xr::sys::Result::ERROR_RUNTIME_FAILURE),
-                ));
-            }
+        let Some(instance) = instance else {
+            return Err(Error::Xr(
+                "xrCreateInstance",
+                last.unwrap_or(xr::sys::Result::ERROR_RUNTIME_FAILURE),
+            ));
         };
         let props = instance.properties().ctx("xrGetInstanceProperties")?;
         let system = instance
@@ -190,6 +187,8 @@ impl fp_render::Creator for XrCreator<'_> {
         let entry =
             unsafe { ash::Entry::load() }.map_err(|e| fp_render::Error::Load(e.to_string()))?;
         let _ = instance;
+        // SAFETY: as for create_vulkan_instance; pdev came from this
+        // runtime's instance.
         let raw = unsafe {
             x.instance.create_vulkan_device(
                 x.system,

@@ -38,7 +38,6 @@ pub struct ArchiveInfo {
     /// Single top-level directory every entry sits in (normally
     /// `frameplayerx`), stripped on extraction.
     pub root: Option<String>,
-    /// Number of entries.
     pub entries: usize,
     /// Sum of uncompressed sizes as declared by the archive.
     pub uncompressed_size: u64,
@@ -339,7 +338,7 @@ pub fn validate_install_dir(dir: &Path, expected: Option<&Version>) -> Result<Ve
 pub fn sibling(install_dir: &Path, suffix: &str) -> PathBuf {
     let mut name = install_dir
         .file_name()
-        .map(|n| n.to_os_string())
+        .map(std::ffi::OsStr::to_os_string)
         .unwrap_or_else(|| "frameplayerx".into());
     name.push(suffix);
     install_dir.with_file_name(name)

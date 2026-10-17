@@ -7,7 +7,7 @@ together. For using the app, see the [user guide](USER-GUIDE.md).
 
 - **Linux** (Ubuntu or Debian), or **Windows with Ubuntu under WSL2**. The
   workspace doesn't build on Windows itself.
-- Rust 1.89 or newer.
+- Rust 1.95 or newer.
 - For FFmpeg: meson 1.12 (1.3 can't use zig's linker; versions in between
   are untested), ninja, nasm and pkg-config.
 - For builds for the Frame: zig (`pip install ziglang`) and `cargo-zigbuild`
@@ -23,13 +23,33 @@ needs with apt, then builds FFmpeg, in one go.
 tools/build-ffmpeg.sh x86_64 aarch64      # once: FFmpeg 7.1 and dav1d into third_party/
 export LD_LIBRARY_PATH=$PWD/third_party/ffmpeg/x86_64/lib
 cargo test --workspace                    # GPU tests use any Vulkan device (lavapipe is fine)
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets   # lints are in [workspace.lints]
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 (cd tools/frame-desktop-install && python3 -m unittest)   # the Desktop Mode installer
 ```
 
 Under WSL, keep the Linux build off the Windows drive with
 `export CARGO_TARGET_DIR=~/.cache/frameplayerx-target`, as
 `tools/local-xr.sh` does.
+
+## Code style
+
+`cargo fmt` formats. Clippy, with the lints in `[workspace.lints]`, has to
+pass with warnings denied, as it does in CI.
+
+Comments say what the code can't:
+
+- Each module starts with `//!`: what it is for, in a sentence or a short
+  paragraph.
+- `///` documents an item when its name and signature leave something out:
+  units, what `None` means, that it blocks, what it costs. A field called
+  `title` needs no `/// Title.`
+- `//` inside a function says why: a hardware or server quirk, an
+  invariant, a workaround and what it works around. Not what the next line
+  does.
+- Every `unsafe` block has a `// SAFETY:` comment saying why it is sound
+  (clippy checks).
+- No commented-out code. A known gap is an issue, not a `TODO`.
 
 ## Repository layout
 
@@ -40,7 +60,8 @@ Under WSL, keep the Linux build off the Windows drive with
 | `fp-ffmpeg-sys` | Bindings to the bundled FFmpeg 7.1, per architecture (`tools/gen-ffmpeg-bindings.sh`) |
 | `fp-media` | Demuxing, decoding (V4L2 hardware, software), the A/V clock, ALSA audio, subtitles, thumbnails |
 | `fp-render` | The Vulkan renderer: the projection shader for every format, egui panels, quads |
-| `fp-xr` | OpenXR: loading the runtime, the session and swapchains, controller input, passthrough |
+| `fp-xr` | OpenXR: the session and swapchains, controller input, passthrough |
+| `fp-xr-loader` | Finds the active OpenXR runtime and loads it directly, with no Khronos loader to ship (shared with `frame-probe`) |
 | `fp-library` | The SQLite database: folder scanning, the metadata and thumbnail worker, search, watch history |
 | `fp-sources` | Sources: local folders, HTTP, WebDAV, DLNA, SMB, DeoVR and HereSphere feeds, Jellyfin and Emby |
 | `fp-haptics` | Funscripts, the sync engine, and TCode, Buttplug and Handy devices |
@@ -81,6 +102,22 @@ projection and stereo layout. HDR is tone mapped there too.
 `local.rs`, `folders.rs`, `jellyfin.rs` and `feeds.rs`, built from the
 shared pieces in `ui/page.rs`. Browsing a network source writes nothing to
 the database; a video gets a row when it's opened.
+
+**Watch sync.** Servers that keep watch state (Jellyfin and Emby, HereSphere
+APIs that name an `eventServer`) also implement `Source::watch_session` and
+`Source::report_watch` (`fp-sources/src/watch.rs`). The open video's `Watch`
+(`frameplayerx/src/watch.rs`) turns what the player does each frame into
+events: start, pause, resume, seek, speed, a tick every 10 s, and stop. One
+thread sends every report in order, so a video's stop reaches the server
+before the next one's start, and quitting waits up to 3 s for it. A
+server's resume point (`Entry::resume`) wins over the database's.
+
+**Subtitles.** `frameplayerx/src/subtitles.rs` picks the track a video starts
+with, from the Subtitles setting and the tracks' languages
+(`fp_core::language` reads `ara`, `pt-BR`, `de.forced`). The player decodes
+embedded tracks itself; files are loaded whole. Text cues are set by
+cosmic-text (`ui/subtitle_text.rs`) with the system's fonts, loaded on a
+thread at startup, so every script is shaped; egui sets them until then.
 
 **The database.** SQLite, with the schema version in `PRAGMA user_version`
 and forward-only migrations in `fp-library/src/schema.rs`. The scanner
@@ -277,9 +314,9 @@ release:
 
 | Button | Opens |
 |---|---|
-| Download the installer / uninstaller | The release's `Install-FramePlayerX.desktop` / `Uninstall-FramePlayerX.desktop` |
-| Install with FrameDrop | `https://framedropvr.com/install?manifest=` with the release's `framedrop.json`, FrameDrop's documented link: it opens FrameDrop, or FrameDrop's site when it isn't installed |
-| Install with Frame Control | `site/frame-control.html` on GitHub Pages, which opens `frame-control://install?manifest=` with the release's `frameplayerx.json`. GitHub doesn't keep links to app schemes like `frame-control://` in Markdown, so a web page has to |
+| Desktop Mode / Uninstall | The release's `Install-FramePlayerX.desktop` / `Uninstall-FramePlayerX.desktop` |
+| FrameDrop | `https://framedropvr.com/install?manifest=` with the release's `framedrop.json`, FrameDrop's documented link: it opens FrameDrop, or FrameDrop's site when it isn't installed |
+| Frame Control | `site/frame-control.html` on GitHub Pages, which opens `frame-control://install?manifest=` with the release's `frameplayerx.json`. GitHub doesn't keep links to app schemes like `frame-control://` in Markdown, so a web page has to |
 
 `.github/workflows/pages.yml` publishes `site/` (with the logo) when it
 changes on `main`. Once, in the repository settings: **Pages › Build and

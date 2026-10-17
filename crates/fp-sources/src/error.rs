@@ -14,7 +14,6 @@ pub enum Error {
     /// The server answered with an unexpected HTTP status.
     #[error("HTTP {status} from {url}")]
     HttpStatus {
-        /// HTTP status code.
         status: u16,
         /// Redacted request URL.
         url: String,
@@ -24,13 +23,18 @@ pub enum Error {
     Http {
         /// Redacted request URL.
         url: String,
-        /// What went wrong.
         message: String,
     },
     /// The server rejected the credentials (HTTP 401/403, SMB logon failure).
     #[error("authentication failed for {0}")]
     Auth(String),
-    /// The location does not exist.
+    /// The server no longer takes the saved sign-in (it revoked a Quick
+    /// Connect token: the password changed, or the device was signed out)
+    /// and there is no password to sign in again with.
+    #[error(
+        "{0} has signed this headset out: edit the source under Sources and pair it again with Quick Connect"
+    )]
+    SignedOut(String),
     #[error("not found: {0}")]
     NotFound(String),
     /// A URL or location string could not be understood.
@@ -38,7 +42,6 @@ pub enum Error {
     InvalidLocation {
         /// Redacted location.
         location: String,
-        /// Why it was rejected.
         reason: String,
     },
     /// A server response (XML, JSON, HTML) could not be parsed.
@@ -46,19 +49,16 @@ pub enum Error {
     Parse {
         /// What was being parsed.
         what: String,
-        /// Parser message.
         message: String,
     },
     /// The operation is not possible with this source or server.
     #[error("not supported: {0}")]
     Unsupported(String),
-    /// The SMB client reported an error.
     #[error("SMB error: {0}")]
     Smb(String),
     /// SMB support is not available in this build.
     #[error("SMB unavailable: {0}")]
     SmbUnavailable(String),
-    /// A source configuration is invalid.
     #[error("invalid source configuration: {0}")]
     Config(String),
 }

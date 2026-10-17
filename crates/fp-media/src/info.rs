@@ -32,6 +32,10 @@ pub struct StreamInfo {
     pub language: Option<String>,
     pub title: Option<String>,
     pub default: bool,
+    /// Subtitles for only the parts in another language.
+    pub forced: bool,
+    /// Subtitles that describe sounds too (SDH).
+    pub hearing_impaired: bool,
     // video
     pub width: u32,
     pub height: u32,
@@ -140,7 +144,7 @@ fn side_data(par: &ff::AVCodecParameters, kind: ff::AVPacketSideDataType) -> Opt
 /// Maps FFmpeg spherical side data to a projection.
 fn spherical(par: &ff::AVCodecParameters) -> Option<Projection> {
     let bytes = side_data(par, ff::AV_PKT_DATA_SPHERICAL)?;
-    if bytes.len() < std::mem::size_of::<ff::AVSphericalMapping>() {
+    if bytes.len() < size_of::<ff::AVSphericalMapping>() {
         return None;
     }
     // SAFETY: size checked; FFmpeg stores an AVSphericalMapping here.
@@ -166,7 +170,7 @@ fn spherical(par: &ff::AVCodecParameters) -> Option<Projection> {
 
 fn stereo3d(par: &ff::AVCodecParameters, metadata: *mut ff::AVDictionary) -> Option<StereoLayout> {
     if let Some(bytes) = side_data(par, ff::AV_PKT_DATA_STEREO3D)
-        && bytes.len() >= std::mem::size_of::<ff::AVStereo3D>()
+        && bytes.len() >= size_of::<ff::AVStereo3D>()
     {
         // SAFETY: size checked; FFmpeg stores an AVStereo3D here.
         let s = unsafe { &*(bytes.as_ptr() as *const ff::AVStereo3D) };
@@ -220,9 +224,9 @@ pub fn read_info(input: &Input) -> MediaInfo {
     let mut hints = ContainerHints::default();
     let mut streams = Vec::new();
     for (index, &st) in input.streams().iter().enumerate() {
-        // SAFETY: stream pointers are valid while the input is open.
-        let st = unsafe { &*st };
-        let par = unsafe { &*st.codecpar };
+        // SAFETY: stream pointers and their codec parameters are valid while
+        // the input is open.
+        let (st, par) = unsafe { (&*st, &*(*st).codecpar) };
         // SAFETY: avcodec_get_name returns a static string.
         let codec = unsafe {
             CStr::from_ptr(ff::avcodec_get_name(par.codec_id))
@@ -246,6 +250,8 @@ pub fn read_info(input: &Input) -> MediaInfo {
             language: dict_get(st.metadata, "language"),
             title: dict_get(st.metadata, "title"),
             default: st.disposition & ff::AV_DISPOSITION_DEFAULT as i32 != 0,
+            forced: st.disposition & ff::AV_DISPOSITION_FORCED as i32 != 0,
+            hearing_impaired: st.disposition & ff::AV_DISPOSITION_HEARING_IMPAIRED as i32 != 0,
             width: 0,
             height: 0,
             fps: 0.0,
@@ -266,6 +272,7 @@ pub fn read_info(input: &Input) -> MediaInfo {
                 // SAFETY: pixdesc lookup on a format value; null when unknown.
                 let desc = unsafe { ff::av_pix_fmt_desc_get(par.format) };
                 if !desc.is_null() {
+                    // SAFETY: non-null descriptors are static.
                     s.bit_depth = unsafe { (*desc).comp[0].depth } as u32;
                     // SAFETY: the descriptor's name is a static C string.
                     s.pixel_format = unsafe { CStr::from_ptr((*desc).name) }

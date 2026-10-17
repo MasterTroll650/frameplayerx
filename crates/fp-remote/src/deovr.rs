@@ -14,8 +14,9 @@
 use crate::RemoteError;
 use crate::hub::{RemoteEvent, Shared};
 use crate::net::is_allowed_peer;
-use crate::status::{ChangeTracker, command_is_valid, lock};
+use crate::status::{ChangeTracker, command_is_valid};
 use fp_core::playback::now_ms;
+use fp_core::sync::lock;
 use fp_core::{PlaybackStatus, PlayerCommand};
 use serde_json::{Map, Value};
 use std::io::{self, ErrorKind, Read, Write};
@@ -48,13 +49,10 @@ pub enum ProtocolError {
     /// The frame header announced more than [`MAX_FRAME_LEN`] bytes.
     #[error("frame of {0} bytes exceeds the limit")]
     TooLarge(usize),
-    /// The payload is not UTF-8.
     #[error("frame is not UTF-8")]
     NotUtf8,
-    /// The payload is not valid JSON.
     #[error("invalid JSON: {0}")]
     Json(String),
-    /// The payload is JSON but not an object.
     #[error("message is not a JSON object")]
     NotObject,
     /// The peer closed the connection (possibly mid-frame).
@@ -63,10 +61,8 @@ pub enum ProtocolError {
     /// The peer started a frame and stopped sending.
     #[error("frame stalled")]
     Stalled,
-    /// The server is shutting down.
     #[error("server stopping")]
     Stopped,
-    /// Socket error.
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
 }

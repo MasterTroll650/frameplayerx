@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 pub enum HapticDeviceConfig {
     /// TCode over serial (`/dev/ttyACM0`), `tcp://host:port` or `udp://host:port`.
     Tcode { endpoint: String },
-    /// Intiface Central / Buttplug server.
+    /// Intiface Central's server.
     Buttplug { url: String },
     /// The Handy, by connection key.
     Handy { key: String },
@@ -32,6 +32,19 @@ impl HapticDeviceConfig {
     }
 }
 
+/// Which subtitles a video starts with (see [`crate::subtitles::choose`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubtitleMode {
+    Off,
+    /// Forced subtitles, subtitles in your language when the audio is in
+    /// another one, and a subtitle file named like the video.
+    #[default]
+    Automatic,
+    /// Subtitles in your language whenever the video has them.
+    Always,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -44,6 +57,9 @@ pub struct Settings {
     /// ALSA device ("default" routes to PipeWire on SteamOS).
     pub audio_device: String,
     pub volume: f32,
+    pub subtitles: SubtitleMode,
+    /// The language subtitles are wanted in (ISO 639-1).
+    pub subtitle_language: String,
     /// Defaults for videos without saved adjustments.
     pub default_view: ViewSettings,
     /// Show the real world around flat screens and the UI.
@@ -58,10 +74,12 @@ pub struct Settings {
     /// Thumbstick seek step in seconds.
     pub seek_step: f64,
     pub remote: RemoteConfig,
+    /// Haptic devices and scripts. Off, the app shows nothing about them,
+    /// loads no scripts and runs no haptics engine.
+    pub haptics_enabled: bool,
     pub haptics: HapticsSettings,
     pub haptic_devices: Vec<HapticDeviceConfig>,
-    /// "stable" or "beta".
-    pub update_channel: String,
+    pub update_channel: fp_updater::Channel,
     pub check_updates: bool,
     /// UI text size multiplier.
     pub ui_scale: f32,
@@ -102,6 +120,12 @@ impl Default for Settings {
             hardware_decoding: true,
             audio_device: "default".into(),
             volume: 1.0,
+            subtitles: SubtitleMode::default(),
+            subtitle_language: std::env::var("LANG")
+                .ok()
+                .and_then(|l| fp_core::language::from_locale(&l))
+                .unwrap_or("en")
+                .to_string(),
             default_view: ViewSettings::default(),
             passthrough: false,
             resume: true,
@@ -109,13 +133,14 @@ impl Default for Settings {
             auto_hide_secs: 4.0,
             seek_step: 10.0,
             remote: RemoteConfig::default(),
+            haptics_enabled: false,
             haptics: HapticsSettings::default(),
             haptic_devices: Vec::new(),
             // A beta build keeps getting betas until the user picks Stable.
             update_channel: if env!("CARGO_PKG_VERSION").contains('-') {
-                "beta".into()
+                fp_updater::Channel::Beta
             } else {
-                "stable".into()
+                fp_updater::Channel::Stable
             },
             check_updates: true,
             ui_scale: 1.0,
@@ -220,6 +245,7 @@ mod tests {
         let p = Settings::load(&path);
         assert_eq!(p.volume, 0.25);
         assert_eq!(p.seek_step, 10.0);
+        assert!(!p.haptics_enabled, "haptics stay off until turned on");
         assert_eq!(p.default_format, fp_core::format::VideoFormat::FALLBACK);
         // Saved before the global chroma key: the old green default goes.
         std::fs::write(

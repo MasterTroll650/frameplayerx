@@ -20,6 +20,7 @@ use crate::input::Input;
 use crate::subtitle::{self, Cue};
 use crate::{Error, Result};
 use fp_core::ByteSource;
+use fp_core::sync::lock;
 use fp_ffmpeg_sys as ff;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -27,7 +28,6 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-/// Player settings.
 #[derive(Clone, Debug)]
 pub struct PlayerConfig {
     pub hw_decode: HwDecode,
@@ -101,7 +101,7 @@ impl PacketQueue {
         }
     }
     fn lock(&self) -> MutexGuard<'_, VecDeque<(u64, Option<Packet>)>> {
-        self.q.lock().unwrap_or_else(|e| e.into_inner())
+        lock(&self.q)
     }
     fn push(&self, serial: u64, p: Option<Packet>) {
         if let Some(p) = &p {
@@ -116,7 +116,7 @@ impl PacketQueue {
             q = self
                 .cv
                 .wait_timeout(q, timeout)
-                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .0;
         }
         let item = q.pop_front();
@@ -183,17 +183,17 @@ struct Shared {
 
 impl Shared {
     fn ctl(&self) -> MutexGuard<'_, Control> {
-        self.ctl.lock().unwrap_or_else(|e| e.into_inner())
+        lock(&self.ctl)
     }
     fn frames(&self) -> MutexGuard<'_, VecDeque<Arc<VideoFrame>>> {
-        self.frames.lock().unwrap_or_else(|e| e.into_inner())
+        lock(&self.frames)
     }
     fn fail(&self, msg: String) {
         log::error!("player: {msg}");
-        *self.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg);
+        *lock(&self.error) = Some(msg);
     }
     fn stats(&self) -> MutexGuard<'_, Stats> {
-        self.stats.lock().unwrap_or_else(|e| e.into_inner())
+        lock(&self.stats)
     }
     fn serial(&self) -> u64 {
         self.serial.load(Ordering::Acquire)
@@ -207,14 +207,21 @@ pub struct Player {
 }
 
 impl Player {
-    /// Opens `src` and starts playback (or holds paused, per config).
-    pub fn open(src: Arc<dyn ByteSource>, name: &str, config: PlayerConfig) -> Result<Player> {
+    /// Opens `src` and starts playback (or holds paused, per config), showing
+    /// the embedded subtitle stream `subtitle` picks from the file's streams.
+    pub fn open(
+        src: Arc<dyn ByteSource>,
+        name: &str,
+        config: PlayerConfig,
+        subtitle: impl FnOnce(&MediaInfo) -> Option<usize>,
+    ) -> Result<Player> {
         let quit = Arc::new(AtomicBool::new(false));
         let input = Input::open(src, name, quit.clone())?;
         let info = read_info(&input);
         if info.video.is_none() && info.audio.is_none() {
             return Err(Error::NoStream("video or audio"));
         }
+        let subtitle_stream = subtitle(&info);
         let shared = Arc::new(Shared {
             quit,
             clock: Clock::default(),
@@ -223,7 +230,7 @@ impl Player {
                 seek: None,
                 audio_stream: info.audio,
                 audio_changed: false,
-                subtitle_stream: info.subtitle_streams().next().map(|s| s.index),
+                subtitle_stream,
             }),
             ctl_cv: Condvar::new(),
             vpkts: PacketQueue::new(),
@@ -298,7 +305,7 @@ impl Player {
             let video_index = info.video;
             let cfg = config.clone();
             threads.push(spawn("fp-demux", move || {
-                demux_thread(sh, input, video_index, subtitle_decoders, cfg)
+                demux_thread(sh, input, video_index, subtitle_decoders, cfg);
             }));
         }
         if let Some(dec) = video_dec {
@@ -315,7 +322,7 @@ impl Player {
                 .collect();
             let backend = config.audio.clone();
             threads.push(spawn("fp-audio", move || {
-                audio_thread(sh, audio_decoders, ambi, backend)
+                audio_thread(sh, audio_decoders, ambi, backend);
             }));
         } else {
             shared.has_audio.store(false, Ordering::Release);
@@ -348,7 +355,7 @@ impl Player {
 
     pub fn state(&self) -> PlayerState {
         let s = &self.shared;
-        if s.error.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+        if lock(&s.error).is_some() {
             PlayerState::Failed
         } else if s.ended.load(Ordering::Acquire) {
             PlayerState::Ended
@@ -362,11 +369,7 @@ impl Player {
     }
 
     pub fn error(&self) -> Option<String> {
-        self.shared
-            .error
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        lock(&self.shared.error).clone()
     }
 
     pub fn is_paused(&self) -> bool {
@@ -394,9 +397,9 @@ impl Player {
 
     pub fn toggle_pause(&self) {
         if self.is_paused() || self.state() == PlayerState::Ended {
-            self.play()
+            self.play();
         } else {
-            self.pause()
+            self.pause();
         }
     }
 
@@ -423,21 +426,21 @@ impl Player {
     }
 
     pub fn speed(&self) -> f64 {
-        *self.shared.speed.lock().unwrap_or_else(|e| e.into_inner())
+        *lock(&self.shared.speed)
     }
 
     pub fn set_speed(&self, speed: f64) {
         let speed = speed.clamp(0.25, 4.0);
-        *self.shared.speed.lock().unwrap_or_else(|e| e.into_inner()) = speed;
+        *lock(&self.shared.speed) = speed;
         self.shared.clock.set_speed(speed);
     }
 
     pub fn volume(&self) -> f32 {
-        *self.shared.volume.lock().unwrap_or_else(|e| e.into_inner())
+        *lock(&self.shared.volume)
     }
 
     pub fn set_volume(&self, v: f32) {
-        *self.shared.volume.lock().unwrap_or_else(|e| e.into_inner()) = v.clamp(0.0, 2.0);
+        *lock(&self.shared.volume) = v.clamp(0.0, 2.0);
     }
 
     /// Selects an audio stream by stream index.
@@ -458,11 +461,7 @@ impl Player {
     /// Selects an embedded subtitle stream (`None` hides embedded subtitles).
     pub fn select_subtitle(&self, index: Option<usize>) {
         self.shared.ctl().subtitle_stream = index;
-        self.shared
-            .cues
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        lock(&self.shared.cues).clear();
         self.seek(self.position(), true);
     }
 
@@ -474,40 +473,28 @@ impl Player {
     pub fn load_subtitles(&self, src: Arc<dyn ByteSource>, name: &str) -> Result<usize> {
         let cues = subtitle::load_file(src, name)?;
         let n = cues.len();
-        *self
-            .shared
-            .external_cues
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = cues;
+        *lock(&self.shared.external_cues) = cues;
         Ok(n)
     }
 
     pub fn clear_external_subtitles(&self) {
-        self.shared
-            .external_cues
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        lock(&self.shared.external_cues).clear();
     }
 
     /// Subtitle cues visible now (external file first, then embedded).
     pub fn subtitles(&self) -> Vec<Cue> {
         let t = self.position();
-        let ext = self
-            .shared
-            .external_cues
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let ext = lock(&self.shared.external_cues);
         if !ext.is_empty() {
             return subtitle::active(&ext, t).into_iter().cloned().collect();
         }
-        let cues = self.shared.cues.lock().unwrap_or_else(|e| e.into_inner());
+        let cues = lock(&self.shared.cues);
         subtitle::active(&cues, t).into_iter().cloned().collect()
     }
 
     /// Head orientation for ambisonic audio (OpenXR quaternion x, y, z, w).
     pub fn set_head_orientation(&self, q: [f32; 4]) {
-        *self.shared.head.lock().unwrap_or_else(|e| e.into_inner()) = q;
+        *lock(&self.shared.head) = q;
     }
 
     pub fn stats(&self) -> Stats {
@@ -540,7 +527,7 @@ impl Player {
                 if let Some(f) = frames.pop_front() {
                     // Start the clock exactly at the first frame shown.
                     s.clock.set(f.pts);
-                    *s.current.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+                    *lock(&s.current) = Some(f);
                     s.stats().frames_shown += 1;
                     s.frames_cv.notify_all();
                 }
@@ -560,7 +547,7 @@ impl Player {
                 shown = frames.pop_front();
             }
             if let Some(f) = shown {
-                *s.current.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+                *lock(&s.current) = Some(f);
                 let mut st = s.stats();
                 st.frames_shown += 1;
                 st.frames_dropped += dropped;
@@ -583,13 +570,7 @@ impl Player {
                 && !paused
             {
                 // Starved: hold the clock until decoding catches up.
-                let behind = s
-                    .current
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .as_ref()
-                    .map(|c| t - c.pts)
-                    .unwrap_or(1.0);
+                let behind = lock(&s.current).as_ref().map(|c| t - c.pts).unwrap_or(1.0);
                 if behind > 2.0 / s.video_fps.max(1.0) + 0.25 {
                     s.buffering.store(true, Ordering::Release);
                     s.clock.pause();
@@ -597,7 +578,7 @@ impl Player {
                 }
             }
         }
-        s.current.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        lock(&s.current).clone()
     }
 
     /// Stops all threads. Also done on drop.
@@ -611,7 +592,7 @@ impl Player {
         // Frames can hold the hardware decoder's own buffers; one blocked
         // waiting for a free buffer only returns once they are given back.
         s.frames().clear();
-        s.current.lock().unwrap_or_else(|e| e.into_inner()).take();
+        lock(&s.current).take();
         for t in self.threads.drain(..) {
             let _ = t.join();
         }
@@ -683,8 +664,7 @@ fn demux_thread(
             sh.vpkts.clear();
             sh.apkts.clear();
             sh.frames().clear();
-            *sh.seek_floor.lock().unwrap_or_else(|e| e.into_inner()) =
-                req.precise.then_some((serial, req.target));
+            *lock(&sh.seek_floor) = req.precise.then_some((serial, req.target));
             if let Err(e) = input.seek(req.target) {
                 log::warn!("seek to {:.2}: {e}", req.target);
             }
@@ -745,7 +725,7 @@ fn demux_thread(
                     if let Some((_, dec)) = subs.0.iter_mut().find(|(i, _)| *i == idx)
                         && let Some(cue) = subtitle::decode_packet(dec, &pkt)
                     {
-                        let mut cues = sh.cues.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut cues = lock(&sh.cues);
                         if !cues
                             .iter()
                             .any(|c| (c.start - cue.start).abs() < 1e-3 && c.text == cue.text)
@@ -754,11 +734,9 @@ fn demux_thread(
                             cues.insert(pos, cue);
                         }
                     }
-                    // SAFETY: valid packet.
-                    unsafe { ff::av_packet_unref(pkt.as_ptr()) };
+                    pkt.unref();
                 } else {
-                    // SAFETY: valid packet.
-                    unsafe { ff::av_packet_unref(pkt.as_ptr()) };
+                    pkt.unref();
                 }
             }
             Ok(false) => {
@@ -833,7 +811,7 @@ fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
                         let dur = Some(dec.frame_duration(&frame))
                             .filter(|d| *d > 0.0)
                             .unwrap_or(default_duration);
-                        let floor = *sh.seek_floor.lock().unwrap_or_else(|e| e.into_inner());
+                        let floor = *lock(&sh.seek_floor);
                         if let Some((fs, target)) = floor
                             && fs == serial
                             && pts + dur * 0.5 < target
@@ -858,7 +836,7 @@ fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
                             q = sh
                                 .frames_cv
                                 .wait_timeout(q, Duration::from_millis(20))
-                                .unwrap_or_else(|e| e.into_inner())
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
                                 .0;
                         }
                         if sh.serial() == serial {
@@ -984,16 +962,16 @@ fn audio_thread(
             // SAFETY: valid frame.
             unsafe { ff::av_frame_unref(frame.as_ptr()) };
             let mut out = if resampler.out_channels == 4 {
-                let head = *sh.head.lock().unwrap_or_else(|e| e.into_inner());
+                let head = *lock(&sh.head);
                 ambisonic::render_stereo(&buf, head)
             } else {
                 std::mem::take(&mut buf)
             };
-            let volume = *sh.volume.lock().unwrap_or_else(|e| e.into_inner());
+            let volume = *lock(&sh.volume);
             if (volume - 1.0).abs() > 1e-3 {
                 out.iter_mut().for_each(|s| *s *= volume);
             }
-            let speed = *sh.speed.lock().unwrap_or_else(|e| e.into_inner());
+            let speed = *lock(&sh.speed);
             if (stretch.speed() - speed).abs() > 1e-6 {
                 stretch.set_speed(speed);
             }
@@ -1036,11 +1014,26 @@ mod tests {
     use fp_core::source::FileSource;
     use std::time::Instant;
 
+    /// Opens a test clip showing its first subtitle stream.
     fn open(name: &str, cfg: PlayerConfig) -> Player {
+        open_with(name, cfg, |i| i.subtitle_streams().next().map(|s| s.index))
+    }
+
+    fn open_with(
+        name: &str,
+        cfg: PlayerConfig,
+        subtitle: impl FnOnce(&MediaInfo) -> Option<usize>,
+    ) -> Player {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/data")
             .join(name);
-        Player::open(Arc::new(FileSource::open(&path).unwrap()), name, cfg).unwrap()
+        Player::open(
+            Arc::new(FileSource::open(&path).unwrap()),
+            name,
+            cfg,
+            subtitle,
+        )
+        .unwrap()
     }
 
     fn cfg() -> PlayerConfig {
@@ -1168,6 +1161,24 @@ mod tests {
             p.subtitles().first().map(|c| c.text.clone()).as_deref(),
             Some("Hello world")
         );
+    }
+
+    #[test]
+    fn embedded_subtitles_start_as_picked() {
+        let p = open_with(
+            "hevc10_tb.mkv",
+            PlayerConfig {
+                start_paused: true,
+                start_at: 0.5,
+                ..cfg()
+            },
+            |_| None,
+        );
+        run(&p, 2.0, |p, f| {
+            f.is_some() && p.state() != PlayerState::Buffering
+        });
+        assert_eq!(p.subtitle_stream(), None);
+        assert!(p.subtitles().is_empty());
     }
 
     #[test]

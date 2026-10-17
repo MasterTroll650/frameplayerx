@@ -306,6 +306,32 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
+            // `haptics on` / `haptics off`, as Settings > Playback does.
+            Some("haptics") => {
+                self.app.settings.haptics_enabled = parts.get(1) != Some(&"off");
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // `subtitles always ar`, as Settings > Playback does.
+            Some("subtitles") => {
+                use crate::settings::SubtitleMode;
+                self.app.settings.subtitles = match parts.get(1).copied() {
+                    Some("off") => SubtitleMode::Off,
+                    Some("always") => SubtitleMode::Always,
+                    _ => SubtitleMode::Automatic,
+                };
+                if let Some(lang) = parts.get(2) {
+                    self.app.settings.subtitle_language = lang.to_string();
+                }
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // Lists the subtitle languages in Settings > Playback.
+            Some("languages") => {
+                self.app.ui.languages_open = true;
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
             // Turns the global chroma key on (Settings > Passthrough).
             Some("chroma-global") => {
                 self.app.settings.default_view.chroma_key = true;
@@ -470,9 +496,7 @@ impl Sim {
                 let id = parts.get(1).ok_or("edit-source needs a source")?;
                 let form = self
                     .app
-                    .source_configs()
-                    .iter()
-                    .find(|c| c.id() == *id)
+                    .source_config(id)
                     .map(crate::ui::sources::edit_form)
                     .ok_or_else(|| format!("no source {id:?}"))?;
                 self.app.ui.screen = crate::ui::Screen::Sources;
@@ -542,11 +566,16 @@ pub fn run(args: &Args, out: &Path) -> Result<(), Error> {
     let size = args.size.unwrap_or(1024);
     let eyes = OffscreenEyes::new(&renderer, size, size)?;
     let mut app = crate::make_app()?;
+    // The rows a Steam Frame shows, so screenshots cover long values.
     app.set_about(vec![
         ("Mode".into(), "Preview (no headset)".into()),
         (
             "GPU".into(),
             format!("{} ({})", gpu.device_name, gpu.driver),
+        ),
+        (
+            "Controllers".into(),
+            "Steam Frame, Touch, Simple controller, Hand tracking".into(),
         ),
     ]);
     if let Some(o) = &args.open {

@@ -1,6 +1,7 @@
 //! The playback clock: media time advancing with wall time at the current
 //! speed. Video is the master; audio follows it.
 
+use fp_core::sync::lock;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -31,7 +32,7 @@ impl Default for Clock {
 
 impl Clock {
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.s.lock().unwrap_or_else(|e| e.into_inner())
+        lock(&self.s)
     }
 
     pub fn now(&self) -> f64 {

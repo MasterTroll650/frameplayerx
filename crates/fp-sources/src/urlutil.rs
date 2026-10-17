@@ -143,8 +143,8 @@ pub fn split_credentials(url: &str) -> Result<(String, Option<Credentials>)> {
     Ok((parsed.to_string(), Some(creds)))
 }
 
-/// Query parameters whose values are secrets (Stash and others put API keys
-/// in feed URLs).
+/// Query parameters whose values are secrets (servers put API keys in
+/// feed URLs).
 const SECRET_PARAMS: &[&str] = &[
     "apikey",
     "api_key",
@@ -225,6 +225,16 @@ pub fn webdav_to_http(url: &str) -> String {
 pub fn is_http_url(s: &str) -> bool {
     let lower = s.get(..8).unwrap_or(s).to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+/// A server address as typed (`host:port`) as a URL: `http://` is added
+/// when it names no scheme.
+pub fn with_http_scheme(address: &str) -> String {
+    if address.contains("://") {
+        address.to_string()
+    } else {
+        format!("http://{address}")
+    }
 }
 
 /// Decodes the HTML entities found in directory listings: the five XML
@@ -374,6 +384,8 @@ mod tests {
         assert_eq!(last_segment("http://h/a/b%20c.mp4?x=1"), "b c.mp4");
         assert_eq!(last_segment("http://h/a/dir/"), "dir");
         assert_eq!(last_segment("http://h"), "");
+        assert_eq!(with_http_scheme("nas:8096"), "http://nas:8096");
+        assert_eq!(with_http_scheme("https://jf"), "https://jf");
         assert_eq!(last_segment("/local/path/file.mkv"), "file.mkv");
         assert_eq!(
             parent_url("http://h:80/a/b/c.mp4").as_deref(),

@@ -153,7 +153,6 @@ pub enum WorkerEvent {
     /// A video was probed. `warning` explains a missing thumbnail or
     /// preview sheet.
     Processed {
-        /// The video.
         id: MediaId,
         /// Videos handled in this pass, this one included.
         done: usize,
@@ -163,19 +162,16 @@ pub enum WorkerEvent {
         thumbnail: bool,
         /// A preview sheet was written.
         preview_strip: bool,
-        /// Non-fatal problem.
         warning: Option<String>,
     },
     /// Probing failed; the error is stored on the row and the video is not
     /// retried until [`Library::retry_failed_probes`].
     Failed {
-        /// The video.
         id: MediaId,
         /// Videos handled in this pass, this one included.
         done: usize,
         /// `done` plus what is still waiting.
         total: usize,
-        /// What went wrong.
         error: String,
     },
     /// Nothing left to do for now.
@@ -606,10 +602,10 @@ mod tests {
             let info = self.probe(location)?;
             let (w, h) = match crop {
                 ThumbnailCrop::LeftEye => (info.width / 2, info.height),
-                ThumbnailCrop::LeftEyeStretched => (info.width, info.height),
                 ThumbnailCrop::TopEye => (info.width, info.height / 2),
-                ThumbnailCrop::TopEyeStretched => (info.width, info.height),
-                ThumbnailCrop::Full => (info.width, info.height),
+                ThumbnailCrop::LeftEyeStretched
+                | ThumbnailCrop::TopEyeStretched
+                | ThumbnailCrop::Full => (info.width, info.height),
             };
             let (w, h) = crate::image::fit_size(w, h, max_w, max_h);
             Ok(RgbaImage::filled(w, h, [200, 100, 50, 255]))
@@ -633,7 +629,7 @@ mod tests {
     ) -> (WorkerStats, Vec<WorkerEvent>) {
         let mut events = Vec::new();
         let stats = process_pending(lib, prober, o, &AtomicBool::new(false), &mut |e| {
-            events.push(e)
+            events.push(e);
         })
         .unwrap();
         (stats, events)

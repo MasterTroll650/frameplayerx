@@ -50,7 +50,6 @@ pub struct SmbLocation {
     pub host: String,
     /// TCP port, when given.
     pub port: Option<u16>,
-    /// Share name.
     pub share: String,
     /// Decoded path segments inside the share.
     pub path: Vec<String>,
@@ -263,10 +262,11 @@ mod imp {
     //! The smb-rs backed implementation.
 
     use super::{DirItem, SmbLocation, SmbSource};
-    use crate::cache::{CacheOptions, CachedSource, RangeFetch, lock};
+    use crate::cache::{CacheOptions, CachedSource, RangeFetch};
     use crate::config::SmbConfig;
     use crate::error::{Error, Result};
     use fp_core::source::ByteSource;
+    use fp_core::sync::lock;
     use smb::{
         Client, ClientConfig, ConnectionConfig, DirAccessMask, FileAccessMask, FileCreateArgs,
         FileDirectoryInformation, GetLen, ReadAt, Status, UncPath,
@@ -436,9 +436,8 @@ mod imp {
                     .client
                     .create_file(&path, &args)
                     .map_err(|e| map_err(e, &url))?;
-                let dir = match res {
-                    smb::Resource::Directory(d) => d,
-                    _ => return Err(Error::invalid(&url, "not a folder")),
+                let smb::Resource::Directory(dir) = res else {
+                    return Err(Error::invalid(&url, "not a folder"));
                 };
                 let mut out = Vec::new();
                 for info in dir

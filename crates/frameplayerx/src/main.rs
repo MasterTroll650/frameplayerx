@@ -10,6 +10,7 @@
 mod app;
 mod bindings;
 mod controls;
+mod drives;
 mod jobs;
 mod logger;
 mod pin;
@@ -19,7 +20,9 @@ mod prober;
 mod seektest;
 mod services;
 mod settings;
+mod subtitles;
 mod ui;
+mod watch;
 mod world;
 
 use app::{App, FrameInput, LayerDraw};
@@ -69,14 +72,14 @@ fn parse_args() -> Result<Args, String> {
                     it.next()
                         .and_then(|s| s.parse().ok())
                         .ok_or("--size needs a number")?,
-                )
+                );
             }
             "--exit-after" => {
                 a.exit_after = Some(
                     it.next()
                         .and_then(|s| s.parse().ok())
                         .ok_or("--exit-after needs seconds")?,
-                )
+                );
             }
             "--info" => a.info = Some(it.next().ok_or("--info needs a file")?),
             "--decode-bench" => a.bench = Some(it.next().ok_or("--decode-bench needs a file")?),
@@ -84,39 +87,39 @@ fn parse_args() -> Result<Args, String> {
                 a.bench_opts.frames = it
                     .next()
                     .and_then(|s| s.parse().ok())
-                    .ok_or("--frames needs a number")?
+                    .ok_or("--frames needs a number")?;
             }
             "--sw" => {
                 a.bench_opts.hw = fp_media::HwDecode::Off;
                 a.seek_opts.hw = fp_media::HwDecode::Off;
             }
             "--seek-test" => {
-                a.seek_test = Some(it.next().ok_or("--seek-test needs a file or URL")?)
+                a.seek_test = Some(it.next().ok_or("--seek-test needs a file or URL")?);
             }
             "--seeks" => {
                 a.seek_opts.seeks = it
                     .next()
                     .and_then(|s| s.parse().ok())
-                    .ok_or("--seeks needs a number")?
+                    .ok_or("--seeks needs a number")?;
             }
             "--step" => {
                 a.seek_opts.step = it
                     .next()
                     .and_then(|s| s.parse().ok())
-                    .ok_or("--step needs seconds")?
+                    .ok_or("--step needs seconds")?;
             }
             "--rounds" => {
                 a.seek_opts.rounds = it
                     .next()
                     .and_then(|s| s.parse().ok())
-                    .ok_or("--rounds needs a number")?
+                    .ok_or("--rounds needs a number")?;
             }
             "--seek" => {
                 a.bench_opts.seek = Some(
                     it.next()
                         .and_then(|s| s.parse().ok())
                         .ok_or("--seek needs seconds")?,
-                )
+                );
             }
             "--checksum" => {
                 a.bench_opts.checksum = it
@@ -124,7 +127,7 @@ fn parse_args() -> Result<Args, String> {
                     .ok_or("--checksum needs frame numbers")?
                     .split(',')
                     .filter_map(|s| s.trim().parse().ok())
-                    .collect()
+                    .collect();
             }
             "-v" | "--verbose" => a.verbose = true,
             "--version" => {
@@ -240,7 +243,7 @@ fn info(file: &str) -> Result<(), Error> {
                     s.chroma(),
                     s.pixel_format,
                     s.transfer
-                )
+                );
             }
             fp_media::info::StreamKind::Audio => println!(
                 "  #{} audio {} {} Hz {} ch{}{lang}",
@@ -289,7 +292,7 @@ fn bench(file: &str, opts: &fp_media::bench::BenchOptions) -> Result<(), Error> 
         println!(
             "  {label}: {} frames, first after {:.3} s, {:.2} fps (pts {:.3?}..{:.3?})",
             run.frames, run.first_frame_secs, run.fps, run.first_pts, run.last_pts
-        )
+        );
     };
     line("decode", &r.run);
     if let Some(s) = &r.after_seek {
@@ -397,7 +400,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
             session
                 .bindings()
                 .iter()
-                .map(|b| b.0.clone())
+                .map(|b| b.name)
                 .collect::<Vec<_>>()
                 .join(", "),
         ),
@@ -545,7 +548,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
             session.request_exit();
         }
     }
-    log::info!("{frames} frames, {} with video", video_frames);
+    log::info!("{frames} frames, {video_frames} with video");
     exit_watchdog(EXIT_WITHIN);
     renderer.wait_idle();
     app.shutdown();

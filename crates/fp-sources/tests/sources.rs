@@ -7,7 +7,8 @@ use common::{Req, Resp, TestServer, pattern, resp, serve_bytes};
 use fp_core::format::{Projection, StereoLayout};
 use fp_core::source::EntryKind;
 use fp_sources::{
-    Credentials, DlnaConfig, Error, FeedConfig, HttpConfig, SourceConfig, SourceKind, build,
+    Credentials, DlnaConfig, Error, FeedConfig, HttpConfig, SourceConfig, SourceKind, WatchEvent,
+    WatchKind, build,
 };
 use std::sync::Arc;
 
@@ -337,7 +338,7 @@ fn deovr_server(require_login: bool) -> TestServer {
 fn feed(url: String, credentials: Option<Credentials>, max_height: Option<u32>) -> FeedConfig {
     FeedConfig {
         id: "f".into(),
-        name: "XBVR".into(),
+        name: "Feed".into(),
         url,
         credentials,
         insecure_tls: false,
@@ -356,6 +357,13 @@ fn deovr_feed_groups_scenes_details_and_open() {
     .unwrap();
     let groups = src.list(None).unwrap();
     assert_eq!(names(&groups), ["Recent", "Favourites"]);
+    // DeoVR has no way to take one back.
+    assert!(matches!(
+        src.as_scene_feed()
+            .unwrap()
+            .set_favorite(&groups[0].location, true),
+        Err(Error::Unsupported(_))
+    ));
     assert!(groups.iter().all(|g| g.kind == EntryKind::Directory));
     assert_eq!(
         groups[0].thumbnail_url.as_deref(),
@@ -367,6 +375,14 @@ fn deovr_feed_groups_scenes_details_and_open() {
     assert_eq!(scenes[0].location, server.url("/deovr/1"));
     assert_eq!(scenes[0].duration, Some(1800.0));
     assert!(scenes[0].format.is_none());
+
+    // The same listing through the feed interface, which has no scan.
+    let feed = src.as_scene_feed().expect("a scene feed");
+    let lib = feed.library().unwrap();
+    assert_eq!(lib.groups.len(), 2);
+    assert!(lib.scenes.iter().all(|s| !s.bare));
+    assert!(feed.scan().is_none());
+    assert!(src.as_media_browser().is_none());
     assert_eq!(
         scenes[1].format.unwrap().projection,
         Projection::EQUIRECT_360
@@ -431,6 +447,10 @@ fn heresphere_library_details_and_open() {
     let b = base.clone();
     let server = TestServer::start(move |req| {
         let json = |s: String| resp(200, s, &[("Content-Type", "application/json")]);
+        // HereSphere's events carry the user name but no password.
+        if req.path().starts_with("/heresphere/events/") {
+            return resp(200, "", &[]);
+        }
         if req.method == "POST" {
             let body: serde_json::Value = serde_json::from_str(&req.body).unwrap();
             assert_eq!(req.header("content-type"), Some("application/json"));
@@ -451,7 +471,9 @@ fn heresphere_library_details_and_open() {
                         {"resolution":1440,"height":1440,"width":2880,"size":11,"url":"/files/3k.mp4"}]}],
                     "scripts":[{"name":"Beach Day.funscript","url":"/files/1.funscript"}],
                     "subtitles":[{"name":"English","language":"en","url":"/files/1.en.srt"}],
-                    "tags":[{"name":"Swim","start":95000.0,"end":120000.0},{"name":"Studio:X"}]}"#
+                    "tags":[{"name":"Swim","start":95000.0,"end":120000.0},{"name":"Studio:X"}],
+                    "eventServer":"/heresphere/events/1",
+                    "isFavorite":false,"writeFavorite":true}"#
                     .into(),
             ),
             ("GET", "/files/3k.mp4") => serve_bytes(req, b"three k vid", true),
@@ -502,6 +524,72 @@ fn heresphere_library_details_and_open() {
         .collect();
     assert!(posts.iter().any(|p| p["needsMediaSource"] == false));
     assert!(posts.iter().any(|p| p["needsMediaSource"] == true));
+
+    // Watch sync: HereSphere's own events, at the video's event server.
+    let session = src.watch_session(beach).unwrap();
+    assert_eq!(
+        session.endpoint.as_deref(),
+        Some(server.url("/heresphere/events/1").as_str())
+    );
+    for (kind, position, paused) in [
+        (WatchKind::Start, 0.0, false),
+        (WatchKind::Tick, 10.0, false),
+        (WatchKind::Pause, 12.5, true),
+        (WatchKind::Seek, 30.0, true),
+        (WatchKind::Resume, 30.0, false),
+        (WatchKind::Stop, 31.0, false),
+    ] {
+        let event = WatchEvent {
+            kind,
+            position,
+            paused,
+            speed: 1.0,
+        };
+        src.report_watch(&session, event).unwrap();
+    }
+    let events: Vec<serde_json::Value> = server
+        .requests()
+        .iter()
+        .filter(|r| r.path() == "/heresphere/events/1")
+        .map(|r| serde_json::from_str(&r.body).unwrap())
+        .collect();
+    let got: Vec<_> = events
+        .iter()
+        .map(|e| (e["event"].as_u64().unwrap(), e["time"].as_f64().unwrap()))
+        .collect();
+    // Open, play, pause, a seek while paused, play, close.
+    assert_eq!(
+        got,
+        [
+            (0, 0.0),
+            (1, 0.0),
+            (2, 12_500.0),
+            (2, 30_000.0),
+            (1, 30_000.0),
+            (3, 31_000.0)
+        ]
+    );
+    assert!(events.iter().all(|e| e["id"] == beach.location.as_str()
+        && e["username"] == "bob"
+        && e["title"] == "Beach Day"
+        && e.get("password").is_none()));
+
+    // A favourite goes to the video's own URL, as HereSphere sends it.
+    let scenes_api = src.as_scene_feed().unwrap();
+    let info = scenes_api.scene(&beach.location, false).unwrap();
+    assert_eq!((info.favorite, info.write_favorite), (Some(false), true));
+    scenes_api.set_favorite(&beach.location, true).unwrap();
+    let last: serde_json::Value = server
+        .requests()
+        .iter()
+        .rev()
+        .find(|r| r.path() == "/heresphere/1")
+        .map(|r| serde_json::from_str(&r.body).unwrap())
+        .unwrap();
+    assert_eq!(
+        (&last["isFavorite"], &last["username"], &last["password"]),
+        (&true.into(), &"bob".into(), &"pw".into())
+    );
 
     let wrong = build(&SourceConfig::HereSphere(feed(
         server.url("/heresphere"),

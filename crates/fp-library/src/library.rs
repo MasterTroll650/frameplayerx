@@ -1,7 +1,7 @@
 //! The [`Library`] handle: opening, reading and changing media rows.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fp_core::format::{DetectedFormat, Evidence, detect_from_name};
 use fp_core::source::{Entry, EntryKind};
@@ -16,6 +16,7 @@ use crate::record::{
     TagCount, effective_columns, evidence_str, file_name_of, media_from_row, now, stem_of,
 };
 use crate::schema;
+use fp_core::sync::{lock, read, write};
 
 /// Fraction of the duration after which a playback counts as a full watch
 /// and the video drops out of "continue watching".
@@ -51,9 +52,27 @@ pub struct Library {
 pub struct Hidden {
     /// Source ids.
     pub sources: Vec<String>,
-    /// Folders or addresses (`/media/x/Private`, `smb://nas/share/dir`):
-    /// the location itself and everything under it, ignoring ASCII case.
-    pub locations: Vec<String>,
+    pub locations: Vec<HiddenRoot>,
+}
+
+/// A folder or address whose videos are hidden whichever source added them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HiddenRoot {
+    /// `/media/x/Private`, `smb://nas/share/dir`: the location itself and
+    /// everything under it, ignoring ASCII case.
+    pub root: String,
+    /// Sources whose videos stay listed although they are under `root`.
+    pub except: Vec<String>,
+}
+
+impl HiddenRoot {
+    /// Hides everything under `root`.
+    pub fn new(root: impl Into<String>) -> HiddenRoot {
+        HiddenRoot {
+            root: root.into(),
+            except: Vec::new(),
+        }
+    }
 }
 
 impl Hidden {
@@ -63,10 +82,13 @@ impl Hidden {
     }
 
     /// Whether a video from `source_id` at `location` is hidden; the same
-    /// test as the SQL from [`hidden_sql`].
+    /// test as the SQL from `hidden_sql`.
     pub fn hides(&self, source_id: &str, location: &str) -> bool {
         self.sources.iter().any(|s| s == source_id)
-            || self.locations.iter().any(|root| under(root, location))
+            || self
+                .locations
+                .iter()
+                .any(|h| under(&h.root, location) && !h.except.iter().any(|s| s == source_id))
     }
 }
 
@@ -108,17 +130,24 @@ pub(crate) fn hidden_sql(prefix: &str, hidden: &Hidden) -> Option<(String, Vec<V
         ));
         args.extend(hidden.sources.iter().cloned().map(Value::Text));
     }
-    for root in &hidden.locations {
-        let root = like_literal(root.trim_end_matches('/'));
+    for h in &hidden.locations {
+        let root = like_literal(h.root.trim_end_matches('/'));
         if root.is_empty() {
             continue;
         }
         // LIKE ignores ASCII case, as SMB and DLNA hosts and SMB paths do.
-        clauses.push(format!(
-            "NOT ({prefix}location LIKE ? ESCAPE '\\' OR {prefix}location LIKE ? ESCAPE '\\')"
-        ));
+        let mut clause =
+            format!("({prefix}location LIKE ? ESCAPE '\\' OR {prefix}location LIKE ? ESCAPE '\\')");
         args.push(Value::Text(root.clone()));
         args.push(Value::Text(format!("{root}/%")));
+        if !h.except.is_empty() {
+            clause += &format!(
+                " AND {prefix}source_id NOT IN ({})",
+                vec!["?"; h.except.len()].join(",")
+            );
+            args.extend(h.except.iter().cloned().map(Value::Text));
+        }
+        clauses.push(format!("NOT ({clause})"));
     }
     if clauses.is_empty() {
         return None;
@@ -146,7 +175,6 @@ pub struct MediaUpsert {
     pub location: String,
     /// Source that produced the entry.
     pub source_id: String,
-    /// Display title.
     pub title: String,
     /// Bytes, when known.
     pub size: Option<u64>,
@@ -230,7 +258,7 @@ impl MediaUpsert {
         u.duration = entry.duration.filter(|d| d.is_finite() && *d > 0.0);
         u.thumbnail_url = entry.thumbnail_url.clone();
         u.scripts = entry.scripts.clone();
-        u.subtitles = entry.subtitles.clone();
+        u.subtitles = entry.subtitles.iter().map(|s| s.location.clone()).collect();
         u.source_markers = Some(entry.markers.clone());
         Ok(u)
     }
@@ -257,14 +285,12 @@ pub enum UpsertStatus {
     Added,
     /// An existing row changed.
     Updated,
-    /// Nothing differed.
     Unchanged,
 }
 
 /// Result of [`Library::upsert`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UpsertOutcome {
-    /// Row id.
     pub id: MediaId,
     /// What happened to the row.
     pub status: UpsertStatus,
@@ -357,7 +383,7 @@ pub(crate) fn get_many(conn: &Connection, ids: &[MediaId]) -> Result<Vec<MediaRe
         let sql = format!("SELECT {MEDIA_COLUMNS} FROM media m WHERE m.id IN ({placeholders})");
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(
-            rusqlite::params_from_iter(chunk.iter().map(|id| id.0)),
+            params_from_iter(chunk.iter().map(|id| id.0)),
             media_from_row,
         )?;
         for row in rows {
@@ -684,7 +710,7 @@ impl Library {
     /// Runs `f` with the connection locked.
     pub(crate) fn with<T>(&self, f: impl FnOnce(&mut Connection) -> Result<T>) -> Result<T> {
         // See the type docs: a poisoned lock holds no partial transaction.
-        let mut guard = self.conn.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut guard = lock(&self.conn);
         f(&mut guard)
     }
 
@@ -703,15 +729,12 @@ impl Library {
     /// source ids only) until changed. Nothing is stored; lookups by id or
     /// location still find them.
     pub fn set_hidden(&self, hidden: Hidden) {
-        *self.hidden.write().unwrap_or_else(PoisonError::into_inner) = hidden;
+        *write(&self.hidden) = hidden;
     }
 
     /// What [`set_hidden`](Self::set_hidden) hides.
     pub fn hidden(&self) -> Hidden {
-        self.hidden
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        read(&self.hidden).clone()
     }
 
     /// Schema version of the open database (`PRAGMA user_version`).
@@ -721,7 +744,6 @@ impl Library {
 
     // -- reads --------------------------------------------------------------
 
-    /// One record by id.
     pub fn get(&self, id: MediaId) -> Result<Option<MediaRecord>> {
         self.with(|c| get_conn(c, id))
     }
@@ -1415,10 +1437,10 @@ mod tests {
         e.thumbnail_url = Some("http://srv/t.jpg".into());
         e.scripts = vec!["http://srv/trip.funscript".into()];
         e.markers = vec![(60.0, "Intro".into()), (10.0, "Start".into())];
-        let out = lib.upsert_entry("xbvr", &e).unwrap();
+        let out = lib.upsert_entry("feed", &e).unwrap();
         let r = lib.get(out.id).unwrap().unwrap();
         assert_eq!(r.title, "Trip");
-        assert_eq!(r.source_id, "xbvr");
+        assert_eq!(r.source_id, "feed");
         // A title from a server keeps its dots.
         let titled = Entry::new("Dr. Strangelove", "mb:http://jf#item=1", EntryKind::Video);
         let id = lib.upsert_entry("jf", &titled).unwrap().id;
@@ -1435,7 +1457,7 @@ mod tests {
         lib.add_marker(out.id, 30.0, "mine").unwrap();
         e.markers = vec![(5.0, "New".into())];
         assert_eq!(
-            lib.upsert_entry("xbvr", &e).unwrap().status,
+            lib.upsert_entry("feed", &e).unwrap().status,
             UpsertStatus::Updated
         );
         let names: Vec<String> = lib
@@ -1446,16 +1468,16 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["New".to_string(), "mine".to_string()]);
         assert_eq!(
-            lib.upsert_entry("xbvr", &e).unwrap().status,
+            lib.upsert_entry("feed", &e).unwrap().status,
             UpsertStatus::Unchanged
         );
 
         let dir = Entry::new("d", "http://srv/d/", EntryKind::Directory);
         assert!(matches!(
-            lib.upsert_entry("xbvr", &dir),
+            lib.upsert_entry("feed", &dir),
             Err(Error::InvalidArgument(_))
         ));
-        let outs = lib.upsert_entries("xbvr", &[dir, e]).unwrap();
+        let outs = lib.upsert_entries("feed", &[dir, e]).unwrap();
         assert_eq!(outs.len(), 1);
     }
 
@@ -1761,7 +1783,10 @@ mod tests {
         }
         lib.set_hidden(Hidden {
             sources: vec!["private".into()],
-            locations: vec!["smb://nas/Videos/Private/".into(), "/media/x_y%".into()],
+            locations: vec![
+                HiddenRoot::new("smb://nas/Videos/Private/"),
+                HiddenRoot::new("/media/x_y%"),
+            ],
         });
         let mut ids: Vec<MediaId> = lib
             .search(&crate::Query::default())
@@ -1780,6 +1805,35 @@ mod tests {
         assert!(h.hides("share", "smb://NAS/videos/private"));
         assert!(!h.hides("share", "smb://nas/Videos/PrivateParty/e.mp4"));
         assert!(h.hides("private", "anything"));
+    }
+
+    #[test]
+    fn hidden_folders_spare_the_sources_excepted() {
+        let lib = lib();
+        let up = |loc: &str, source: &str| lib.upsert(&MediaUpsert::new(loc, source)).unwrap().id;
+        // A DeoVR feed and a HereSphere API of one server: the same address.
+        let feed = up("http://vr:9999/deovr/1", "deovr");
+        let api = up("http://vr:9999/heresphere/2", "heresphere");
+        let scanned = up("http://vr:9999/files/3.mp4", "local");
+        lib.set_hidden(Hidden {
+            sources: vec!["heresphere".into()],
+            locations: vec![HiddenRoot {
+                root: "http://vr:9999".into(),
+                except: vec!["deovr".into()],
+            }],
+        });
+        let ids: Vec<MediaId> = lib
+            .search(&crate::Query::default())
+            .unwrap()
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(ids, vec![feed]);
+        let h = lib.hidden();
+        assert!(!h.hides("deovr", "http://vr:9999/deovr/1"));
+        assert!(h.hides("heresphere", "http://vr:9999/heresphere/2"));
+        assert!(h.hides("local", "http://vr:9999/files/3.mp4"));
+        assert!(lib.get(api).unwrap().is_some() && lib.get(scanned).unwrap().is_some());
     }
 
     #[test]

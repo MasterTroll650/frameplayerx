@@ -321,7 +321,7 @@ fn thumb_key(r: &MediaRecord) -> Option<String> {
 fn request(r: &MediaRecord) -> OpenRequest {
     OpenRequest {
         location: r.location.clone(),
-        source_id: (r.source_id != "local"
+        source_id: (r.source_id != crate::services::LIBRARY_SOURCE
             && !r.source_id.is_empty()
             && !r.location.starts_with('/'))
         .then(|| r.source_id.clone()),
@@ -489,8 +489,8 @@ fn home(ui: &mut egui::Ui, v: &mut View) {
                     icons::PLAY_CIRCLE,
                     "Nothing watched yet",
                     "Pick a source below: the videos on this headset, its microSD card and USB \
-                 drives, or your Jellyfin, XBVR, Stash, DLNA, SMB and WebDAV servers. What you \
-                 watch shows up here.",
+                 drives, your Jellyfin, DLNA, SMB and WebDAV servers, or any DeoVR feed or \
+                 HereSphere API. What you watch shows up here.",
                     |_| {},
                 );
                 ui.add_space(24.0);
@@ -854,7 +854,7 @@ fn details_side(ui: &mut egui::Ui, v: &mut View, r: &MediaRecord) {
     if !r.tags.is_empty() {
         ui.label(RichText::new(r.tags.join("  ·  ")).color(theme::TEXT_2));
     }
-    if !r.scripts.is_empty() {
+    if !r.scripts.is_empty() && v.settings.haptics_enabled {
         let n = r.scripts.len();
         ui.label(
             RichText::new(format!(
