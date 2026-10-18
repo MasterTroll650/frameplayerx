@@ -14,6 +14,7 @@ mod crash;
 mod drives;
 mod jobs;
 mod logger;
+mod perf;
 mod pin;
 mod playback;
 mod preview;
@@ -432,6 +433,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     // Render-thread time per frame (after xrWaitFrame), logged every 10 s:
     // over ~9 ms the compositor starts synthesising frames.
     let mut frame_ms: Vec<f32> = Vec::new();
+    let mut last_frame_ms = None;
     let mut timing_since = Instant::now();
     let layers = session.supports_quad_layers();
     log::info!(
@@ -469,6 +471,10 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                 hands: input.hands,
                 passthrough_available: session.supports_passthrough_blend(),
                 layers,
+                frame_ms: last_frame_ms,
+                display_hz: Some(frame.state.predicted_display_period.as_nanos())
+                    .filter(|&ns| ns > 0)
+                    .map(|ns| 1e9 / ns as f32),
             },
         );
         frames += 1;
@@ -526,7 +532,9 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         for (hand, amp, ms) in out.buzz {
             session.buzz(hand, amp, ms);
         }
-        frame_ms.push(work.elapsed().as_secs_f32() * 1000.0);
+        let ms = work.elapsed().as_secs_f32() * 1000.0;
+        frame_ms.push(ms);
+        last_frame_ms = Some(ms);
         session.end_frame(frame, &submits)?;
         if timing_since.elapsed() > Duration::from_secs(10) && !frame_ms.is_empty() {
             frame_ms.sort_by(f32::total_cmp);

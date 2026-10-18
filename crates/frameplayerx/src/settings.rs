@@ -86,6 +86,8 @@ pub struct Settings {
     /// Flat videos and the panels glide to where the viewer settles
     /// ([`crate::world::Follow`]).
     pub follow: bool,
+    /// The performance overlay (Settings › About › Diagnostics).
+    pub perf_overlay: bool,
     /// What the controller buttons and thumbsticks do.
     pub controls: crate::bindings::Bindings,
     /// Where the library and adjust panels were moved to: yaw and pitch in
@@ -148,6 +150,7 @@ impl Default for Settings {
             check_updates: true,
             ui_scale: 1.0,
             follow: false,
+            perf_overlay: false,
             controls: crate::bindings::Bindings::default(),
             panel_offsets: PanelOffsets::default(),
             browse_sort: fp_sources::EntrySort::default(),

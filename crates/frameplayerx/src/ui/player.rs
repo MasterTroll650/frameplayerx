@@ -400,7 +400,7 @@ fn format_pill(ui: &mut egui::Ui, text: &str) -> egui::Response {
 
 /// Short summary label and detailed tooltip for a video stream.
 /// `hardware_on` is the hardware decoding setting.
-fn stream_info_labels(
+pub(crate) fn stream_info_labels(
     v: &fp_media::StreamInfo,
     st: &fp_media::Stats,
     hardware_on: bool,

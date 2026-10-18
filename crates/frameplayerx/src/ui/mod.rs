@@ -13,6 +13,7 @@ pub mod keyboard;
 pub mod library;
 pub mod local;
 pub mod page;
+pub mod perf;
 pub mod player;
 pub mod premium;
 pub mod settings;

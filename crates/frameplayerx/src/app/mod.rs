@@ -44,6 +44,10 @@ pub struct FrameInput {
     /// The compositor can draw panels and rays as quad layers (OpenXR);
     /// otherwise (the desktop preview) everything is drawn into the eyes.
     pub layers: bool,
+    /// Render-thread time of the previous frame, ms, and the display's
+    /// refresh rate (OpenXR), for the performance overlay.
+    pub frame_ms: Option<f32>,
+    pub display_hz: Option<f32>,
 }
 
 /// A panel or pointer ray for the compositor to draw as its own quad layer,
@@ -83,6 +87,10 @@ const MAIN: usize = 0;
 const BAR: usize = 1;
 const ADJUST: usize = 2;
 const KEYBOARD: usize = 3;
+/// The performance overlay's quad layer (the panels' are their indices).
+const PERF_LAYER: u64 = 8;
+/// Where the performance overlay sits from the eyes: low and to the left.
+const PERF_OFFSET: Vec3 = Vec3::new(-0.3, -0.12, -0.85);
 
 /// How long a video may take to open before the app gives up on it. A
 /// server that never sends a frame (a live transcode it can't keep up with)
@@ -97,6 +105,12 @@ pub struct App {
     thumbs: ui::thumbs::Thumbs,
     panels: [Panel; 4],
     subs: Panel,
+    /// The performance overlay, its sampler while it shows, the last
+    /// second of frame times, and the video's counters at its last paint.
+    perf: Panel,
+    perf_monitor: Option<crate::perf::Monitor>,
+    frame_times: std::collections::VecDeque<f32>,
+    perf_video: Option<(Instant, u64, u64)>,
     sub_key: String,
     sub_textures: Vec<egui::TextureHandle>,
     /// Sets subtitle text in any script, once its fonts have loaded.
@@ -189,6 +203,10 @@ impl App {
         panels[ADJUST].refresh = Some(Duration::from_millis(1000));
         panels[MAIN].refresh = Some(Duration::from_millis(1000));
         let subs = panel([1600, 320], 1.6, 1.0);
+        let mut perf = panel([640, 300], 0.4, 1.0);
+        perf.ctx
+            .style_mut(|s| s.visuals.panel_fill = egui::Color32::TRANSPARENT);
+        perf.refresh = Some(Duration::from_millis(500));
         subs.ctx
             .style_mut(|s| s.visuals.panel_fill = egui::Color32::TRANSPARENT);
         let sub_fonts = Jobs::new();
@@ -201,6 +219,10 @@ impl App {
             thumbs,
             panels,
             subs,
+            perf,
+            perf_monitor: None,
+            frame_times: Default::default(),
+            perf_video: None,
             sub_key: String::new(),
             sub_textures: Vec::new(),
             sub_shaper: None,

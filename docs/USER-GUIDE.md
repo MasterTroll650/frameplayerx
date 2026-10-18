@@ -482,6 +482,10 @@ protocol. Both only answer devices on your local network.
 
 ## Troubleshooting
 
+- When a video stutters, turn on Settings › About › **Performance
+  overlay**. Low in your view, it shows how long each frame takes to draw
+  (amber when longer than the display allows), the video's frame rate and
+  dropped frames, its decoder, how busy the CPU and GPU are, and memory.
 - After a crash, the next start asks whether to send a crash report to
   FramePlayerX's developers, as a private issue on GitHub. It contains the
   versions of FramePlayerX and the headset's system, what went wrong, and

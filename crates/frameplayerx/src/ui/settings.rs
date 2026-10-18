@@ -922,6 +922,17 @@ fn about(ui: &mut egui::Ui, v: &mut View) {
         );
         r.info("Log", &crate::logger::log_path().display().to_string());
     });
+    heading(ui, "Diagnostics");
+    widgets::rows(ui, |r| {
+        r.switch(
+            "Performance overlay",
+            Some(
+                "Frame time, the video's frame rate and decoder, CPU, GPU and memory, \
+                 low in your view.",
+            ),
+            &mut v.settings.perf_overlay,
+        );
+    });
     ui.add_space(6.0);
     note(
         ui,

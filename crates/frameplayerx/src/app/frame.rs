@@ -93,6 +93,7 @@ impl App {
         self.place_panels(anchor, kb_target);
         let buzz = self.route_input(&input, anchor);
         self.paint_panels(renderer, &input, kb_target);
+        self.perf_overlay(renderer, &input);
         let (frame, video, passthrough) = self.video(renderer, &input, anchor);
         let (quads, layers) = self.compose(&input, eye);
         FrameOutput {
@@ -179,6 +180,76 @@ impl App {
             let s = p.shown_settings(&self.settings.default_view);
             facing_screen(anchor, dir, s.screen_width * s.zoom, s.screen_distance)
         })
+    }
+
+    /// The performance overlay while Settings › About turns it on: low and
+    /// to the left in the view, repainted twice a second.
+    fn perf_overlay(&mut self, renderer: &mut Renderer, input: &FrameInput) {
+        if !self.settings.perf_overlay {
+            self.perf.visible = false;
+            self.perf_monitor = None;
+            self.frame_times.clear();
+            self.perf_video = None;
+            return;
+        }
+        let sample = self
+            .perf_monitor
+            .get_or_insert_with(crate::perf::Monitor::start)
+            .latest();
+        if let Some(ms) = input.frame_ms {
+            self.frame_times.push_back(ms);
+            let second = input
+                .display_hz
+                .map_or(90, |hz| hz.round().max(1.0) as usize);
+            while self.frame_times.len() > second {
+                self.frame_times.pop_front();
+            }
+        }
+        if let Some((pos, rot)) = input.head {
+            self.perf.pose =
+                Mat4::from_rotation_translation(rot, pos) * Mat4::from_translation(PERF_OFFSET);
+        }
+        self.perf.visible = true;
+        if !self.perf.needs_paint() {
+            return;
+        }
+        let frame_ms = (!self.frame_times.is_empty()).then(|| {
+            let mut t: Vec<f32> = self.frame_times.iter().copied().collect();
+            t.sort_by(f32::total_cmp);
+            (t[t.len() / 2], t[t.len() - 1])
+        });
+        let video = self.playback.as_ref().and_then(|p| {
+            let st = p.player.stats();
+            let now = Instant::now();
+            let last = self
+                .perf_video
+                .replace((now, st.frames_shown, st.frames_dropped));
+            let (at, shown, dropped) = last?;
+            let s = now.duration_since(at).as_secs_f32().max(1e-3);
+            let v = p.player.info().video_stream()?;
+            let (badge, _) =
+                ui::player::stream_info_labels(v, &st, self.settings.hardware_decoding);
+            Some((
+                st.frames_shown.saturating_sub(shown) as f32 / s,
+                st.frames_dropped.saturating_sub(dropped) as f32 / s,
+                badge,
+            ))
+        });
+        if self.playback.is_none() {
+            self.perf_video = None;
+        }
+        let overlay = ui::perf::Overlay {
+            frame_ms,
+            display_hz: input.display_hz,
+            video,
+            sample,
+        };
+        if let Err(e) = self
+            .perf
+            .paint(renderer, input.time, |ctx| ui::perf::overlay(ctx, &overlay))
+        {
+            log::error!("performance overlay: {e}");
+        }
     }
 
     /// Which panels show: the controls hide on their own while a video
@@ -408,6 +479,22 @@ impl App {
                     size: p.size,
                 }),
                 _ => quads.extend(p.quad()),
+            }
+        }
+        // The performance overlay rides with the head, nearest of all.
+        self.perf.update_fade(input.dt);
+        if self.perf.shown() {
+            match self.perf.id {
+                Some(panel) if input.layers && self.perf.fully_shown() => {
+                    layers.push(LayerDraw::Panel {
+                        key: PERF_LAYER,
+                        panel,
+                        px: self.perf.px,
+                        pose: self.perf.pose,
+                        size: self.perf.size,
+                    });
+                }
+                _ => quads.extend(self.perf.quad()),
             }
         }
         let any_ui = self.panels.iter().any(|p| p.visible);
