@@ -58,8 +58,8 @@ Comments say what the code can't:
 | `frameplayerx` | The app: the XR loop, the interface, and wiring everything together |
 | `fp-core` | Shared types: formats and their detection, view settings, the source contract, data folders |
 | `fp-ffmpeg-sys` | Bindings to the bundled FFmpeg 7.1, per architecture (`tools/gen-ffmpeg-bindings.sh`) |
-| `fp-media` | Demuxing, decoding (V4L2 hardware, software), the A/V clock, ALSA audio, subtitles, thumbnails |
-| `fp-render` | The Vulkan renderer: the projection shader for every format, egui panels, quads |
+| `fp-media` | Demuxing, decoding (V4L2 hardware, 10-bit HEVC as Q10C; software), the A/V clock, ALSA audio, subtitles, thumbnails |
+| `fp-render` | The Vulkan renderer: the projection shader for every format, the Q10C to P010 conversion, egui panels, quads |
 | `fp-xr` | OpenXR: the session and swapchains, controller input, passthrough |
 | `fp-xr-loader` | Finds the active OpenXR runtime and loads it directly, with no Khronos loader to ship (shared with `frame-probe`) |
 | `fp-library` | The SQLite database: folder scanning, the metadata and thumbnail worker, search, watch history |

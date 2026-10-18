@@ -292,7 +292,7 @@ impl Sim {
                 self.run_frames(3)?;
             }
             // The notice for software decoding falling behind, as a 10-bit
-            // HEVC video gets it.
+            // AV1 video gets it.
             Some("slow-decode") => {
                 if let Some(p) = &mut self.app.playback {
                     let v = p.player.info().video_stream().cloned();

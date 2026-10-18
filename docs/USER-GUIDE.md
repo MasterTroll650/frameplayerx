@@ -336,8 +336,8 @@ says why ("No hardware decoding for AV1", "… for 4:2:2 HEVC"). Convert them
 to 4:2:0 HEVC once on a PC and they play smoothly.
 
 "Hardware decoder busy" means the file is fine but the decoder had no room
-for it (Steam's own streaming uses it too, and a 10-bit 8192×4096 video
-only fits when nothing else is decoding). "The hardware decoder can't play
+for it (Steam's own streaming uses it too, and an 8192×4096 H.264 or
+10-bit HEVC video only fits when nothing else is decoding). "The hardware decoder can't play
 this HEVC" means it tried and refused the file; frameplayerx.log says why.
 
 The pill next to the format on the control bar says which decoder plays
@@ -363,10 +363,16 @@ Any PC (slower; `-crf` lower is better quality and bigger):
 ffmpeg -i video.mp4 -map 0:v:0 -map 0:a? -c:v libx265 -preset fast -crf 20 -profile:v main -pix_fmt yuv420p -tag:v hvc1 -c:a copy -movflags +faststart video_8bit.mp4
 ```
 
+These make 8-bit HEVC, which always plays in hardware. To keep a 10-bit or
+HDR video at 10 bits, use `-profile:v main10` with `-pix_fmt p010le`
+(NVIDIA) or `-pix_fmt yuv420p10le` (any PC); it plays in hardware too, but
+at 8192×4096 only while nothing else is using the decoder.
+
 Or in HandBrake: the **H.265** encoder for your graphics card (NVEnc, AMD
-VCE or Intel QSV, not one marked 10-bit), Constant Quality about 20,
-framerate Same as source, audio Passthru, and **Dimensions › Cropping:
-None** (automatic cropping cuts into side-by-side VR pictures).
+VCE or Intel QSV; the 10-bit one for a 10-bit or HDR video), Constant
+Quality about 20, framerate Same as source, audio Passthru, and
+**Dimensions › Cropping: None** (automatic cropping cuts into side-by-side
+VR pictures).
 
 Keep the format tags in the name (`_180_LR` and so on); conversions drop
 the VR metadata, so a file without tags may need its format set once
