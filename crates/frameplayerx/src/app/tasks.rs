@@ -336,6 +336,13 @@ impl App {
             Job::Update(status) => self.ui.update = status,
             Job::UpdateChecked(seq, status, update) => {
                 if seq == self.update_check {
+                    if let UpdateStatus::Available { version, .. } = &status
+                        && self.start_check == Some(seq)
+                    {
+                        self.update_notice = Some(format!(
+                            "FramePlayerX {version} is out: install it from Settings › Updates"
+                        ));
+                    }
                     self.update = update.map(|u| *u);
                     self.ui.update = status;
                 }

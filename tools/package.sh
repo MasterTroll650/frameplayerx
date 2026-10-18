@@ -40,8 +40,9 @@ cargo build --release -p fp-updater --bin fp-release
 
 stage="$root/dist/stage/frameplayerx"
 rm -rf "$root/dist/stage" && mkdir -p "$stage/lib" "$stage/licenses" "$stage/assets/steam"
+# Cargo already left out the debug info; the symbols stay, so that crash
+# reports' backtraces name functions.
 cp "target/$target/release/frameplayerx" "$stage/"
-llvm-strip --strip-all "$stage/frameplayerx" 2>/dev/null || true
 for l in avformat.so.61 avcodec.so.61 avutil.so.59 swresample.so.5 swscale.so.8; do
   cp -L "$ffmpeg/lib$l" "$stage/lib/lib$l"
 done

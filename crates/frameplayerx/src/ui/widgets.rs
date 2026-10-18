@@ -37,13 +37,15 @@ impl Tip for Response {
                 egui::Order::Tooltip,
                 self.id.with("tip"),
             ));
-            let g = painter.layout_no_wrap(
+            let screen = self.ctx.screen_rect();
+            let g = one_line(
+                &painter,
                 word.to_string(),
                 theme::font(Weight::SemiBold, 15.0),
                 theme::BG,
+                screen.width() - 26.0,
             );
             let size = g.size() + Vec2::new(18.0, 10.0);
-            let screen = self.ctx.screen_rect();
             // Above the control, or below it at the top edge of the panel.
             let above = self.rect.top() - size.y - 8.0;
             let y = if above >= screen.top() + 2.0 {
@@ -51,8 +53,12 @@ impl Tip for Response {
             } else {
                 self.rect.bottom() + 8.0 - (1.0 - t) * 4.0
             };
-            let x = (self.rect.center().x - size.x / 2.0)
-                .clamp(screen.left() + 4.0, screen.right() - size.x - 4.0);
+            let x = fit(
+                self.rect.center().x - size.x / 2.0,
+                size.x,
+                screen.left() + 4.0,
+                screen.right() - 4.0,
+            );
             let r = Rect::from_min_size(Pos2::new(x, y), size);
             painter.rect_filled(r, CornerRadius::same(8), theme::TEXT.gamma_multiply(t));
             painter.galley_with_override_text_color(
@@ -83,6 +89,26 @@ fn dimensional(ui: &Ui) -> bool {
 
 /// Room round a floating panel's body in its panel, for the shadow the
 /// body casts on the scene.
+/// Where a box `width` wide that would start at `x` goes to stay between
+/// `lo` and `hi`: against `lo` when it is wider than that, where
+/// `f32::clamp` would panic.
+pub fn fit(x: f32, width: f32, lo: f32, hi: f32) -> f32 {
+    x.min(hi - width).max(lo)
+}
+
+/// `text` on one line, cut short with "…" past `max_width`.
+pub fn one_line(
+    painter: &egui::Painter,
+    text: String,
+    font: egui::FontId,
+    color: Color32,
+    max_width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = LayoutJob::simple_singleline(text, font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max_width);
+    painter.layout_job(job)
+}
+
 pub const SHADOW_ROOM: egui::Margin = egui::Margin {
     left: 20,
     right: 20,
@@ -1176,6 +1202,15 @@ pub fn display_title(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_box_too_wide_to_fit_goes_against_the_left() {
+        assert_eq!(fit(50.0, 20.0, 0.0, 100.0), 50.0);
+        assert_eq!(fit(95.0, 20.0, 0.0, 100.0), 80.0);
+        assert_eq!(fit(-5.0, 20.0, 0.0, 100.0), 0.0);
+        // A seek bubble with a long marker name: wider than the bar.
+        assert_eq!(fit(500.0, 2200.0, 48.0, 1100.0), 48.0);
+    }
 
     #[test]
     fn titles_drop_format_tags() {
