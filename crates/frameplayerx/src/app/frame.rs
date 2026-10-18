@@ -542,8 +542,13 @@ impl App {
 
 /// The Escape key, which closes the focused text field's keyboard.
 pub(super) fn escape() -> egui::Event {
+    key(egui::Key::Escape)
+}
+
+/// A key press.
+pub(super) fn key(key: egui::Key) -> egui::Event {
     egui::Event::Key {
-        key: egui::Key::Escape,
+        key,
         physical_key: None,
         pressed: true,
         repeat: false,

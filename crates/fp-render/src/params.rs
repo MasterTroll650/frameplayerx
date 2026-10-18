@@ -19,6 +19,8 @@ pub(crate) struct SceneParams {
     pub mode: [u32; 4],
     pub proj: Vec4,
     pub lens: Vec4,
+    pub circle: Vec4,
+    pub centres: Vec4,
     pub screen: Vec4,
     pub yuv_r: Vec4,
     pub yuv_g: Vec4,
@@ -165,6 +167,10 @@ pub(crate) fn build(
             (tex.0 as f32, tex.1 as f32)
         }
     };
+    // A fisheye's image circle fills the eye image's shorter side, and stays
+    // round when the image is not square.
+    let circle = Vec4::new((eh / ew).min(1.0), (ew / eh).min(1.0), 0.0, 0.0);
+    let [c0, c1] = s.lens_centre;
     let screen_w = s.screen_width * s.zoom;
     let screen_h = screen_w * eh / ew.max(1.0);
     let arc = s.screen_curvature.clamp(0.0, 1.0) * std::f32::consts::TAU / 3.0;
@@ -195,6 +201,8 @@ pub(crate) fn build(
             deg(s.vertical_align),
             deg(s.rotation_align),
         ),
+        circle,
+        centres: Vec4::new(c0[0], -c0[1], c1[0], -c1[1]),
         screen: Vec4::new(screen_w, screen_h, arc, frame.is_some() as u32 as f32),
         yuv_r: rows[0],
         yuv_g: rows[1],

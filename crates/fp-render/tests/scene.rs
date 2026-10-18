@@ -186,6 +186,95 @@ fn alpha_packed_mask_cuts_out_each_eye() {
 }
 
 #[test]
+fn fisheye_centres_move_each_image_on_its_own() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    // Side-by-side fisheye, blue but for a red dot in each image away from
+    // its middle: 8% right in the left image, 6% up in the right one.
+    let dot = |u: f32, v: f32, (cu, cv): (f32, f32)| (u - cu).hypot(v - cv) < 0.03;
+    let f = frame(512, 256, |u, v| {
+        let red = if u < 0.5 {
+            dot(u * 2.0, v, (0.58, 0.5))
+        } else {
+            dot(u * 2.0 - 1.0, v, (0.5, 0.44))
+        };
+        if red { [230, 20, 20] } else { [20, 20, 230] }
+    });
+    let shown = |r: &mut Renderer, e: &mut OffscreenEyes, s: ViewSettings| {
+        let [l, rr] = render(
+            r,
+            e,
+            Some(&f),
+            &params(Projection::fisheye(180.0), StereoLayout::SideBySide, s),
+            &[],
+        );
+        (centre(&l), centre(&rr))
+    };
+    let d = ViewSettings::default();
+    let (l, rr) = shown(&mut r, &mut e, d);
+    assert!(is_blue(l) && is_blue(rr), "centred: {l:?} {rr:?}");
+
+    let both = ViewSettings {
+        lens_centre: [[0.08, 0.0], [0.0, 0.06]],
+        ..d
+    };
+    let (l, rr) = shown(&mut r, &mut e, both);
+    assert!(is_red(l) && is_red(rr), "both moved: {l:?} {rr:?}");
+
+    let left = ViewSettings {
+        lens_centre: [[0.08, 0.0], [0.0; 2]],
+        ..d
+    };
+    let (l, rr) = shown(&mut r, &mut e, left);
+    assert!(is_red(l) && is_blue(rr), "left image only: {l:?} {rr:?}");
+
+    // Swapped, the left image (and its centre) goes to the right eye.
+    let (l, rr) = shown(
+        &mut r,
+        &mut e,
+        ViewSettings {
+            swap_eyes: true,
+            ..left
+        },
+    );
+    assert!(is_blue(l) && is_red(rr), "swapped: {l:?} {rr:?}");
+}
+
+#[test]
+fn a_fisheye_circle_stays_round_on_a_wide_image() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    // A mono 180° fisheye in a 2:1 frame: the circle fills the height, so
+    // 60° off-centre is a third of the radius, a sixth of the width, out.
+    let f = frame(512, 256, |u, _| {
+        if ((u - 0.5).abs() - 1.0 / 6.0).abs() < 0.03 {
+            [230, 20, 20]
+        } else {
+            [20, 20, 230]
+        }
+    });
+    let s = ViewSettings {
+        yaw: 60.0,
+        ..ViewSettings::default()
+    };
+    let [l, rr] = render(
+        &mut r,
+        &mut e,
+        Some(&f),
+        &params(Projection::fisheye(180.0), StereoLayout::Mono, s),
+        &[],
+    );
+    assert!(
+        is_red(centre(&l)) && is_red(centre(&rr)),
+        "{:?} {:?}",
+        centre(&l),
+        centre(&rr)
+    );
+}
+
+#[test]
 fn side_by_side_and_top_bottom_pick_each_eye() {
     let Some((mut r, mut e)) = setup() else {
         return;

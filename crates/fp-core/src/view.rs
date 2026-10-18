@@ -28,6 +28,10 @@ pub struct ViewSettings {
     /// Radial lens distortion correction (k1, k2) applied in source space.
     pub lens_k1: f32,
     pub lens_k2: f32,
+    /// Fisheye: where each image circle's centre sits, from the centre of
+    /// its eye image, as fractions of that image's width (right) and height
+    /// (up). The left or top image first; a mono video uses only that one.
+    pub lens_centre: [[f32; 2]; 2],
     /// Swap left and right eyes.
     pub swap_eyes: bool,
     /// Picture: brightness and contrast around 0 and 1, saturation 1,
@@ -75,6 +79,7 @@ impl Default for ViewSettings {
             rotation_align: 0.0,
             lens_k1: 0.0,
             lens_k2: 0.0,
+            lens_centre: [[0.0; 2]; 2],
             swap_eyes: false,
             brightness: 0.0,
             contrast: 1.0,
@@ -112,6 +117,8 @@ impl ViewSettings {
             rotation_align: l(self.rotation_align, other.rotation_align),
             lens_k1: l(self.lens_k1, other.lens_k1),
             lens_k2: l(self.lens_k2, other.lens_k2),
+            lens_centre: [0, 1]
+                .map(|i| [0, 1].map(|j| l(self.lens_centre[i][j], other.lens_centre[i][j]))),
             swap_eyes: if t < 0.5 {
                 self.swap_eyes
             } else {

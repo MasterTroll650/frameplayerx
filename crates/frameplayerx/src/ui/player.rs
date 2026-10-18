@@ -774,7 +774,7 @@ fn format_tab(
         widgets::section_label(ui, "Fisheye lens");
         widgets::rows(ui, |r| {
             let mut f = fov;
-            if r.slider("Field of view", None, &mut f, 150.0..=240.0, fov, "°", 0) {
+            if r.slider("Field of view", None, &mut f, 120.0..=300.0, fov, "°", 0) {
                 actions.push(Action::SetFormat(Some(VideoFormat {
                     projection: Projection::Fisheye { fov: f.round() },
                     ..pb.format
@@ -783,6 +783,36 @@ fn format_tab(
             r.slider("Lens k1", None, &mut s.lens_k1, -0.5..=0.5, 0.0, "", 2);
             r.slider("Lens k2", None, &mut s.lens_k2, -0.5..=0.5, 0.0, "", 2);
         });
+        ui.add_space(6.0);
+        widgets::section_label(ui, "Lens centre");
+        let images: &[[&str; 2]] = match pb.format.stereo {
+            StereoLayout::Mono => &[["Across", "Up"]],
+            StereoLayout::SideBySide | StereoLayout::HalfSideBySide => {
+                &[["Left, across", "Left, up"], ["Right, across", "Right, up"]]
+            }
+            StereoLayout::TopBottom | StereoLayout::HalfTopBottom => {
+                &[["Top, across", "Top, up"], ["Bottom, across", "Bottom, up"]]
+            }
+        };
+        widgets::rows(ui, |r| {
+            for (i, titles) in images.iter().enumerate() {
+                for (j, title) in titles.iter().enumerate() {
+                    // Shown in percent of the image.
+                    let mut v = s.lens_centre[i][j] * 100.0;
+                    if r.slider(title, None, &mut v, -10.0..=10.0, 0.0, "%", 1) {
+                        s.lens_centre[i][j] = v / 100.0;
+                    }
+                }
+            }
+        });
+        ui.label(
+            RichText::new(
+                "Where each image circle's centre is, if not in the middle. \
+                 Point at a slider and push the thumbstick left or right \
+                 for fine steps.",
+            )
+            .color(theme::TEXT_3),
+        );
     }
     if pb.format.projection == Projection::Flat {
         ui.add_space(6.0);

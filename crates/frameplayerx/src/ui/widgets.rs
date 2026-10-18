@@ -817,8 +817,34 @@ pub fn slider_control(
                 .color(theme::TEXT_2),
         ),
     );
-    changed |= slider(ui, value, range, 240.0).changed();
+    let resp = slider(ui, value, range.clone(), 240.0);
+    changed |= resp.changed();
+    if resp.hovered() {
+        let ctx = ui.ctx().clone();
+        let pass = ctx.cumulative_pass_nr();
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(OVER_SLIDER), pass));
+        let dir = ui.input_mut(|i| {
+            let mut n = |key| i.count_and_consume_key(egui::Modifiers::NONE, key) as f32;
+            n(egui::Key::ArrowRight) - n(egui::Key::ArrowLeft)
+        });
+        if dir != 0.0 {
+            // A step of the shown precision, landing on it.
+            let step = 10f32.powi(-(decimals as i32));
+            *value = (((*value / step).round() + dir) * step).clamp(*range.start(), *range.end());
+            changed = true;
+            ctx.request_repaint();
+        }
+    }
     changed
+}
+
+const OVER_SLIDER: &str = "over-slider";
+
+/// Whether the pointer was on a [`slider_control`] in the panel's last pass:
+/// the thumbstick then steps it (arrow keys) instead of paging.
+pub fn over_slider(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(egui::Id::new(OVER_SLIDER)))
+        .is_some_and(|pass| pass + 1 == ctx.cumulative_pass_nr())
 }
 
 /// A slider: a slim rail filled in the accent up to a white knob.
@@ -1225,5 +1251,55 @@ mod tests {
         assert_eq!(display_title("180_SBS"), "180_SBS");
         // Tags mid-title stay: only trailing ones are format.
         assert_eq!(display_title("Top 360 Moments_LR"), "Top 360 Moments");
+    }
+
+    #[test]
+    fn the_thumbstick_steps_the_slider_it_points_at() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let pass = |events: Vec<egui::Event>, value: &mut f32| {
+            let mut rect = Rect::NOTHING;
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    rect = ui
+                        .horizontal(|ui| slider_control(ui, value, -10.0..=10.0, 0.0, "%", 1))
+                        .response
+                        .rect;
+                });
+            });
+            rect
+        };
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut v = 1.23;
+        let rect = pass(vec![], &mut v);
+        assert!(!over_slider(&ctx));
+        let on_rail = Pos2::new(rect.right() - 120.0, rect.center().y);
+        pass(vec![egui::Event::PointerMoved(on_rail)], &mut v);
+        assert!(over_slider(&ctx));
+
+        // Steps of the shown precision, landing on it.
+        pass(vec![key(egui::Key::ArrowRight)], &mut v);
+        assert!((v - 1.3).abs() < 1e-5, "{v}");
+        pass(
+            vec![key(egui::Key::ArrowLeft), key(egui::Key::ArrowLeft)],
+            &mut v,
+        );
+        assert!((v - 1.1).abs() < 1e-5, "{v}");
+
+        let below = Pos2::new(on_rail.x, rect.bottom() + 100.0);
+        pass(vec![egui::Event::PointerMoved(below)], &mut v);
+        assert!(!over_slider(&ctx));
+        pass(vec![key(egui::Key::ArrowRight)], &mut v);
+        assert!((v - 1.1).abs() < 1e-5, "not pointed at: {v}");
     }
 }

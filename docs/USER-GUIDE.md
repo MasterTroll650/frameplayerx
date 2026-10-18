@@ -7,7 +7,8 @@ or your network.
 - [Install](#install), [updating](#updating) and [uninstall](#uninstall)
 - [Where your videos can be](#where-your-videos-can-be): browsing,
   PIN locks, microSD cards and USB drives
-- [Video formats](#video-formats), and [videos that stutter](#videos-that-stutter-av1-and-422)
+- [Video formats](#video-formats), [fisheye lenses](#fisheye-lenses) and
+  [videos that stutter](#videos-that-stutter-av1-and-422)
 - [Controls](#controls), and [watching lying down](#watching-lying-down)
 - [Passthrough videos](#passthrough-videos)
 - [Haptics](#haptics)
@@ -297,6 +298,26 @@ MP3, DTS, TrueHD, PCM (Blu-ray and DVD LPCM too), and spatial (ambisonic)
 audio that follows your head.
 Subtitles: SRT, ASS/SSA, WebVTT, and embedded text or picture subtitles.
 
+### Fisheye lenses
+
+The fisheye presets (190° for the Canon RF 5.2 mm, 200° and 220° for
+`_MKX200` and `_MKX220` files) suit most videos. If one still looks wrong,
+for example if straight lines bend as you look around or the eyes stop
+lining up towards the edges, open **⚙ › Format** and use the sliders under
+**Fisheye lens**:
+
+- **Field of view**: the lens's angle, 120° to 300°. The image circle fills
+  the shorter side of each eye's image.
+- **Lens k1** and **Lens k2**: correct a lens that doesn't keep to an even
+  fisheye spread towards its edge.
+- **Lens centre**: where each image circle's centre is, if it isn't in the
+  middle of its half of the frame. This is common in footage straight from
+  a camera. In 3D, each image has its own.
+
+To fine-tune a slider, point at it and push the thumbstick left or right.
+Each push is one step, and holding repeats. **Save for this video** keeps
+the settings for that file.
+
 ### Subtitles
 
 Subtitles come from inside the video or from files beside it, named after
@@ -385,7 +406,7 @@ picture. Play/pause and seeking are under either thumb.
 
 | Control | Right hand | Left hand |
 |---|---|---|
-| Thumbstick left / right | Seek back / forward 10 s (adjustable; hold to repeat). Pointing at a list: previous / next page | The same |
+| Thumbstick left / right | Seek back / forward 10 s (adjustable; hold to repeat). Pointing at a list: previous / next page. Pointing at a slider: one fine step | The same |
 | Thumbstick up / down | Volume (or scroll a menu you point at) | Tilt the picture (or scroll a menu you point at) |
 | Thumbstick press | Mute | Reset the picture |
 | A / D-pad down | Play / pause | Play / pause |

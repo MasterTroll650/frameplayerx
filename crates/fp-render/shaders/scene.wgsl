@@ -22,6 +22,11 @@ struct Params {
     proj: vec4<f32>,
     // x: lens k1, y: lens k2, z: vertical align, w: rotation align (radians)
     lens: vec4<f32>,
+    // Fisheye: xy the image circle's diameter in eye-image units
+    circle: vec4<f32>,
+    // Fisheye: each image circle's centre offset in eye-image units, the
+    // left or top image's in xy, the other's in zw
+    centres: vec4<f32>,
     // x: screen width, y: screen height, z: curvature arc (radians), w: has video
     screen: vec4<f32>,
     // YUV -> RGB: rgb = m * (yuv * scale - offset)
@@ -128,7 +133,7 @@ fn equirect_uv(d: vec3<f32>, h_fov: f32, v_fov: f32) -> vec2<f32> {
     return vec2<f32>(u, v);
 }
 
-fn fisheye_uv(d: vec3<f32>, fov: f32, k1: f32, k2: f32) -> vec2<f32> {
+fn fisheye_uv(d: vec3<f32>, fov: f32, k1: f32, k2: f32, size: vec2<f32>, centre: vec2<f32>) -> vec2<f32> {
     let theta = acos(clamp(-d.z, -1.0, 1.0));
     var r = theta / fov; // 0.5 at the edge of the image circle
     if (r > 0.5) { return INVALID; }
@@ -137,7 +142,7 @@ fn fisheye_uv(d: vec3<f32>, fov: f32, k1: f32, k2: f32) -> vec2<f32> {
     let len = length(d.xy);
     var dir = vec2<f32>(0.0, 0.0);
     if (len > 1e-6) { dir = d.xy / len; }
-    let uv = vec2<f32>(0.5 + r * dir.x, 0.5 - r * dir.y);
+    let uv = centre + vec2<f32>(dir.x, -dir.y) * r * size;
     if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) { return INVALID; }
     return uv;
 }
@@ -310,7 +315,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         if (kind == 1u) {
             uv = equirect_uv(d, params.proj.x, params.proj.y);
         } else if (kind == 2u) {
-            uv = fisheye_uv(d, params.proj.x, params.lens.x, params.lens.y);
+            // The centres belong to the images, so they follow a swap.
+            let slot = select(0u, eye ^ params.mode.z, params.mode.y != 0u);
+            let centre = 0.5 + select(params.centres.xy, params.centres.zw, slot == 1u);
+            uv = fisheye_uv(d, params.proj.x, params.lens.x, params.lens.y, params.circle.xy, centre);
         } else {
             uv = eac_uv(d, params.proj.x);
         }

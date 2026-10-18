@@ -7,7 +7,7 @@ mod input;
 mod sources;
 mod tasks;
 
-use frame::escape;
+use frame::{escape, key};
 use tasks::Job;
 
 use crate::jobs::Jobs;

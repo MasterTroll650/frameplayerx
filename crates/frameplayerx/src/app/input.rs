@@ -215,12 +215,21 @@ impl App {
             }
             Cmd::Page(dir) => {
                 if let Some(i) = self.pointer.hovered() {
-                    let page = self.panels[i].points().y * 0.8;
-                    self.panels[i].push(egui::Event::MouseWheel {
-                        unit: egui::MouseWheelUnit::Point,
-                        delta: egui::vec2(0.0, -page * dir as f32),
-                        modifiers: egui::Modifiers::NONE,
-                    });
+                    let p = &mut self.panels[i];
+                    if ui::widgets::over_slider(&p.ctx) {
+                        p.push(key(if dir > 0 {
+                            egui::Key::ArrowRight
+                        } else {
+                            egui::Key::ArrowLeft
+                        }));
+                    } else {
+                        let page = p.points().y * 0.8;
+                        p.push(egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -page * dir as f32),
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                    }
                 }
             }
         }

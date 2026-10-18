@@ -287,7 +287,7 @@ pub fn detect_from_name(name: &str) -> Option<VideoFormat> {
                 if let Some(deg) = t
                     .strip_prefix("FISHEYE")
                     .and_then(|d| d.parse::<f32>().ok())
-                    && (120.0..=270.0).contains(&deg)
+                    && (120.0..=300.0).contains(&deg)
                 {
                     projection = Some(Projection::fisheye(deg));
                 }
