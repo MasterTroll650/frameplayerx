@@ -83,6 +83,9 @@ pub struct Settings {
     pub check_updates: bool,
     /// UI text size multiplier.
     pub ui_scale: f32,
+    /// Flat videos and the panels glide to where the viewer settles
+    /// ([`crate::world::Follow`]).
+    pub follow: bool,
     /// What the controller buttons and thumbsticks do.
     pub controls: crate::bindings::Bindings,
     /// Where the library and adjust panels were moved to: yaw and pitch in
@@ -144,6 +147,7 @@ impl Default for Settings {
             },
             check_updates: true,
             ui_scale: 1.0,
+            follow: false,
             controls: crate::bindings::Bindings::default(),
             panel_offsets: PanelOffsets::default(),
             browse_sort: fp_sources::EntrySort::default(),

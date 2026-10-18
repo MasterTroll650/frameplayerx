@@ -238,10 +238,120 @@ pub fn turned_with_picture(anchor: Mat4, yaw_deg: f32, pitch_deg: f32) -> Mat4 {
         )
 }
 
-/// Yaw-only anchor at the head position.
+/// Pitch or roll past this, degrees, and the head no longer counts as
+/// upright: lying back or on your side.
+pub const UPRIGHT_DEG: f32 = 20.0;
+
+/// The anchor recentering sets, at the head position. Upright it is level,
+/// turned only to where you face; lying back or on your side it takes the
+/// head's whole orientation, so the picture sits where you look and a 3D
+/// picture's eyes stay lined up with yours.
 pub fn anchor_from_head(position: Vec3, orientation: Quat) -> Mat4 {
-    let (yaw, _, _) = orientation.to_euler(glam::EulerRot::YXZ);
-    Mat4::from_rotation_translation(Quat::from_rotation_y(yaw), position)
+    let (yaw, pitch, roll) = orientation.to_euler(glam::EulerRot::YXZ);
+    let upright = pitch.abs().to_degrees() < UPRIGHT_DEG && roll.abs().to_degrees() < UPRIGHT_DEG;
+    let rot = if upright {
+        Quat::from_rotation_y(yaw)
+    } else {
+        orientation
+    };
+    Mat4::from_rotation_translation(rot, position)
+}
+
+/// Seconds the head must rest away from the screen and panels before they
+/// follow it.
+const SETTLE_S: f32 = 1.5;
+/// Turning slower than this, degrees a second, counts as resting.
+const RESTING_TURN: f32 = 15.0;
+/// Moving slower than this, metres a second, counts as resting.
+const RESTING_MOVE: f32 = 0.2;
+/// The head moved this far, metres, from where the anchor is.
+const MOVED_M: f32 = 0.3;
+/// How long the glide to the new place takes, seconds.
+const GLIDE_S: f32 = 0.5;
+
+/// The Follow setting: the anchor (the flat screen and the panels) stays
+/// put while you look around it or shift a little, and glides to where you
+/// face once you have settled somewhere else, as after turning over in bed.
+/// Never locked to the head, which swims with every movement and keeps you
+/// from looking around a big screen.
+#[derive(Default)]
+pub struct Follow {
+    /// Seconds the head has rested away.
+    away_for: f32,
+    last_head: Option<(Vec3, Quat)>,
+    glide: Option<Glide>,
+}
+
+struct Glide {
+    from: (Quat, Vec3),
+    to: (Quat, Vec3),
+    /// 0 → 1.
+    t: f32,
+}
+
+impl Follow {
+    /// The anchor for this frame. `facing`: the head faces the screen or a
+    /// panel showing.
+    pub fn step(&mut self, anchor: Mat4, head: (Vec3, Quat), facing: bool, dt: f32) -> Mat4 {
+        let (pos, rot) = head;
+        let dt = dt.max(1e-3);
+        let resting = self.last_head.is_none_or(|(p, q)| {
+            q.angle_between(rot).to_degrees() / dt < RESTING_TURN
+                && p.distance(pos) / dt < RESTING_MOVE
+        });
+        self.last_head = Some(head);
+        if let Some(g) = &mut self.glide {
+            g.t = (g.t + dt / GLIDE_S).min(1.0);
+            let k = g.t * g.t * (3.0 - 2.0 * g.t);
+            let m = Mat4::from_rotation_translation(
+                g.from.0.slerp(g.to.0, k),
+                g.from.1.lerp(g.to.1, k),
+            );
+            if g.t >= 1.0 {
+                self.glide = None;
+            }
+            return m;
+        }
+        let (_, a_rot, a_pos) = anchor.to_scale_rotation_translation();
+        // Rolled against the picture (turned on your side), a 3D picture's
+        // eyes no longer line up with yours, even while you face it.
+        let (_, _, roll) = (a_rot.inverse() * rot).to_euler(glam::EulerRot::YXZ);
+        let away =
+            !facing || roll.abs().to_degrees() > UPRIGHT_DEG || pos.distance(a_pos) > MOVED_M;
+        self.away_for = if away && resting {
+            self.away_for + dt
+        } else {
+            0.0
+        };
+        if self.away_for >= SETTLE_S {
+            self.away_for = 0.0;
+            let (_, to_rot, to_pos) = anchor_from_head(pos, rot).to_scale_rotation_translation();
+            self.glide = Some(Glide {
+                from: (a_rot, a_pos),
+                to: (to_rot, to_pos),
+                t: 0.0,
+            });
+        }
+        anchor
+    }
+}
+
+/// Whether `dir` (from the anchor's origin) points at a flat screen
+/// `width` metres wide, `distance` away, placed straight ahead of `anchor`,
+/// give or take a margin. Its height is taken as 16:9; the margin covers
+/// taller pictures.
+pub fn facing_screen(anchor: Mat4, dir: Vec3, width: f32, distance: f32) -> bool {
+    const MARGIN_DEG: f32 = 10.0;
+    let g = anchor.to_scale_rotation_translation().1.inverse() * dir.normalize_or_zero();
+    if g.z >= 0.0 {
+        return false;
+    }
+    let distance = distance.max(0.1);
+    let half_w = (width / 2.0 / distance).atan().to_degrees() + MARGIN_DEG;
+    let half_h = (width * 9.0 / 32.0 / distance).atan().to_degrees() + MARGIN_DEG;
+    let yaw = (-g.x).atan2(-g.z).to_degrees();
+    let pitch = g.y.clamp(-1.0, 1.0).asin().to_degrees();
+    yaw.abs() <= half_w && pitch.abs() <= half_h
 }
 
 /// Per-hand trigger state with hysteresis.
@@ -628,20 +738,18 @@ mod tests {
     fn turned_panels_follow_the_picture() {
         let head = Vec3::new(0.0, 1.6, 0.0);
         let anchor = anchor_from_head(head, Quat::from_rotation_y(0.4));
-        let (anchor_yaw, _, _) = anchor
-            .to_scale_rotation_translation()
-            .1
-            .to_euler(glam::EulerRot::YXZ);
+        let anchor_rot = anchor.to_scale_rotation_translation().1;
         let (yaw, pitch) = (35.0_f32, -20.0_f32);
-        // Where the renderer shows the picture's centre: its correction is
-        // the inverse of this rotation (fp-render params.rs), with the
-        // anchor's yaw added to the picture's (app.rs).
-        let picture = Mat4::from_euler(
-            glam::EulerRot::YXZ,
-            anchor_yaw + yaw.to_radians(),
-            pitch.to_radians(),
-            0.0,
-        )
+        // Where the renderer shows the picture's centre: rays are turned by
+        // the inverse of the anchor's rotation, then of the picture's
+        // (fp-render params.rs).
+        let picture = (Mat4::from_quat(anchor_rot)
+            * Mat4::from_euler(
+                glam::EulerRot::YXZ,
+                yaw.to_radians(),
+                pitch.to_radians(),
+                0.0,
+            ))
         .transform_vector3(Vec3::NEG_Z);
         let turned = turned_with_picture(anchor, yaw, pitch);
         let ahead =
@@ -663,11 +771,11 @@ mod tests {
     fn placement_faces_the_viewer() {
         let anchor = anchor_from_head(
             Vec3::new(0.0, 1.6, 0.0),
-            Quat::from_rotation_y(0.3) * Quat::from_rotation_x(0.4),
+            Quat::from_rotation_y(0.3) * Quat::from_rotation_x(0.25),
         );
         let m = place(anchor, 0.0, 2.0, 0.0, 0.0);
         let centre = m.transform_point3(Vec3::ZERO);
-        assert!((centre.y - 1.6).abs() < 1e-4, "pitch ignored for placement");
+        assert!((centre.y - 1.6).abs() < 1e-4, "upright, pitch ignored");
         assert!(((centre - Vec3::new(0.0, 1.6, 0.0)).length() - 2.0).abs() < 1e-4);
         let normal = m.transform_vector3(Vec3::Z);
         assert!(
@@ -686,5 +794,110 @@ mod tests {
             left.dot(fwd) > 0.0 && (left - Vec3::new(0.0, 1.6, 0.0)).dot(right) < 0.0,
             "positive yaw is to the left"
         );
+    }
+
+    fn rotation(m: Mat4) -> Quat {
+        m.to_scale_rotation_translation().1
+    }
+
+    #[test]
+    fn recentering_lying_down_keeps_the_tilt() {
+        let head = Vec3::new(0.0, 1.0, 0.0);
+        let euler = |y: f32, p: f32, r: f32| {
+            Quat::from_euler(
+                glam::EulerRot::YXZ,
+                y.to_radians(),
+                p.to_radians(),
+                r.to_radians(),
+            )
+        };
+        // Upright, a small tilt is dropped: level, turned where you face.
+        let a = anchor_from_head(head, euler(30.0, 12.0, -8.0));
+        assert!(rotation(a).angle_between(euler(30.0, 0.0, 0.0)) < 1e-3);
+        // Lying back or on your side, the head's orientation is kept whole.
+        for q in [
+            euler(30.0, 60.0, 0.0),
+            euler(0.0, 0.0, 90.0),
+            euler(-20.0, 45.0, 30.0),
+        ] {
+            let a = anchor_from_head(head, q);
+            assert!(rotation(a).angle_between(q) < 1e-3, "{q}");
+            assert_eq!(a.w_axis.truncate(), head);
+        }
+    }
+
+    const DT: f32 = 1.0 / 90.0;
+
+    /// `seconds` of frames with the head held at `rot`.
+    fn hold(f: &mut Follow, anchor: Mat4, rot: Quat, facing: bool, seconds: f32) -> Mat4 {
+        let head = Vec3::new(0.0, 1.0, 0.0);
+        (0..(seconds / DT).round() as usize).fold(anchor, |a, _| f.step(a, (head, rot), facing, DT))
+    }
+
+    #[test]
+    fn follow_waits_until_you_settle_away() {
+        let head = Vec3::new(0.0, 1.0, 0.0);
+        let anchor = anchor_from_head(head, Quat::IDENTITY);
+        let mut f = Follow::default();
+        // Looking around the screen never moves it.
+        let mut a = anchor;
+        for i in 0..450 {
+            let glance = Quat::from_rotation_y((i as f32 * 0.05).sin() * 0.5);
+            a = f.step(a, (head, glance), true, DT);
+        }
+        assert_eq!(a, anchor);
+        // Turned away and resting: put until the settle time has passed...
+        let turned = Quat::from_rotation_y(70f32.to_radians());
+        a = hold(&mut f, a, turned, false, SETTLE_S - 0.2);
+        assert_eq!(a, anchor);
+        // ...then it glides to where you face.
+        a = hold(&mut f, a, turned, false, 0.3 + GLIDE_S);
+        assert!(rotation(a).angle_between(turned) < 1e-3, "{}", rotation(a));
+        // Facing it again, it stays.
+        assert_eq!(hold(&mut f, a, turned, true, 3.0), a);
+    }
+
+    #[test]
+    fn follow_ignores_a_head_still_turning() {
+        let head = Vec3::new(0.0, 1.0, 0.0);
+        let anchor = anchor_from_head(head, Quat::IDENTITY);
+        let mut f = Follow::default();
+        let mut a = anchor;
+        // Away from the screen but turning 40° a second the whole time.
+        for i in 0..270 {
+            let q = Quat::from_rotation_y(1.2 + (i as f32 * DT * 40f32).to_radians());
+            a = f.step(a, (head, q), false, DT);
+        }
+        assert_eq!(a, anchor);
+    }
+
+    #[test]
+    fn follow_rolls_the_picture_when_you_turn_on_your_side() {
+        let head = Vec3::new(0.0, 1.0, 0.0);
+        let anchor = anchor_from_head(head, Quat::IDENTITY);
+        let mut f = Follow::default();
+        // Still facing the screen, but on your side.
+        let side = Quat::from_rotation_z(90f32.to_radians());
+        let a = hold(&mut f, anchor, side, true, SETTLE_S + GLIDE_S + 0.2);
+        assert!(rotation(a).angle_between(side) < 1e-3, "{}", rotation(a));
+    }
+
+    #[test]
+    fn facing_the_screen_includes_a_margin() {
+        let anchor = anchor_from_head(Vec3::ZERO, Quat::IDENTITY);
+        let dir = |yaw: f32, pitch: f32| {
+            Quat::from_euler(
+                glam::EulerRot::YXZ,
+                yaw.to_radians(),
+                pitch.to_radians(),
+                0.0,
+            ) * Vec3::NEG_Z
+        };
+        // A 6 m screen 4 m away spans about 37° either side of ahead.
+        let on = |yaw, pitch| facing_screen(anchor, dir(yaw, pitch), 6.0, 4.0);
+        assert!(on(0.0, 0.0) && on(40.0, 0.0) && on(-45.0, 0.0));
+        assert!(!on(50.0, 0.0) && !on(-50.0, 0.0));
+        assert!(on(0.0, 30.0) && !on(0.0, 40.0) && !on(0.0, -40.0));
+        assert!(!on(180.0, 0.0), "behind");
     }
 }

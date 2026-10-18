@@ -8,7 +8,7 @@ or your network.
 - [Where your videos can be](#where-your-videos-can-be): browsing,
   PIN locks, microSD cards and USB drives
 - [Video formats](#video-formats), and [videos that stutter](#videos-that-stutter-av1-and-422)
-- [Controls](#controls)
+- [Controls](#controls), and [watching lying down](#watching-lying-down)
 - [Passthrough videos](#passthrough-videos)
 - [Haptics](#haptics)
 - [Remote control](#remote-control)
@@ -403,6 +403,17 @@ the keyboard under it) and hold grip to move it; it stays where you leave
 it. Recentering brings them back in front of you, at the height you left
 them. The format on the control bar (for example 180° SBS) opens the adjust
 panel's Format tab.
+
+### Watching lying down
+
+Recenter once you're lying down, on your back or on your side: the picture
+moves to where you're looking and turns with your head, so a 3D video stays
+lined up with your eyes. Sitting or standing, recentering keeps it level.
+
+With **Screen follows you** on (the bed button on the control bar, or
+Settings › Playback), a flat video and the menus move by themselves. When you settle facing somewhere else, such as
+after turning over in bed, they glide over after a second or two. Looking
+around the screen leaves it where it is, and 180° and 360° videos stay put.
 
 Every button and thumbstick direction above can be changed in Settings ›
 Controller (tap a row, pick an action; Reset to defaults puts this layout

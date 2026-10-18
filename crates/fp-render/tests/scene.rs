@@ -545,22 +545,20 @@ fn forward_follows_the_way_the_video_was_centred() {
             [20, 20, 230]
         }
     });
-    // Recentred while facing 90° to the left, as the app does: the anchor's
-    // yaw turns the picture and the viewer's forward.
-    let yaw = 90.0f32;
+    // Recentred while facing 90° to the left, as the app does: the anchor
+    // turns the picture and the viewer's forward.
+    let facing = Quat::from_rotation_y(90f32.to_radians());
     let p = VideoParams {
-        forward_yaw: yaw,
+        anchor: facing,
         ..params(
             Projection::EQUIRECT_360,
             StereoLayout::Mono,
             ViewSettings {
-                yaw,
                 forward: 0.8,
                 ..Default::default()
             },
         )
     };
-    let facing = Quat::from_rotation_y(yaw.to_radians());
     let ev = |x: f32| EyeView {
         view: view(facing * Vec3::new(x, 0.0, 0.0) + Vec3::Y * 1.6, facing),
         proj: projection(Fov::symmetric(90.0), 0.05, 100.0),
@@ -578,5 +576,52 @@ fn forward_follows_the_way_the_video_was_centred() {
         px(&l, SIZE / 2 + 4, SIZE / 2),
     );
     assert!(is_red(left) && is_blue(right), "{left:?} {right:?}");
+    e.destroy(&r);
+}
+
+#[test]
+fn recentred_on_your_side_the_picture_rolls_with_you() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    // Red left of the video's front, blue right of it.
+    let f = frame(256, 128, |u, _| {
+        if u < 0.5 {
+            [230, 20, 20]
+        } else {
+            [20, 20, 230]
+        }
+    });
+    // Lying on your side: the head, and the anchor recentering takes from
+    // it, rolled 90°.
+    let rolled = Quat::from_rotation_z(90f32.to_radians());
+    let ev = |x: f32| EyeView {
+        view: view(rolled * Vec3::new(x, 0.0, 0.0) + Vec3::Y * 1.6, rolled),
+        proj: projection(Fov::symmetric(90.0), 0.05, 100.0),
+    };
+    let base = params(
+        Projection::EQUIRECT_360,
+        StereoLayout::Mono,
+        ViewSettings::default(),
+    );
+    let mut sides = |anchor: Quat| {
+        let p = VideoParams { anchor, ..base };
+        r.begin_frame().unwrap();
+        r.set_video(Some(&f)).unwrap();
+        r.draw(&e.targets(), &[ev(-0.032), ev(0.032)], &p, &[])
+            .unwrap();
+        r.end_frame().unwrap();
+        let l = e.read(&r, 0).unwrap();
+        (
+            px(&l, SIZE / 2 - 8, SIZE / 2),
+            px(&l, SIZE / 2 + 8, SIZE / 2),
+        )
+    };
+    // The picture's left and right stay your left and right.
+    let (left, right) = sides(rolled);
+    assert!(is_red(left) && is_blue(right), "{left:?} {right:?}");
+    // A level picture lies across your eyes instead.
+    let (left, right) = sides(Quat::IDENTITY);
+    assert!(!(is_red(left) && is_blue(right)), "{left:?} {right:?}");
     e.destroy(&r);
 }

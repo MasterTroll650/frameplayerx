@@ -8,7 +8,8 @@
 //! | `frames N` | run N frames |
 //! | `wait SECONDS` | run frames in real time |
 //! | `wait-playing [TIMEOUT]` | run until a video is playing |
-//! | `look YAW PITCH` | head direction in degrees |
+//! | `look YAW PITCH [ROLL]` | head direction (and roll, to lie on your side) in degrees |
+//! | `recenter` | recenter on where the head faces |
 //! | `aim YAW PITCH` | controller ray direction in degrees |
 //! | `point PANEL X Y` | aim at a panel (`main`, `bar`, `adjust`, `keyboard`) at fractional X, Y |
 //! | `click` | pull and release the trigger |
@@ -362,7 +363,15 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
-            Some("look") => self.head = dir_quat(num(1)?, num(2)?),
+            // `look YAW PITCH [ROLL]`, degrees; a roll lies you on your side.
+            Some("look") => {
+                let roll = num(3).unwrap_or(0.0).to_radians();
+                self.head = dir_quat(num(1)?, num(2)?) * Quat::from_rotation_z(roll);
+            }
+            Some("recenter") => {
+                self.app.apply(crate::ui::Action::Recenter);
+                self.run_frames(2)?;
+            }
             Some("aim") => {
                 self.hand.aim = Some((self.hand_pos(), dir_quat(num(1)?, num(2)?)));
             }

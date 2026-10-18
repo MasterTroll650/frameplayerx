@@ -93,6 +93,7 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
                 v.state,
                 v.settings.passthrough,
                 v.passthrough_available,
+                v.settings.follow,
                 v.actions,
             );
         });
@@ -285,13 +286,14 @@ fn transport(
     }
 }
 
-/// Close, hide, room, recenter, bookmark and adjust.
+/// Close, hide, room, recenter, follow, bookmark and adjust.
 fn view_keys(
     ui: &mut egui::Ui,
     pb: &crate::playback::Playback,
     state: &mut super::UiState,
     passthrough: bool,
     passthrough_available: bool,
+    follow: bool,
     actions: &mut Vec<Action>,
 ) {
     if widgets::key(ui, icons::X, 52.0, false)
@@ -329,6 +331,14 @@ fn view_keys(
         .clicked()
     {
         actions.push(Action::Recenter);
+    }
+    // Only a flat screen follows: around 180°/360° video you look about.
+    if pb.format.projection == Projection::Flat
+        && widgets::key(ui, icons::BED, 52.0, follow)
+            .tip("Screen follows you")
+            .clicked()
+    {
+        actions.push(Action::ToggleFollow);
     }
     if widgets::key(ui, icons::BOOKMARK_SIMPLE, 52.0, false)
         .tip("Bookmark")

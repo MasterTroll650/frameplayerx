@@ -299,6 +299,14 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
             "×",
             2,
         );
+        r.switch(
+            "Screen follows you",
+            Some(
+                "Flat videos and the menus move to where you settle, \
+                 such as after turning over in bed.",
+            ),
+            &mut s.follow,
+        );
     });
 }
 

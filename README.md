@@ -20,7 +20,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 
 - **VR and flat videos**: plays 180°, 360°, fisheye and flat videos, in 2D or 3D. The format is detected automatically, and you can change it for any video
 - **Hardware decoding**: HEVC (H.265) in 8 and 10 bits and H.264, both up to 8K, and VP9 play on the Frame's own video decoder. Anything else, AV1 included, plays with software decoding
-- **Picture adjustments**: position, zoom, depth and picture settings, saved for each video
+- **Picture adjustments**: position, zoom, depth and picture settings, saved for each video. Lying down, recentering puts the picture where you look and keeps 3D lined up with your eyes, and the screen can follow you when you turn over
 - **Videos on the headset**: finds videos in the Videos and Downloads folders and on microSD cards and USB drives, including cards formatted on Windows or a Mac
 - **Media servers**: browse and play from Jellyfin, Emby, any server with a DeoVR feed or HereSphere API, network shares (SMB), WebDAV, DLNA servers and web folders. Jellyfin, Emby and HereSphere APIs hear what you watch, so their resume points, watched marks and play counts stay in step with the headset
 - **Watch history**: carry on where you left off, and mark favorites and ratings

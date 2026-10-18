@@ -183,6 +183,8 @@ pub enum Action {
     DismissCrashReport,
     Recenter,
     TogglePassthrough,
+    /// Settings › Playback › Screen follows you.
+    ToggleFollow,
     /// Show the library/browser panel (during playback).
     ShowBrowser(bool),
     /// Hide the player controls (the trigger on empty space brings them

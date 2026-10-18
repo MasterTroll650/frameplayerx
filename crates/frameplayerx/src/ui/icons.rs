@@ -14,6 +14,7 @@ pub const ARROW_LEFT: &str = "\u{E058}";
 pub const ARROW_RIGHT: &str = "\u{E06C}";
 pub const ARROW_SQUARE_OUT: &str = "\u{E5DE}";
 pub const ARROWS_CLOCKWISE: &str = "\u{E094}";
+pub const BED: &str = "\u{E0CC}";
 pub const ARROWS_OUT_CARDINAL: &str = "\u{E0A4}";
 pub const BACKSPACE: &str = "\u{E0AE}";
 pub const BOOKMARK_SIMPLE: &str = "\u{E0EA}";

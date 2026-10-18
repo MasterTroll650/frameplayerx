@@ -7,9 +7,12 @@
 
 struct Params {
     inv_view_proj: array<mat4x4<f32>, 2>,
-    // Rotation applied to world rays before projection (inverse of the
-    // video's yaw/pitch/roll correction).
+    // Rotation applied to rays in the room frame before projection
+    // (inverse of the video's yaw/pitch/roll correction).
     correction: mat4x4<f32>,
+    // World -> the room frame the video was centred in (inverse of the
+    // recentering anchor's rotation).
+    anchor_inv: mat4x4<f32>,
     // World -> screen-local transform for flat screens.
     screen_inv: mat4x4<f32>,
     // x: projection kind (0 flat, 1 equirect, 2 fisheye, 3 eac)
@@ -39,8 +42,8 @@ struct Params {
     key: vec4<f32>,
     // x spill, y on, z alpha-packed mask scale (0 off)
     key2: vec4<f32>,
-    // xyz: the viewer's offset (height, forward) in world space, metres, for
-    // spherical video; w: radius of the sphere it is drawn on when offset
+    // xyz: the viewer's offset (height, forward) in the room frame, metres,
+    // for spherical video; w: radius of the sphere it is drawn on when offset
     viewer: vec4<f32>,
 };
 
@@ -293,9 +296,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (kind == 0u) {
         uv = flat_uv(origin, world_dir);
     } else {
-        // Per-eye stereo corrections, then the global correction rotation.
+        // In the room frame (turned with the viewer when recentred lying
+        // down): per-eye stereo corrections, then the picture's rotation.
         let s = select(-0.5, 0.5, eye == 1u);
-        var d = rot_y(params.proj.w * s) * world_dir;
+        var d = (params.anchor_inv * vec4<f32>(world_dir, 0.0)).xyz;
+        d = rot_y(params.proj.w * s) * d;
         d = rot_x(params.lens.z * s) * d;
         d = rot_z(params.lens.w * s) * d;
         d = normalize((params.correction * vec4<f32>(d, 0.0)).xyz);

@@ -126,11 +126,17 @@ impl App {
 
     /// The room's frame of reference for the panels and the video.
     fn anchor(&mut self, input: &FrameInput) -> Mat4 {
-        if let Some((pos, rot)) = input.head
-            && (self.reanchor || self.anchor.is_none())
-        {
-            self.anchor = Some(anchor_from_head(pos, rot));
-            self.reanchor = false;
+        if let Some((pos, rot)) = input.head {
+            if self.reanchor || self.anchor.is_none() {
+                self.anchor = Some(anchor_from_head(pos, rot));
+                self.reanchor = false;
+                self.follow = Follow::default();
+            } else if let Some(anchor) = self.anchor
+                && self.follows()
+            {
+                let facing = self.facing_ours(anchor, pos, rot * Vec3::NEG_Z);
+                self.anchor = Some(self.follow.step(anchor, (pos, rot), facing, input.dt));
+            }
         }
         let mut anchor = self.anchor.unwrap_or(Mat4::IDENTITY);
         // A 180°/360° video is drawn from wherever the head is (it was
@@ -145,6 +151,34 @@ impl App {
             anchor = Mat4::from_rotation_translation(rot, pos);
         }
         anchor
+    }
+
+    /// Whether the flat screen and panels follow the head: the setting is
+    /// on, the video (if any) is flat (around a 180°/360° one you look
+    /// about), and no panel is being moved.
+    fn follows(&self) -> bool {
+        self.settings.follow
+            && self.panel_drag.is_none()
+            && self
+                .playback
+                .as_ref()
+                .is_none_or(|p| p.format.projection == Projection::Flat)
+    }
+
+    /// Whether the head, at `pos` looking along `dir`, faces a panel
+    /// showing or the flat screen.
+    fn facing_ours(&self, anchor: Mat4, pos: Vec3, dir: Vec3) -> bool {
+        if self
+            .panels
+            .iter()
+            .any(|p| p.visible && p.hit(pos, dir).is_some())
+        {
+            return true;
+        }
+        self.playback.as_ref().is_some_and(|p| {
+            let s = p.shown_settings(&self.settings.default_view);
+            facing_screen(anchor, dir, s.screen_width * s.zoom, s.screen_distance)
+        })
     }
 
     /// Which panels show: the controls hide on their own while a video
@@ -322,20 +356,16 @@ impl App {
         if passthrough {
             video.background = [0.0; 4];
         }
-        let (anchor_yaw, _, _) = anchor
-            .to_scale_rotation_translation()
-            .1
-            .to_euler(glam::EulerRot::YXZ);
+        let anchor_rot = anchor.to_scale_rotation_translation().1;
         if let Some(p) = &self.playback {
             frame = p.player.current_frame();
-            let mut s = p.shown_settings(&self.settings.default_view);
+            let s = p.shown_settings(&self.settings.default_view);
             video.format = p.format;
             video.screen_pose = place(anchor, 0.0, s.screen_distance, 0.0, 0.0);
-            s.yaw += anchor_yaw.to_degrees();
-            video.forward_yaw = anchor_yaw.to_degrees();
+            video.anchor = anchor_rot;
             video.settings = s;
             if let Some((_, rot)) = input.head {
-                let rel = anchor.to_scale_rotation_translation().1.inverse() * rot;
+                let rel = anchor_rot.inverse() * rot;
                 p.player.set_head_orientation(rel.to_array());
             }
             self.subtitles(renderer, input.time, anchor, &s);

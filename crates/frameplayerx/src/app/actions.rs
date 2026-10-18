@@ -168,6 +168,7 @@ impl App {
             Action::DismissCrashReport => self.ui.crash = None,
             Action::Recenter => self.recenter(),
             Action::TogglePassthrough => self.settings.passthrough = !self.settings.passthrough,
+            Action::ToggleFollow => self.settings.follow = !self.settings.follow,
             Action::ShowBrowser(show) => {
                 self.show_browser = show;
                 if show {

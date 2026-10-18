@@ -5,7 +5,7 @@ use fp_core::view::ViewSettings;
 use fp_media::PixelLayout;
 use fp_media::frame::{ColorInfo, Matrix};
 use fp_media::info::Transfer;
-use glam::{EulerRot, Mat4, Vec4};
+use glam::{EulerRot, Mat4, Quat, Vec4};
 
 /// Matches `struct Params` in shaders/scene.wgsl (std140-compatible: every
 /// member is 16-byte aligned).
@@ -14,6 +14,7 @@ use glam::{EulerRot, Mat4, Vec4};
 pub(crate) struct SceneParams {
     pub inv_view_proj: [Mat4; 2],
     pub correction: Mat4,
+    pub anchor_inv: Mat4,
     pub screen_inv: Mat4,
     pub mode: [u32; 4],
     pub proj: Vec4,
@@ -44,9 +45,10 @@ pub struct VideoParams {
     /// Background around/behind the video, linear premultiplied RGBA.
     /// Alpha 0 lets passthrough show through.
     pub background: [f32; 4],
-    /// Which way, degrees about world up, the viewer's "forward" (height and
-    /// forward settings) points: the yaw the video was centred on.
-    pub forward_yaw: f32,
+    /// The room frame the video was centred in (recentering's anchor): a
+    /// 180°/360° picture, its per-eye corrections and the viewer's height
+    /// and forward turn with it. Level unless recentred lying down.
+    pub anchor: Quat,
 }
 
 impl Default for VideoParams {
@@ -56,7 +58,7 @@ impl Default for VideoParams {
             settings: ViewSettings::default(),
             screen_pose: Mat4::from_translation(glam::vec3(0.0, 0.0, -4.0)),
             background: [0.008, 0.008, 0.012, 1.0],
-            forward_yaw: 0.0,
+            anchor: Quat::IDENTITY,
         }
     }
 }
@@ -183,6 +185,7 @@ pub(crate) fn build(
     SceneParams {
         inv_view_proj,
         correction,
+        anchor_inv: Mat4::from_quat(video.anchor.inverse()),
         screen_inv: video.screen_pose.inverse(),
         mode: [kind, stereo, swap, layout_code],
         proj: Vec4::new(h_fov, v_fov, s.zoom.max(0.05), deg(s.ipd_offset)),
@@ -213,9 +216,7 @@ pub(crate) fn build(
             video.format.alpha_pack_scale().unwrap_or(0.0),
             0.0,
         ),
-        viewer: (glam::Quat::from_rotation_y(deg(video.forward_yaw))
-            * glam::vec3(0.0, s.height, -s.forward))
-        .extend(SPHERE_RADIUS),
+        viewer: glam::vec3(0.0, s.height, -s.forward).extend(SPHERE_RADIUS),
     }
 }
 
