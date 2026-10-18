@@ -7,6 +7,7 @@ use super::widgets::{self, Kind, Tip};
 use super::{Action, FormatFilter, HomeRows, LibraryGrid, Screen, View, fmt_size, fmt_time, icons};
 use crate::playback::OpenRequest;
 use egui::{Align, Align2, Color32, Layout, RichText, Sense, Vec2};
+use fp_core::format::{DetectedFormat, Evidence, VideoFormat};
 use fp_library::{MediaRecord, Sort};
 
 /// Page margin left and right of the content.
@@ -45,6 +46,10 @@ pub fn browser(ctx: &egui::Context, v: &mut View) {
                 r.top() - 8.0,
                 egui::Stroke::new(1.0_f32, theme::STROKE),
             );
+            if v.state.crash.is_some() {
+                super::crash::prompt(ui, v);
+                return;
+            }
             if let Some(id) = v.state.details {
                 details(ui, v, id);
                 return;
@@ -339,13 +344,23 @@ fn open_in(records: &[MediaRecord], i: usize) -> Action {
     Action::OpenList(records.iter().map(request).collect(), i)
 }
 
+/// The format a video plays in: until something identifies it, the
+/// default chosen in Settings, as playback uses.
+fn shown_format(r: &MediaRecord, default: VideoFormat) -> DetectedFormat {
+    let mut f = r.effective_format();
+    if f.evidence == Evidence::Default {
+        f.format = default;
+    }
+    f
+}
+
 /// "12:34 · 180° 3D".
-fn facts(r: &MediaRecord) -> String {
+fn facts(r: &MediaRecord, default: VideoFormat) -> String {
     let mut f = Vec::new();
     if let Some(d) = r.duration {
         f.push(fmt_time(d));
     }
-    f.push(widgets::format_short(&r.effective_format().format));
+    f.push(widgets::format_short(&shown_format(r, default).format));
     f.join("  ·  ")
 }
 
@@ -353,8 +368,8 @@ fn facts(r: &MediaRecord) -> String {
 fn record_card(ui: &mut egui::Ui, v: &mut View, r: &MediaRecord) -> page::CardResponse {
     let thumb = thumb_key(r);
     let title = widgets::display_title(&r.title);
-    let facts = facts(r);
-    let badge = widgets::format_short(&r.effective_format().format);
+    let facts = facts(r, v.settings.default_format);
+    let badge = widgets::format_short(&shown_format(r, v.settings.default_format).format);
     page::card(
         ui,
         v.thumbs,
@@ -419,7 +434,7 @@ fn hero(ui: &mut egui::Ui, v: &mut View, rows: &HomeRows) {
             )
             .truncate(),
         );
-        let mut line = facts(r);
+        let mut line = facts(r, v.settings.default_format);
         if resume && r.resume_position > 1.0 {
             let left = r.duration.unwrap_or(0.0) - r.resume_position;
             line = format!("{line}  ·  {} left", fmt_time(left));
@@ -710,10 +725,7 @@ fn details(ui: &mut egui::Ui, v: &mut View, id: fp_library::MediaId) {
             ui.add_space(28.0);
             widgets::section_label(ui, "Format");
             ui.add_space(2.0);
-            let mut fmt = r.effective_format();
-            if fmt.evidence == fp_core::format::Evidence::Default {
-                fmt.format = v.settings.default_format;
-            }
+            let fmt = shown_format(&r, v.settings.default_format);
             ui.label(
                 RichText::new(format!(
                     "Detected {} ({})",
@@ -766,7 +778,9 @@ fn details_side(ui: &mut egui::Ui, v: &mut View, r: &MediaRecord) {
             .font(theme::font(Weight::Bold, 34.0))
             .color(theme::TEXT),
     );
-    let mut f = vec![widgets::format_short(&r.effective_format().format)];
+    let mut f = vec![widgets::format_short(
+        &shown_format(r, v.settings.default_format).format,
+    )];
     if let Some(d) = r.duration {
         f.push(fmt_time(d));
     }

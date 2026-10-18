@@ -77,6 +77,7 @@ Comments say what the code can't:
 | `packaging/` | What goes in the release zip besides the binary: the launcher, a README and the licences |
 | `tools/` | Build, package, preview and test scripts |
 | `tools/frame-desktop-install/` | The Desktop Mode installer: a Python script, and the install and uninstall `.desktop` launchers that download and run it (see its [README](../tools/frame-desktop-install/README.md)) |
+| `tools/crash-relay/` | The Cloudflare Worker crash reports go to (see [Crash reports](#crash-reports)) |
 | `vendor/smb/` | The `smb` crate with a credit-accounting fix (see `vendor/smb/PATCHES.md`) |
 
 ## How it fits together
@@ -321,6 +322,39 @@ release:
 `.github/workflows/pages.yml` publishes `site/` (with the logo) when it
 changes on `main`. Once, in the repository settings: **Pages › Build and
 deployment › Source: GitHub Actions**.
+
+### Crash reports
+
+The log records panics and fatal signals. When the previous run's log
+(`frameplayerx.log.old`) ends in one, the next start shows a page saying
+what a crash report contains and where it goes, with the report itself on
+request; only **Send report** sends it. The report holds the app and
+system versions, what happened, and that run's log (its first 8 KB and
+last 40 KB) with every video title and location in the library, everything
+in `sources.json`, the library folders, haptic devices, URLs, IP addresses,
+email addresses, paths under home and media folders, and media file names
+replaced by placeholders such as `<video 1>` (`crates/frameplayerx/src/crash.rs`).
+
+It goes to `tools/crash-relay/`, a Cloudflare Worker that files it as an
+issue in a private repository, so the GitHub token never ships in the app.
+Without a relay (`REPORT_URL` is `None`), the app never asks. To set one
+up, once:
+
+1. Create a private repository for the reports (`REPO` in
+   `tools/crash-relay/wrangler.toml`, `frameplayerx-crashes` by default).
+2. Create a fine-grained GitHub token with access to that repository only
+   and the **Issues: Read and write** permission.
+3. In `tools/crash-relay/`, with a Cloudflare account:
+   `npx wrangler login`, `npx wrangler secret put GITHUB_TOKEN` (paste the
+   token), then `npx wrangler deploy`. Leave the Worker's logs off: the
+   relay only uses the sender's address to rate-limit them (5 a minute).
+4. Set `REPORT_URL` in `crates/frameplayerx/src/crash.rs` to the deployed
+   URL plus `/report`, e.g. `Some("https://frameplayerx-crash-relay.<account>.workers.dev/report")`.
+
+Check it with
+`curl -X POST <url>/report -d '{"app":"frameplayerx","version":"test","summary":"test","text":"test"}'`:
+`201` and a new issue. The preview's `crash-report` command shows the page
+with a report made from its own log.
 
 ## Artwork
 

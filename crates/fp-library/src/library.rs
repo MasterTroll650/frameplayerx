@@ -978,6 +978,43 @@ impl Library {
         self.in_tx(|c| set_user_format_conn(c, id, format.as_ref()))
     }
 
+    /// Stores the format found when the video was opened, unless the one
+    /// stored has stronger evidence (a probe found metadata, or the source
+    /// declared it). Server videos are probed only when the worker gets to
+    /// them, so until then this is all that corrects their format.
+    pub fn set_detected(&self, id: MediaId, detected: DetectedFormat) -> Result<()> {
+        self.in_tx(|c| {
+            let rec = get_conn(c, id)?.ok_or(Error::MediaNotFound(id))?;
+            if detected.evidence > rec.detected.evidence || detected == rec.detected {
+                return Ok(());
+            }
+            let (kind, stereo) = effective_columns(&detected.format, rec.user_format.as_ref());
+            c.execute(
+                "UPDATE media SET detected_format = ?2, detected_evidence = ?3,
+                     projection_kind = ?4, stereo = ?5
+                 WHERE id = ?1",
+                params![
+                    id.0,
+                    json(&detected.format)?,
+                    evidence_str(detected.evidence),
+                    kind,
+                    stereo
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Every video's title and location, hidden ones too: the names a
+    /// crash report must not show.
+    pub fn names(&self) -> Result<Vec<(String, String)>> {
+        self.with(|c| {
+            let mut stmt = c.prepare("SELECT title, location FROM media")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
     /// Stores per-video picture corrections, or resets them with `None`.
     pub fn set_view_settings(&self, id: MediaId, settings: Option<&ViewSettings>) -> Result<()> {
         let value = json_opt(settings)?;
@@ -1423,6 +1460,38 @@ mod tests {
         assert_eq!(r.detected.evidence, Evidence::Default);
         assert_eq!((r.duration, r.width, r.thumbnail), (None, None, None));
         assert!(!r.probed);
+    }
+
+    #[test]
+    fn opening_a_video_corrects_a_guessed_format() {
+        let lib = lib();
+        // A server's video whose name says nothing: the fallback, a guess.
+        let u = MediaUpsert::new("mb:http://jf:8096#item=abc", "jf");
+        let id = lib.upsert(&u).unwrap().id;
+        assert_eq!(
+            lib.get(id).unwrap().unwrap().detected.evidence,
+            Evidence::Default
+        );
+        // Opened, its 16:9 picture says flat.
+        let flat = DetectedFormat {
+            format: VideoFormat::default(),
+            evidence: Evidence::AspectRatio,
+        };
+        lib.set_detected(id, flat).unwrap();
+        let r = lib.get(id).unwrap().unwrap();
+        assert_eq!(r.detected, flat);
+        let flat_only = crate::Query {
+            projections: vec![crate::ProjectionKind::Flat],
+            ..Default::default()
+        };
+        assert_eq!(lib.search(&flat_only).unwrap().len(), 1);
+        // A weaker guess doesn't undo it.
+        let guess = DetectedFormat {
+            format: VideoFormat::FALLBACK,
+            evidence: Evidence::Default,
+        };
+        lib.set_detected(id, guess).unwrap();
+        assert_eq!(lib.get(id).unwrap().unwrap().detected, flat);
     }
 
     #[test]

@@ -229,6 +229,7 @@ impl App {
             quit: false,
         };
         app.offsets = app.settings.panel_offsets;
+        app.check_last_run();
         app.rescan(false);
         app.connect_devices();
         if app.settings.check_updates && fp_updater::RELEASE_PUBLIC_KEY.is_some() {

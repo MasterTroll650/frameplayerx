@@ -164,6 +164,8 @@ impl App {
             }
             Action::CheckUpdates => self.check_updates(),
             Action::InstallUpdate => self.install_update(),
+            Action::SendCrashReport => self.send_crash_report(),
+            Action::DismissCrashReport => self.ui.crash = None,
             Action::Recenter => self.recenter(),
             Action::TogglePassthrough => self.settings.passthrough = !self.settings.passthrough,
             Action::ShowBrowser(show) => {

@@ -464,6 +464,13 @@ protocol. Both only answer devices on your local network.
 
 ## Troubleshooting
 
+- After a crash, the next start asks whether to send a crash report to
+  FramePlayerX's developers, as a private issue on GitHub. It contains the
+  versions of FramePlayerX and the headset's system, what went wrong, and
+  the log of that session with the names of your videos, files and folders,
+  your servers' addresses and any password replaced by placeholders such as
+  `<video 1>`. **Show the report** shows exactly what would be sent;
+  nothing is sent unless you choose **Send report**.
 - Log: `~/.local/share/frameplayerx/frameplayerx.log`; the run before is kept
   as `frameplayerx.log.old` (the one to send after a freeze or crash, once
   FramePlayerX has been started again)

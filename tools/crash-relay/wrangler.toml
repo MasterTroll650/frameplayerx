@@ -1,0 +1,18 @@
+# The relay FramePlayerX sends crash reports to (worker.js), deployed with
+# Cloudflare's wrangler as docs/DEVELOPMENT.md (Crash reports) describes.
+name = "frameplayerx-crash-relay"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+# The private repository the reports become issues in.
+REPO = "remotesojourner/frameplayerx-crashes"
+
+# At most 5 reports a minute from one address.
+[[ratelimits]]
+name = "LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 5
+  period = 60
