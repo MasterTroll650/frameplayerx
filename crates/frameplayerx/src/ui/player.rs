@@ -596,12 +596,18 @@ fn seek_bar(
             Some((_, name)) => format!("{} · {name}", fmt_time(tm)),
             None => fmt_time(tm),
         };
-        // A bubble above the track, on the panel's top layer.
-        let g = ui
-            .painter()
-            .layout_no_wrap(label, theme::font(Weight::SemiBold, 15.0), theme::BG);
+        // A bubble above the track, on the panel's top layer. A marker's
+        // name can be longer than the bar is wide.
+        let room = ui.max_rect();
+        let g = widgets::one_line(
+            ui.painter(),
+            label,
+            theme::font(Weight::SemiBold, 15.0),
+            theme::BG,
+            room.width() - 16.0,
+        );
         let size = g.size() + Vec2::new(16.0, 8.0);
-        let x = (p.x - size.x / 2.0).clamp(ui.max_rect().left(), ui.max_rect().right() - size.x);
+        let x = widgets::fit(p.x - size.x / 2.0, size.x, room.left(), room.right());
         let bubble = egui::Rect::from_min_size(egui::pos2(x, track.top() - size.y - 10.0), size);
         let top = ui.ctx().layer_painter(egui::LayerId::new(
             egui::Order::Tooltip,

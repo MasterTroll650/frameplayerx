@@ -166,6 +166,10 @@ impl App {
         }
         let browser = !playing || (self.ui_visible && self.show_browser);
         self.panels[MAIN].visible = browser;
+        // Said where it is seen: the toast shows on the library panel.
+        if browser && let Some(notice) = self.update_notice.take() {
+            self.ui.toast(notice);
+        }
         self.panels[BAR].visible = playing && self.ui_visible && !self.show_browser;
         self.panels[ADJUST].visible = self.panels[BAR].visible && self.ui.adjust_open;
     }

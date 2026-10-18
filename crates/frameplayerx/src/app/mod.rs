@@ -127,6 +127,10 @@ pub struct App {
     /// Counts update checks, so a check for a channel the user has since
     /// left is dropped.
     update_check: u64,
+    /// The check made at start, which says when it finds a newer version,
+    /// and what it says, waiting for the library panel to show.
+    start_check: Option<u64>,
+    update_notice: Option<String>,
     /// Removable drives seen at the last check, and when that was.
     mounts: Vec<std::path::PathBuf>,
     mounts_checked: Instant,
@@ -218,6 +222,8 @@ impl App {
             last_status: None,
             update: None,
             update_check: 0,
+            start_check: None,
+            update_notice: None,
             mounts: crate::drives::removable_mounts(),
             // In the past, so the first check (and mount) runs at once.
             mounts_checked: Instant::now()
@@ -234,6 +240,7 @@ impl App {
         app.connect_devices();
         if app.settings.check_updates && fp_updater::RELEASE_PUBLIC_KEY.is_some() {
             app.check_updates();
+            app.start_check = Some(app.update_check);
         }
         app
     }
