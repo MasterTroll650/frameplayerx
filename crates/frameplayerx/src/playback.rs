@@ -180,6 +180,14 @@ pub fn open(
     }
     let (resolved, detected) =
         detect_format(&name, &info, entry.as_ref(), record.as_ref(), settings);
+    // A server's video is recorded with only a guess at its format until
+    // it is probed; what the opened file says shows in the history at once.
+    if let Some(r) = &record
+        && detected.evidence != Evidence::Default
+        && let Err(e) = library.set_detected(r.id, detected)
+    {
+        log::warn!("saving the format of {location}: {e}");
+    }
 
     let scripts = load_scripts(opener, &script_locs);
     let duration_ms = (info.duration * 1000.0) as i64;

@@ -30,7 +30,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 - **Phone remote**: scan a QR code to control playback and browse from your phone. Apps made for DeoVR's remote work too
 - **Custom controls**: choose what each controller button does
 - **Updates**: checks for a new version when it starts, and installs it from Settings when you choose to, on a Stable or a Beta channel
-- **No accounts or tracking**: it only connects to the servers you add, and to GitHub to check for updates
+- **No accounts or tracking**: it only connects to the servers you add, and to GitHub to check for updates. After a crash it asks whether to send a crash report, shows what's in it (no video names, folders or server addresses) and sends nothing unless you choose to
 
 ---
 

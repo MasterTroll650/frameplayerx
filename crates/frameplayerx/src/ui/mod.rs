@@ -3,6 +3,7 @@
 //! an [`Action`] for the app to apply.
 
 pub mod controller_map;
+pub mod crash;
 pub mod depth;
 pub mod feeds;
 pub mod folders;
@@ -177,6 +178,9 @@ pub enum Action {
     RegenerateToken,
     CheckUpdates,
     InstallUpdate,
+    /// Send the crash report the start offered, or don't.
+    SendCrashReport,
+    DismissCrashReport,
     Recenter,
     TogglePassthrough,
     /// Show the library/browser panel (during playback).
@@ -519,6 +523,8 @@ pub struct UiState {
     pub adjust_tab: usize,
     /// Subtitles in other languages are listed in the Audio & subs tab.
     pub foreign_subtitles_open: bool,
+    /// The last run crashed: asks whether to send a report.
+    pub crash: Option<crash::CrashPrompt>,
     pub open_error: Option<String>,
     pub opening: Option<String>,
     pub toast: Option<(String, std::time::Instant)>,
@@ -567,6 +573,7 @@ impl Default for UiState {
             adjust_open: false,
             adjust_tab: 0,
             foreign_subtitles_open: false,
+            crash: None,
             open_error: None,
             opening: None,
             toast: None,

@@ -30,6 +30,7 @@ fp-updater.workspace = true
 fp-xr.workspace = true
 glam.workspace = true
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+libc.workspace = true
 log.workspace = true
 # Source PIN protection PBKDF2 hashing.
 ring = "0.17"

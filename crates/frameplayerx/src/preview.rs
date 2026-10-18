@@ -326,6 +326,21 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
+            // The page offered after a crash, its report made from this
+            // run's log as if it had ended in a crash; `crash-report shown`
+            // opens the report.
+            Some("crash-report") => {
+                let log = std::fs::read_to_string(crate::logger::log_path()).unwrap_or_default();
+                self.app.offer_crash_report(&format!(
+                    "{log}          [FATAL] crashed with signal 11
+"
+                ));
+                if let Some(c) = &mut self.app.ui.crash {
+                    c.shown = parts.get(1) == Some(&"shown");
+                }
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
             // Lists the subtitle languages in Settings > Playback.
             Some("languages") => {
                 self.app.ui.languages_open = true;

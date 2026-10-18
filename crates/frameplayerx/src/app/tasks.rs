@@ -50,6 +50,9 @@ pub(super) enum Job {
     Mounted(String, Result<std::path::PathBuf, String>),
     QuickConnectInitiated(Result<fp_sources::QuickConnectState, String>),
     QuickConnectPolled(Result<Option<(String, String)>, String>),
+    /// The last run crashed: the report the user may send.
+    CrashReport(Box<crate::crash::Report>),
+    CrashSent(Result<(), String>),
 }
 
 impl App {
@@ -117,6 +120,68 @@ impl App {
         self.jobs.spawn("haptics", move || {
             let r = Services::connect_device(&cfg);
             Job::Device(cfg, r)
+        });
+    }
+
+    /// Offers a crash report when the last run crashed. Reading its log
+    /// and hiding every name in it takes a moment with a big library.
+    pub(super) fn check_last_run(&mut self) {
+        let Some(_) = crate::crash::REPORT_URL else {
+            return;
+        };
+        let old = crate::logger::log_path().with_extension("log.old");
+        let Ok(log) = std::fs::read_to_string(&old) else {
+            return;
+        };
+        let private = crate::crash::Private::gather(
+            &self.services.library,
+            &self.services.source_configs,
+            &self.settings,
+        );
+        self.jobs.spawn(
+            "crash-report",
+            move || match crate::crash::Report::from_log(&log, &private, &crate::crash::system()) {
+                Some(r) => Job::CrashReport(Box::new(r)),
+                None => Job::Done,
+            },
+        );
+    }
+
+    /// The crash page for `log`, at once: the preview's way to show it.
+    pub(crate) fn offer_crash_report(&mut self, log: &str) {
+        let private = crate::crash::Private::gather(
+            &self.services.library,
+            &self.services.source_configs,
+            &self.settings,
+        );
+        self.ui.crash = crate::crash::Report::from_log(log, &private, &crate::crash::system())
+            .map(ui::crash::CrashPrompt::new);
+    }
+
+    /// Sends the crash report the user agreed to send.
+    pub(super) fn send_crash_report(&mut self) {
+        let (Some(url), Some(c)) = (crate::crash::REPORT_URL, &mut self.ui.crash) else {
+            return;
+        };
+        c.sending = true;
+        c.error = None;
+        let body = c.report.body();
+        self.jobs.spawn("crash-send", move || {
+            let http = fp_sources::http::HttpClient::new(Default::default(), None);
+            let r = http
+                .request(
+                    "POST",
+                    url,
+                    &[("Content-Type", "application/json")],
+                    Some(&body),
+                    4096,
+                )
+                .map_err(|e| e.to_string())
+                .and_then(|reply| match reply.status {
+                    200..=299 => Ok(()),
+                    status => Err(format!("the server answered {status}")),
+                });
+            Job::CrashSent(r)
         });
     }
 
@@ -277,6 +342,21 @@ impl App {
             }
             Job::QuickConnectInitiated(r) => self.quick_connect_code(r),
             Job::QuickConnectPolled(r) => self.quick_connect_answer(r),
+            Job::CrashReport(report) => {
+                self.ui.crash = Some(ui::crash::CrashPrompt::new(*report));
+                self.show_browser = true;
+                self.ui_visible = true;
+            }
+            Job::CrashSent(Ok(())) => {
+                self.ui.crash = None;
+                self.ui.toast("Crash report sent. Thank you!");
+            }
+            Job::CrashSent(Err(e)) => {
+                if let Some(c) = &mut self.ui.crash {
+                    c.sending = false;
+                    c.error = Some(e);
+                }
+            }
         }
     }
 
