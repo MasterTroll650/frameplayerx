@@ -1,9 +1,10 @@
 //! Uploads decoded video frames into sampled plane images.
 
-use crate::Result;
 use crate::gpu::Gpu;
 use crate::mem::{self, Buffer, Image};
 use crate::params::FrameDesc;
+use crate::q10c::{self, Converter, Picture};
+use crate::{Error, Result};
 use ash::vk;
 use fp_media::{PixelLayout, VideoFrame};
 use gpu_allocator::MemoryLocation;
@@ -14,7 +15,10 @@ pub(crate) struct VideoPlanes {
     pub desc: FrameDesc,
     /// Id of the frame currently uploaded.
     pub key: Option<u64>,
-    staging: Buffer,
+    /// Upload buffer for frames the CPU can read.
+    staging: Option<Buffer>,
+    /// Q10C frames are copied here and converted into `images` on the GPU.
+    q10c: Option<Picture>,
 }
 
 fn plane_formats(layout: PixelLayout) -> Option<Vec<vk::Format>> {
@@ -23,7 +27,7 @@ fn plane_formats(layout: PixelLayout) -> Option<Vec<vk::Format>> {
         PixelLayout::I420 { .. } => vec![vk::Format::R16_UNORM; 3],
         PixelLayout::Nv12 => vec![vk::Format::R8_UNORM, vk::Format::R8G8_UNORM],
         PixelLayout::P010 => vec![vk::Format::R16_UNORM, vk::Format::R16G16_UNORM],
-        PixelLayout::DrmPrime => return None,
+        PixelLayout::DrmPrime | PixelLayout::Q10c => return None,
     })
 }
 
@@ -58,9 +62,13 @@ impl VideoPlanes {
         cmd: vk::CommandBuffer,
         frame: &VideoFrame,
         garbage: &mut Vec<Image>,
+        converter: Option<&Converter>,
     ) -> Result<bool> {
+        if frame.layout == PixelLayout::Q10c {
+            return Self::upload_q10c(slot, gpu, cmd, frame, garbage, converter);
+        }
         let Some(formats) = plane_formats(frame.layout) else {
-            return Err(crate::Error::Unsupported(
+            return Err(Error::Unsupported(
                 "unsupported frame layout for upload".into(),
             ));
         };
@@ -84,9 +92,8 @@ impl VideoPlanes {
                 || s.desc.layout != frame.layout
         });
         if needs_new {
-            if let Some(mut old) = slot.take() {
-                garbage.append(&mut old.images);
-                old.staging.destroy(gpu);
+            if let Some(old) = slot.take() {
+                old.release(gpu, garbage);
             }
             let mut images = Vec::new();
             for (p, &f) in planes.iter().zip(&formats) {
@@ -121,7 +128,8 @@ impl VideoPlanes {
                     color: frame.color,
                 },
                 key: None,
-                staging,
+                staging: Some(staging),
+                q10c: None,
             });
             recreated = true;
         }
@@ -129,6 +137,9 @@ impl VideoPlanes {
             return Ok(recreated);
         };
         s.desc.color = frame.color;
+        let Some(staging) = s.staging.as_mut() else {
+            return Ok(recreated);
+        };
 
         // Ensure staging buffer is large enough for all planes (in case strides vary across frames)
         let mut total_bytes: usize = 0;
@@ -141,15 +152,15 @@ impl VideoPlanes {
             };
             total_bytes = (total_bytes + len + 63) & !63;
         }
-        if total_bytes as u64 > s.staging.size {
+        if total_bytes as u64 > staging.size {
             let bigger = Buffer::new(
                 gpu,
-                (total_bytes as u64 + 65536).max(s.staging.size * 2),
+                (total_bytes as u64 + 65536).max(staging.size * 2),
                 vk::BufferUsageFlags::TRANSFER_SRC,
                 MemoryLocation::CpuToGpu,
                 "video staging",
             )?;
-            let mut old = std::mem::replace(&mut s.staging, bigger);
+            let mut old = std::mem::replace(staging, bigger);
             old.destroy(gpu);
         }
 
@@ -157,7 +168,7 @@ impl VideoPlanes {
         let mut offset = 0usize;
         let mut regions = Vec::new();
         {
-            let dst = s.staging.bytes();
+            let dst = staging.bytes();
             for p in &planes {
                 let row_len = (p.width * p.components * p.bytes_per_sample) as usize;
                 let texel = (p.components * p.bytes_per_sample) as usize;
@@ -223,7 +234,7 @@ impl VideoPlanes {
             unsafe {
                 gpu.device.cmd_copy_buffer_to_image(
                     cmd,
-                    s.staging.buffer,
+                    staging.buffer,
                     img.image,
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                     &[region],
@@ -244,10 +255,125 @@ impl VideoPlanes {
         Ok(recreated)
     }
 
+    /// Converts a Q10C frame into P010 planes on the GPU.
+    fn upload_q10c(
+        slot: &mut Option<VideoPlanes>,
+        gpu: &Gpu,
+        cmd: vk::CommandBuffer,
+        frame: &VideoFrame,
+        garbage: &mut Vec<Image>,
+        converter: Option<&Converter>,
+    ) -> Result<bool> {
+        let Some(conv) = converter else {
+            return Err(Error::Unsupported(
+                "this GPU can't show 10-bit hardware-decoded (Q10C) frames".into(),
+            ));
+        };
+        let Some(pic) = frame.q10c() else {
+            return Err(Error::Unsupported("Q10C frame without its buffer".into()));
+        };
+        if slot
+            .as_ref()
+            .is_some_and(|s| s.key == Some(frame_key(frame)))
+        {
+            return Ok(false);
+        }
+        let geometry = q10c::Geometry {
+            width: frame.width,
+            height: frame.height,
+            stride: pic.stride,
+            rows: pic.rows,
+            uv_offset: pic.uv_offset,
+            len: pic.data.len(),
+        };
+        let needs_new = slot.as_ref().is_none_or(|s| {
+            s.desc.layout != frame.layout || s.q10c.as_ref().is_none_or(|p| p.geometry != geometry)
+        });
+        let mut recreated = false;
+        if needs_new {
+            if let Some(old) = slot.take() {
+                old.release(gpu, garbage);
+            }
+            let usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE;
+            let (cw, ch) = (frame.width.div_ceil(2), frame.height.div_ceil(2));
+            let mut images = vec![Image::new(
+                gpu,
+                frame.width,
+                frame.height,
+                &[vk::Format::R16_UNORM],
+                usage,
+                1,
+                "video plane",
+            )?];
+            let made = Image::new(
+                gpu,
+                cw,
+                ch,
+                &[vk::Format::R16G16_UNORM],
+                usage,
+                1,
+                "video plane",
+            )
+            .and_then(|uv| {
+                images.push(uv);
+                conv.picture(gpu, geometry, &images)
+            });
+            let picture = match made {
+                Ok(p) => p,
+                Err(e) => {
+                    garbage.append(&mut images);
+                    return Err(e);
+                }
+            };
+            *slot = Some(VideoPlanes {
+                images,
+                desc: FrameDesc {
+                    width: frame.width,
+                    height: frame.height,
+                    layout: frame.layout,
+                    color: frame.color,
+                },
+                key: None,
+                staging: None,
+                q10c: Some(picture),
+            });
+            recreated = true;
+        }
+        let Some(s) = slot.as_mut() else {
+            return Ok(recreated);
+        };
+        let Some(p) = s.q10c.as_mut() else {
+            return Ok(recreated);
+        };
+        s.desc.color = frame.color;
+        par_copy(p.bytes(), pic.data);
+        conv.record(gpu, cmd, p, &s.images);
+        s.key = Some(frame_key(frame));
+        Ok(recreated)
+    }
+
+    /// Gives up the set when it is replaced: its images to `garbage` (the
+    /// frame in flight may still name them), the rest at once (the set is
+    /// only replaced once the last frame reading it has finished).
+    fn release(mut self, gpu: &Gpu, garbage: &mut Vec<Image>) {
+        garbage.append(&mut self.images);
+        if let Some(mut b) = self.staging.take() {
+            b.destroy(gpu);
+        }
+        if let Some(mut p) = self.q10c.take() {
+            p.destroy(gpu);
+        }
+    }
+
     pub fn destroy(&mut self, gpu: &Gpu) {
         for i in &mut self.images {
             i.destroy(gpu);
         }
-        self.staging.destroy(gpu);
+        if let Some(b) = self.staging.as_mut() {
+            b.destroy(gpu);
+        }
+        if let Some(p) = self.q10c.as_mut() {
+            p.destroy(gpu);
+        }
     }
 }

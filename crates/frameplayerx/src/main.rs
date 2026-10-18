@@ -173,6 +173,9 @@ fn main() {
     logger::init(args.verbose);
     fp_media::init_logging();
     log::info!("FramePlayerX {} starting", env!("CARGO_PKG_VERSION"));
+    if args.bench.is_some() || args.seek_test.is_some() {
+        allow_hevc_10bit_headless();
+    }
     if let Some(f) = &args.bench {
         std::process::exit(match bench(f, &args.bench_opts) {
             Ok(()) => 0,
@@ -209,6 +212,15 @@ fn main() {
         eprintln!("FramePlayerX: {e}");
         std::process::exit(1);
     }
+}
+
+/// For the headless decode tools: decodes 10-bit HEVC in hardware when a
+/// renderer on this GPU could show it, as playback would.
+fn allow_hevc_10bit_headless() {
+    let shows = Gpu::headless()
+        .and_then(|gpu| Renderer::new(Arc::new(gpu), ash::vk::Format::R8G8B8A8_SRGB))
+        .is_ok_and(|r| r.shows_q10c());
+    fp_media::set_hevc_10bit_hardware(shows);
 }
 
 /// Prints container, streams and the detected VR format, and decodes the
@@ -375,6 +387,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         session.bindings()
     );
     let mut renderer = Renderer::new(gpu.clone(), session.format)?;
+    fp_media::set_hevc_10bit_hardware(renderer.shows_q10c());
     let mut app = make_app()?;
     app.set_about(vec![
         ("OpenXR runtime".into(), ctx.runtime.clone()),

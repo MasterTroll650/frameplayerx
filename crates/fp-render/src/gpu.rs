@@ -85,6 +85,44 @@ pub struct Gpu {
     pub allocator: ManuallyDrop<Mutex<Allocator>>,
     pub device_name: String,
     pub driver: String,
+    /// Turnip with what [`crate::q10c`] needs enabled: descriptor buffers,
+    /// buffer device addresses, DRM format modifiers and 16-bit storage
+    /// images.
+    pub(crate) q10c_features: bool,
+}
+
+/// Device extensions [`crate::q10c`] needs.
+const Q10C_EXTENSIONS: [&std::ffi::CStr; 2] = [
+    ash::ext::image_drm_format_modifier::NAME,
+    ash::ext::descriptor_buffer::NAME,
+];
+
+/// Whether `pdev` is Turnip with everything [`crate::q10c`] needs.
+fn q10c_supported(
+    instance: &ash::Instance,
+    pdev: vk::PhysicalDevice,
+    driver: vk::DriverId,
+) -> bool {
+    if driver != vk::DriverId::MESA_TURNIP {
+        return false;
+    }
+    // SAFETY: valid physical device.
+    let exts = unsafe { instance.enumerate_device_extension_properties(pdev) }.unwrap_or_default();
+    let has = |n: &std::ffi::CStr| exts.iter().any(|e| e.extension_name_as_c_str() == Ok(n));
+    if !Q10C_EXTENSIONS.iter().all(|n| has(n)) {
+        return false;
+    }
+    let mut f12 = vk::PhysicalDeviceVulkan12Features::default();
+    let mut fdb = vk::PhysicalDeviceDescriptorBufferFeaturesEXT::default();
+    let mut f2 = vk::PhysicalDeviceFeatures2::default()
+        .push_next(&mut f12)
+        .push_next(&mut fdb);
+    // SAFETY: valid physical device; the chain holds initialised structs.
+    unsafe { instance.get_physical_device_features2(pdev, &mut f2) };
+    let storage_formats = f2.features.shader_storage_image_extended_formats;
+    f12.buffer_device_address == vk::TRUE
+        && fdb.descriptor_buffer == vk::TRUE
+        && storage_formats == vk::TRUE
 }
 
 impl Gpu {
@@ -133,9 +171,23 @@ impl Gpu {
         let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
             .dynamic_rendering(true)
             .synchronization2(true);
-        let dci = vk::DeviceCreateInfo::default()
+        let q10c_features = q10c_supported(&instance, pdev, driver_props.driver_id);
+        let q10c_exts = Q10C_EXTENSIONS.map(std::ffi::CStr::as_ptr);
+        let mut f12 = vk::PhysicalDeviceVulkan12Features::default().buffer_device_address(true);
+        let mut fdb =
+            vk::PhysicalDeviceDescriptorBufferFeaturesEXT::default().descriptor_buffer(true);
+        let features =
+            vk::PhysicalDeviceFeatures::default().shader_storage_image_extended_formats(true);
+        let mut dci = vk::DeviceCreateInfo::default()
             .queue_create_infos(&qci)
             .push_next(&mut f13);
+        if q10c_features {
+            dci = dci
+                .enabled_extension_names(&q10c_exts)
+                .enabled_features(&features)
+                .push_next(&mut f12)
+                .push_next(&mut fdb);
+        }
         let raw_dev = creator.create_device(&instance, pdev, &dci)?;
         // SAFETY: raw_dev was created from this instance.
         let device = unsafe { ash::Device::load(instance.fp_v1_0(), raw_dev) };
@@ -161,6 +213,7 @@ impl Gpu {
             allocator: ManuallyDrop::new(Mutex::new(allocator)),
             device_name,
             driver,
+            q10c_features,
         })
     }
 

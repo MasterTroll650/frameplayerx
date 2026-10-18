@@ -9,6 +9,7 @@
 //! - [`math`]: OpenXR-style projection and view matrices.
 //! - [`capture`]: offscreen eye targets with read-back, for tests and
 //!   screenshots.
+//! - `q10c`: shows the Steam Frame decoder's 10-bit (Q10C) pictures.
 
 pub mod capture;
 pub mod gpu;
@@ -16,6 +17,7 @@ pub mod math;
 pub mod mem;
 pub mod params;
 mod pipeline;
+mod q10c;
 pub mod renderer;
 mod video;
 
@@ -55,3 +57,4 @@ impl<T> VkContext<T> for std::result::Result<T, vk::Result> {
 pub(crate) const SCENE_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scene.spv"));
 pub(crate) const QUAD_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/quad.spv"));
 pub(crate) const EGUI_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/egui.spv"));
+pub(crate) const Q10C_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/q10c.spv"));

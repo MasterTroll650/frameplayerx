@@ -297,7 +297,7 @@ impl Sim {
                 if let Some(p) = &mut self.app.playback {
                     let v = p.player.info().video_stream().cloned();
                     if let Some(mut v) = v {
-                        v.codec = "hevc".into();
+                        v.codec = "av1".into();
                         v.bit_depth = 10;
                         v.pixel_format = "yuv420p10le".into();
                         p.notice = Some(crate::playback::slow_decode_notice(&v, true, None));
@@ -578,6 +578,7 @@ pub fn run(args: &Args, out: &Path) -> Result<(), Error> {
     std::fs::create_dir_all(out)?;
     let gpu = Arc::new(Gpu::headless()?);
     let renderer = Renderer::new(gpu.clone(), ash::vk::Format::R8G8B8A8_SRGB)?;
+    fp_media::set_hevc_10bit_hardware(renderer.shows_q10c());
     let size = args.size.unwrap_or(1024);
     let eyes = OffscreenEyes::new(&renderer, size, size)?;
     let mut app = crate::make_app()?;

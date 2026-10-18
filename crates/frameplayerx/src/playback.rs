@@ -704,11 +704,18 @@ fn falling_behind(stalls: u64, dropped: u64, shown: u64) -> bool {
 
 /// Whether the Frame's hardware decoder takes this stream.
 fn has_hardware_decoder(v: &StreamInfo) -> bool {
-    matches!(v.codec.as_str(), "hevc" | "h264" | "vp9") && v.bit_depth <= 8 && v.chroma() == "4:2:0"
+    hardware_decodes(v, fp_media::hevc_10bit_hardware())
 }
 
-/// The stream's codec, with its bit depth and chroma when the hardware
-/// decoder lacks them ("10-bit HEVC", "4:2:2 HEVC").
+/// 8-bit 4:2:0 HEVC, H.264 and VP9, and 10-bit 4:2:0 HEVC when `hevc_10bit`
+/// (the renderer shows it, see [`fp_media::set_hevc_10bit_hardware`]).
+fn hardware_decodes(v: &StreamInfo, hevc_10bit: bool) -> bool {
+    let depth = v.bit_depth <= 8 || (hevc_10bit && v.codec == "hevc" && v.bit_depth == 10);
+    matches!(v.codec.as_str(), "hevc" | "h264" | "vp9") && depth && v.chroma() == "4:2:0"
+}
+
+/// The stream's codec, with its bit depth and chroma when they are not
+/// plain 8-bit 4:2:0 ("10-bit HEVC", "4:2:2 HEVC").
 fn stream_desc(v: &StreamInfo) -> String {
     let codec = match v.codec.as_str() {
         "hevc" => "HEVC".to_string(),
@@ -717,7 +724,6 @@ fn stream_desc(v: &StreamInfo) -> String {
         "vp9" => "VP9".to_string(),
         c => c.to_uppercase(),
     };
-    // The hardware decodes 8-bit 4:2:0 only: say which of the two it isn't.
     let chroma = v.chroma();
     match (v.bit_depth > 8, chroma != "4:2:0") {
         (true, true) => format!("{}-bit {chroma} {codec}", v.bit_depth),
@@ -907,5 +913,19 @@ mod tests {
         assert_eq!(r, "hardware decoding is off in Settings");
         let r = software_reason(&stream("hevc", 8), true, Some(busy));
         assert_eq!(r, busy);
+
+        // 10-bit HEVC in hardware where the renderer shows it; never other
+        // 10-bit codecs.
+        assert!(hardware_decodes(&stream("hevc", 10), true));
+        assert!(!hardware_decodes(&stream("hevc", 10), false));
+        assert!(!hardware_decodes(&stream("h264", 10), true));
+        assert!(!hardware_decodes(&stream("vp9", 10), true));
+        let mut s12 = stream("hevc", 12);
+        s12.pixel_format = "yuv420p12le".into();
+        assert!(!hardware_decodes(&s12, true));
+        let mut s422 = stream("hevc", 10);
+        s422.pixel_format = "yuv422p10le".into();
+        assert!(!hardware_decodes(&s422, true));
+        assert!(hardware_decodes(&stream("h264", 8), false));
     }
 }

@@ -5,8 +5,8 @@
 //! - [`info`]: stream inspection, including spherical/stereo metadata and HDR.
 //! - `decode`: video (hardware V4L2 first, software fallback), audio and
 //!   subtitle decoders.
-//! - `v4l2`: the native V4L2 stateful decoder for H.264/HEVC, with the
-//!   Steam Frame's admission-check workaround.
+//! - `v4l2`: the native V4L2 stateful decoder for H.264/HEVC (10-bit HEVC as
+//!   Q10C), with the Steam Frame's admission-check workaround.
 //! - [`frame`]: decoded video frames in GPU-uploadable layouts.
 //! - [`player`]: the threaded player with a video-master clock.
 //! - [`audio`]: output, time-stretch and ambisonic rendering.
@@ -25,8 +25,8 @@ pub mod subtitle;
 pub mod thumb;
 pub(crate) mod v4l2;
 
-pub use decode::{HwDecode, hardware_sessions};
-pub use frame::{ColorInfo, PixelLayout, VideoFrame};
+pub use decode::{HwDecode, hardware_sessions, hevc_10bit_hardware, set_hevc_10bit_hardware};
+pub use frame::{ColorInfo, PixelLayout, Q10cPicture, VideoFrame};
 pub use info::{MediaInfo, StreamInfo, StreamKind};
 pub use player::{Player, PlayerConfig, PlayerState, Stats};
 pub use subtitle::Cue;

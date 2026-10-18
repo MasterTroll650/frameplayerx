@@ -81,13 +81,14 @@ pub(crate) fn yuv_matrix(color: &ColorInfo, layout: PixelLayout) -> ([Vec4; 3], 
     let bits = match layout {
         PixelLayout::I420 { bits } => bits,
         PixelLayout::Nv12 => 8,
-        PixelLayout::P010 | PixelLayout::DrmPrime => 10,
+        PixelLayout::P010 | PixelLayout::DrmPrime | PixelLayout::Q10c => 10,
     };
     let max = ((1u32 << bits) - 1) as f32;
     // Sample scale: values are normalised by the texture format's range.
+    // Q10C frames are converted into P010 planes.
     let scale = match layout {
         PixelLayout::I420 { bits: 10 } => 65535.0 / 1023.0,
-        PixelLayout::P010 => 65535.0 / 65472.0,
+        PixelLayout::P010 | PixelLayout::Q10c => 65535.0 / 65472.0,
         _ => 1.0,
     };
     let (y_off, y_mul, c_off, c_mul) = if color.full_range {

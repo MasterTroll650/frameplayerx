@@ -16,6 +16,20 @@ pub fn hardware_sessions() -> usize {
     HW_SESSIONS.load(Ordering::Relaxed)
 }
 
+static HEVC_10BIT_HARDWARE: AtomicBool = AtomicBool::new(false);
+
+/// Lets 10-bit HEVC decode in hardware. The Frame's decoder writes those
+/// pictures only as [`PixelLayout::Q10c`](crate::PixelLayout::Q10c), so this
+/// stays off unless the renderer can show them.
+pub fn set_hevc_10bit_hardware(on: bool) {
+    HEVC_10BIT_HARDWARE.store(on, Ordering::Relaxed);
+}
+
+/// Whether 10-bit HEVC decodes in hardware (see [`set_hevc_10bit_hardware`]).
+pub fn hevc_10bit_hardware() -> bool {
+    HEVC_10BIT_HARDWARE.load(Ordering::Relaxed)
+}
+
 /// An owned `AVPacket`.
 pub struct Packet(pub(crate) *mut ff::AVPacket);
 // SAFETY: packets are reference counted buffers; ownership moves between threads.
@@ -131,12 +145,16 @@ enum Candidate {
 
 /// Decoders to try for a stream: the native V4L2 path, FFmpeg's V4L2
 /// wrapper, dav1d for AV1, then FFmpeg's default software decoder.
+/// `ten_bit_hevc`: whether 10-bit HEVC may use the native path (see
+/// [`set_hevc_10bit_hardware`]); FFmpeg's wrapper only gets 8-bit streams,
+/// as it would ask for NV12, which the decoder fills with clamped samples.
 fn candidates(
     video: bool,
     codec: ff::AVCodecID,
     format: ff::AVPixelFormat,
     hw: HwDecode,
     native: bool,
+    ten_bit_hevc: bool,
 ) -> Vec<Candidate> {
     let mut c = Vec::new();
     let eight_bit = matches!(
@@ -150,6 +168,15 @@ fn candidates(
         if let Some(n) = v4l2_name(codec) {
             c.push(Candidate::Named(n, true));
         }
+    }
+    if video
+        && hw == HwDecode::Auto
+        && native
+        && ten_bit_hevc
+        && codec == ff::AV_CODEC_ID_HEVC
+        && format == ff::AV_PIX_FMT_YUV420P10LE
+    {
+        c.push(Candidate::NativeV4l2);
     }
     if codec == ff::AV_CODEC_ID_AV1 {
         c.push(Candidate::Named(c"libdav1d", false));
@@ -296,7 +323,8 @@ impl Decoder {
             unsafe { ((*par).codec_id, (*par).codec_type, (*par).format) };
         let mut last_err = Error::Unsupported(format!("no decoder for codec id {codec_id}"));
         let mut hardware_error = None;
-        for cand in candidates(kind == ff::AVMEDIA_TYPE_VIDEO, codec_id, format, hw, native) {
+        let video = kind == ff::AVMEDIA_TYPE_VIDEO;
+        for cand in candidates(video, codec_id, format, hw, native, hevc_10bit_hardware()) {
             let hardware = matches!(cand, Candidate::NativeV4l2 | Candidate::Named(_, true));
             let r = match cand {
                 Candidate::NativeV4l2 => Self::open_native(par, time_base, hw),
@@ -685,45 +713,59 @@ mod tests {
         let hevc = ff::AV_CODEC_ID_HEVC;
         let yuv420 = ff::AV_PIX_FMT_YUV420P;
         let yuv420p10 = ff::AV_PIX_FMT_YUV420P10LE;
+        let auto = HwDecode::Auto;
         assert_eq!(
-            candidates(true, hevc, yuv420, HwDecode::Auto, true),
+            candidates(true, hevc, yuv420, auto, true, false),
             vec![NativeV4l2, Named(c"hevc_v4l2m2m", true), Default]
         );
-        // 10-bit bypasses 8-bit-only hardware decoders.
+        // 10-bit HEVC: the native decoder (Q10C) when the renderer shows it,
+        // never FFmpeg's wrapper.
         assert_eq!(
-            candidates(true, hevc, yuv420p10, HwDecode::Auto, true),
+            candidates(true, hevc, yuv420p10, auto, true, false),
+            vec![Default]
+        );
+        assert_eq!(
+            candidates(true, hevc, yuv420p10, auto, true, true),
+            vec![NativeV4l2, Default]
+        );
+        assert_eq!(
+            candidates(true, hevc, yuv420p10, auto, false, true),
+            vec![Default]
+        );
+        assert_eq!(
+            candidates(true, hevc, yuv420p10, HwDecode::Off, true, true),
+            vec![Default]
+        );
+        let h264 = ff::AV_CODEC_ID_H264;
+        assert_eq!(
+            candidates(true, h264, yuv420p10, auto, true, true),
             vec![Default]
         );
         // After the native decoder fails (or with it disabled).
         assert_eq!(
-            candidates(true, hevc, yuv420, HwDecode::Auto, false),
+            candidates(true, hevc, yuv420, auto, false, false),
             vec![Named(c"hevc_v4l2m2m", true), Default]
         );
         assert_eq!(
-            candidates(true, ff::AV_CODEC_ID_H264, yuv420, HwDecode::Auto, true)[0],
+            candidates(true, h264, yuv420, auto, true, false)[0],
             NativeV4l2
         );
         assert_eq!(
-            candidates(true, hevc, yuv420, HwDecode::Off, true),
+            candidates(true, hevc, yuv420, HwDecode::Off, true, false),
             vec![Default]
         );
         // Codecs the native decoder does not handle go to FFmpeg directly.
         assert_eq!(
-            candidates(true, ff::AV_CODEC_ID_VP9, yuv420, HwDecode::Auto, true),
+            candidates(true, ff::AV_CODEC_ID_VP9, yuv420, auto, true, false),
             vec![Named(c"vp9_v4l2m2m", true), Default]
         );
         assert_eq!(
-            candidates(true, ff::AV_CODEC_ID_AV1, yuv420, HwDecode::Auto, true),
+            candidates(true, ff::AV_CODEC_ID_AV1, yuv420, auto, true, false),
             vec![Named(c"libdav1d", false), Default]
         );
+        let aac = ff::AV_CODEC_ID_AAC;
         assert_eq!(
-            candidates(
-                false,
-                ff::AV_CODEC_ID_AAC,
-                ff::AV_PIX_FMT_NONE,
-                HwDecode::Auto,
-                true
-            ),
+            candidates(false, aac, ff::AV_PIX_FMT_NONE, auto, true, false),
             vec![Default]
         );
     }

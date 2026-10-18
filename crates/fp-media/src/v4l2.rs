@@ -29,9 +29,16 @@
 //!
 //! Seeks never restart a queue (that would re-run the check): queued
 //! bitstream from before the seek is decoded and its frames are dropped by
-//! timestamp. Decoded NV12 frames are copied out of the driver's buffers into
-//! pooled `AVFrame`s, so the rest of the pipeline sees ordinary NV12 frames
-//! and the CAPTURE buffers go straight back to the decoder.
+//! timestamp. Decoded frames are copied out of the driver's buffers into
+//! pooled `AVFrame`s, so the CAPTURE buffers go straight back to the decoder.
+//!
+//! 10-bit HEVC comes out correctly only as Q10C, Qualcomm's compressed TP10
+//! ([`Q10cLayout`]): asked for NV12, the decoder clamps the 10-bit samples
+//! to 8 bits instead of scaling them. Q10C pictures are copied out whole
+//! and only the GPU reads them. They get no primer: the driver sizes Q10C
+//! CAPTURE buffers by the exact picture height (8192x4080 and 8192x4096
+//! differ) and ignores a requested one, so a 10-bit 8K stream the admission
+//! check refuses decodes in software.
 
 /// Bitstream (OUTPUT) buffers to request.
 pub(crate) const OUTPUT_BUFFERS: u32 = 6;
@@ -195,6 +202,58 @@ impl Nv12Layout {
     /// Bytes of a tightly stacked copy (Y rows then UV rows, same stride).
     pub(crate) fn copy_size(&self) -> usize {
         self.stride * (self.height as usize + self.height.div_ceil(2) as usize)
+    }
+}
+
+/// How a Q10C picture sits in a single-plane CAPTURE buffer: Y metadata, Y,
+/// UV metadata and UV, each 4096-aligned, three 10-bit samples in four
+/// bytes. The driver reports only the stride and the total; the plane sizes
+/// follow Qualcomm's rules for the format (as in the kernel's venus and iris
+/// drivers), checked against that total.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Q10cLayout {
+    /// Visible size.
+    pub width: u32,
+    pub height: u32,
+    /// Bytes per row of both planes.
+    pub stride: usize,
+    /// Luma rows of the buffer (the CAPTURE format's height).
+    pub rows: u32,
+    /// Offset of the UV plane's metadata.
+    pub uv_offset: usize,
+    /// Bytes of the whole picture.
+    pub size: usize,
+}
+
+impl Q10cLayout {
+    /// From the CAPTURE format (`fmt` its width and height, already aligned
+    /// by the driver, then its stride and size) and the visible (compose)
+    /// size.
+    pub(crate) fn new(
+        fmt: (u32, u32),
+        stride: usize,
+        sizeimage: usize,
+        visible: (u32, u32),
+    ) -> Option<Q10cLayout> {
+        let a = usize::next_multiple_of;
+        let (w, h) = (fmt.0 as usize, fmt.1 as usize);
+        let y_meta = a(a(w.div_ceil(48), 64) * a(h.div_ceil(4), 16), 4096);
+        let y = a(stride * a(h, 16), 4096);
+        let uv_meta = a(
+            a(w.div_ceil(2).div_ceil(24), 64) * a(h.div_ceil(2).div_ceil(4), 16),
+            4096,
+        );
+        let uv = a(stride * a(h.div_ceil(2), 16), 4096);
+        let l = Q10cLayout {
+            width: visible.0,
+            height: visible.1,
+            stride,
+            rows: fmt.1,
+            uv_offset: y_meta + y,
+            size: y_meta + y + uv_meta + uv,
+        };
+        let fits = visible.0 > 0 && visible.1 > 0 && visible.0 <= fmt.0 && visible.1 <= fmt.1;
+        (fits && stride == a(a(w, 192) * 4 / 3, 256) && l.size == sizeimage).then_some(l)
     }
 }
 
@@ -552,6 +611,7 @@ mod linux {
     use std::time::{Duration, Instant};
 
     const NV12: u32 = fourcc(b"NV12");
+    const Q10C: u32 = fourcc(b"Q10C");
     /// Give up when the device makes no progress for this long.
     const STALL: Duration = Duration::from_secs(5);
 
@@ -625,11 +685,42 @@ mod linux {
         }
     }
 
+    /// Where a picture sits in a CAPTURE buffer.
+    #[derive(Clone, Copy, Debug)]
+    enum Layout {
+        Nv12(Nv12Layout),
+        Q10c(Q10cLayout),
+    }
+
+    impl Layout {
+        /// Bytes from the start of the buffer to the end of the picture.
+        fn end(&self) -> usize {
+            match self {
+                Layout::Nv12(l) => l.end(),
+                Layout::Q10c(l) => l.size,
+            }
+        }
+
+        fn visible(&self) -> (u32, u32) {
+            match self {
+                Layout::Nv12(l) => (l.width, l.height),
+                Layout::Q10c(l) => (l.width, l.height),
+            }
+        }
+
+        fn stride(&self) -> usize {
+            match self {
+                Layout::Nv12(l) => l.stride,
+                Layout::Q10c(l) => l.stride,
+            }
+        }
+    }
+
     struct Capture {
         bufs: Vec<Mapping>,
         /// Coded size (CAPTURE format) the buffers were allocated for.
         allocated_for: (u32, u32),
-        layout: Nv12Layout,
+        layout: Layout,
         /// Buffer we hold after a LAST flag until decoding resumes.
         held: Option<u32>,
     }
@@ -650,6 +741,8 @@ mod linux {
         pub device: String,
         codec: Codec,
         stream_size: (u32, u32),
+        /// The CAPTURE format: NV12, or Q10C for 10-bit streams.
+        pixelformat: u32,
         /// The primer trick is active (declared OUTPUT size was lowered).
         primed: bool,
         bsf: *mut ff::AVBSFContext,
@@ -805,12 +898,16 @@ mod linux {
                 ff::AV_PIX_FMT_YUV420P,
                 ff::AV_PIX_FMT_YUVJ420P,
             ];
-            if !eight_bit_420.contains(&p.format) {
+            let pixelformat = if eight_bit_420.contains(&p.format) {
+                NV12
+            } else if p.format == ff::AV_PIX_FMT_YUV420P10LE && codec == Codec::Hevc {
+                Q10C
+            } else {
                 return Err(Error::Unsupported(format!(
-                    "V4L2 path takes 8-bit 4:2:0 only (pixel format {})",
+                    "V4L2 path takes 8-bit 4:2:0, or 10-bit 4:2:0 HEVC (pixel format {})",
                     p.format
                 )));
-            }
+            };
             if p.width <= 0 || p.height <= 0 {
                 return Err(Error::Unsupported("V4L2: stream size unknown".into()));
             }
@@ -832,6 +929,7 @@ mod linux {
                 device,
                 codec,
                 stream_size,
+                pixelformat,
                 primed: false,
                 bsf: std::ptr::null_mut(),
                 out_free: Vec::new(),
@@ -869,10 +967,11 @@ mod linux {
                 dec.queue_bitstream(primer, 0)?;
             }
             log::info!(
-                "V4L2 decoder {} for {codec:?} {}x{}{}",
+                "V4L2 decoder {} for {codec:?} {}x{} to {}{}",
                 dec.device,
                 stream_size.0,
                 stream_size.1,
+                fourcc_str(pixelformat),
                 if dec.primed {
                     " (admission workaround: primer)"
                 } else {
@@ -940,12 +1039,11 @@ mod linux {
                 Ok(n) => n,
                 Err(e) if e.raw_os_error() == Some(libc::ENOMEM) => {
                     // The admission check: retry with a lower declared size
-                    // and open CAPTURE through the primer, if one fits.
-                    let Some((_, primer)) = self
-                        .codec
-                        .primer()
-                        .filter(|(_, size)| primer_matches((w, h), *size))
-                    else {
+                    // and open CAPTURE through the primer, if one fits (NV12
+                    // only, see the module docs).
+                    let Some((_, primer)) = self.codec.primer().filter(|(_, size)| {
+                        self.pixelformat == NV12 && primer_matches((w, h), *size)
+                    }) else {
                         return Err(err("REQBUFS output", e));
                     };
                     let mut fits = |cand: u32| {
@@ -1159,8 +1257,8 @@ mod linux {
         }
 
         /// The CAPTURE layout for format `f` (visible size from COMPOSE).
-        fn layout(&self, f: &Format) -> Result<Nv12Layout> {
-            if f.pixelformat() != NV12 || f.num_planes() != 1 {
+        fn layout(&self, f: &Format) -> Result<Layout> {
+            if f.pixelformat() != self.pixelformat || f.num_planes() != 1 {
                 return Err(Error::Unsupported(format!(
                     "V4L2 capture format {} with {} planes",
                     fourcc_str(f.pixelformat()),
@@ -1176,15 +1274,18 @@ mod linux {
                 Ok(()) if s.width > 0 && s.height > 0 => (s.width, s.height),
                 _ => (f.width(), f.height()),
             };
-            Nv12Layout::new(
-                f.bytesperline(0) as usize,
-                f.height(),
-                visible,
-                f.sizeimage(0) as usize,
-            )
-            .ok_or_else(|| {
+            let (stride, size) = (f.bytesperline(0) as usize, f.sizeimage(0) as usize);
+            let layout = if self.pixelformat == Q10C {
+                Q10cLayout::new((f.width(), f.height()), stride, size, visible).map(Layout::Q10c)
+            } else {
+                Nv12Layout::new(stride, f.height(), visible, size).map(Layout::Nv12)
+            };
+            layout.ok_or_else(|| {
                 Error::Unsupported(format!(
-                    "V4L2 capture layout {}x{} stride {} size {}",
+                    "V4L2 capture layout {} {}x{} (visible {}x{}) stride {} size {}",
+                    fourcc_str(f.pixelformat()),
+                    f.width(),
+                    f.height(),
                     visible.0,
                     visible.1,
                     f.bytesperline(0),
@@ -1193,11 +1294,12 @@ mod linux {
             })
         }
 
-        /// First source change: choose NV12, allocate, map and queue CAPTURE.
+        /// First source change: choose the format, allocate, map and queue
+        /// CAPTURE.
         fn setup_capture(&mut self) -> Result<()> {
             let mut f = self.g_fmt_capture()?;
-            if f.pixelformat() != NV12 {
-                f.set_pixelformat(NV12);
+            if f.pixelformat() != self.pixelformat {
+                f.set_pixelformat(self.pixelformat);
                 ioctl(&self.fd, VIDIOC_S_FMT, &mut f).map_err(|e| err("S_FMT capture", e))?;
                 f = self.g_fmt_capture()?;
             }
@@ -1236,13 +1338,15 @@ mod linux {
             }
             let mut t = BUF_TYPE_CAPTURE_MPLANE as i32;
             ioctl(&self.fd, VIDIOC_STREAMON, &mut t).map_err(|e| err("STREAMON capture", e))?;
+            let visible = layout.visible();
             log::info!(
-                "V4L2 capture {}x{} (visible {}x{}, stride {}) x{} buffers of {} bytes",
+                "V4L2 capture {} {}x{} (visible {}x{}, stride {}) x{} buffers of {} bytes",
+                fourcc_str(f.pixelformat()),
                 f.width(),
                 f.height(),
-                layout.width,
-                layout.height,
-                layout.stride,
+                visible.0,
+                visible.1,
+                layout.stride(),
                 r.count,
                 f.sizeimage(0)
             );
@@ -1313,16 +1417,13 @@ mod linux {
                 .unwrap_or(((0, 0), 0, 0));
             let need = f.sizeimage(0) as usize;
             let new_format = (f.width(), f.height());
-            if f.pixelformat() == NV12
+            if f.pixelformat() == self.pixelformat
                 && can_reuse_capture(allocated_for, count, smallest, new_format, min, need)
             {
                 let layout = self.layout(&f)?;
                 if layout.end() <= smallest {
-                    log::info!(
-                        "V4L2 stream now {}x{}: reusing {count} capture buffers",
-                        layout.width,
-                        layout.height
-                    );
+                    let (w, h) = layout.visible();
+                    log::info!("V4L2 stream now {w}x{h}: reusing {count} capture buffers");
                     if let Some(c) = self.cap.as_mut() {
                         c.layout = layout;
                     }
@@ -1350,7 +1451,8 @@ mod linux {
             self.setup_capture()
         }
 
-        /// Copies a decoded picture into a pooled NV12 `AVFrame`.
+        /// Copies a decoded picture into a pooled `AVFrame`: NV12 with its
+        /// two planes stacked, or the whole Q10C buffer.
         fn export(
             &mut self,
             index: u32,
@@ -1361,16 +1463,19 @@ mod linux {
             let Some(cap) = &self.cap else {
                 return Err(Error::Unsupported("V4L2: no capture buffers".into()));
             };
-            let l = cap.layout;
+            let layout = cap.layout;
             let src = &cap.bufs[index as usize];
-            let size = l.copy_size();
-            if l.end() > src.len {
+            if layout.end() > src.len {
                 return Err(Error::Unsupported(
                     "V4L2: picture exceeds its buffer".into(),
                 ));
             }
+            let size = match layout {
+                Layout::Nv12(l) => l.copy_size(),
+                Layout::Q10c(l) => l.size,
+            };
             // SAFETY: pool buffers hold `size` bytes; the source mapping holds
-            // l.end() bytes; frame is a valid empty AVFrame we fill.
+            // layout.end() bytes; frame is a valid AVFrame we refill.
             unsafe {
                 if self.pool.is_null() || self.pool_size != size {
                     ff::av_buffer_pool_uninit(&mut self.pool);
@@ -1382,20 +1487,41 @@ mod linux {
                     return Err(Error::Unsupported("V4L2: out of memory for a frame".into()));
                 }
                 let dst = (*buf).data;
-                let y_len = l.stride * l.height as usize;
-                let uv_len = l.stride * l.height.div_ceil(2) as usize;
-                std::ptr::copy_nonoverlapping(src.ptr, dst, y_len);
-                std::ptr::copy_nonoverlapping(src.ptr.add(l.uv_offset), dst.add(y_len), uv_len);
                 ff::av_frame_unref(frame);
                 let f = &mut *frame;
-                f.buf[0] = buf;
-                f.data[0] = dst;
-                f.data[1] = dst.add(y_len);
-                f.linesize[0] = l.stride as i32;
-                f.linesize[1] = l.stride as i32;
-                f.format = ff::AV_PIX_FMT_NV12;
-                f.width = l.width as i32;
-                f.height = l.height as i32;
+                match layout {
+                    Layout::Nv12(l) => {
+                        let y_len = l.stride * l.height as usize;
+                        let uv_len = l.stride * l.height.div_ceil(2) as usize;
+                        std::ptr::copy_nonoverlapping(src.ptr, dst, y_len);
+                        std::ptr::copy_nonoverlapping(
+                            src.ptr.add(l.uv_offset),
+                            dst.add(y_len),
+                            uv_len,
+                        );
+                        f.buf[0] = buf;
+                        f.data[0] = dst;
+                        f.data[1] = dst.add(y_len);
+                        f.linesize[0] = l.stride as i32;
+                        f.linesize[1] = l.stride as i32;
+                        f.format = ff::AV_PIX_FMT_NV12;
+                        f.width = l.width as i32;
+                        f.height = l.height as i32;
+                    }
+                    Layout::Q10c(l) => {
+                        std::ptr::copy_nonoverlapping(src.ptr, dst, l.size);
+                        // The pool's buffers are 64 bytes longer.
+                        (*buf).size = l.size;
+                        crate::frame::set_q10c(
+                            f,
+                            buf,
+                            l.stride as u32,
+                            l.rows,
+                            l.uv_offset,
+                            (l.width, l.height),
+                        );
+                    }
+                }
                 f.pts = pts;
                 f.best_effort_timestamp = pts;
                 f.duration = duration;
@@ -1659,6 +1785,31 @@ mod tests {
         // Odd heights round the chroma up.
         let l = Nv12Layout::new(128, 64, (100, 51), 128 * 96).unwrap();
         assert_eq!(l.end(), 128 * 64 + 128 * 26);
+    }
+
+    #[test]
+    fn q10c_layout_matches_the_driver() {
+        // (CAPTURE format, stride, sizeimage) as iris reports them, and
+        // where the UV plane starts by the GPU's own layout of the Y plane.
+        let measured = [
+            ((1920, 1088), 2560, 4_210_688, (1920, 1080), 2_805_760),
+            ((3840, 2160), 5120, 16_736_256, (3840, 2160), 11_128_832),
+            ((5760, 2880), 7680, 33_320_960, (5760, 2880), 22_212_608),
+            ((7680, 3840), 10240, 59_260_928, (7680, 3840), 39_505_920),
+            ((8256, 4096), 11008, 67_928_064, (8192, 4096), 45_285_376),
+        ];
+        for (fmt, stride, size, visible, uv_offset) in measured {
+            let l = Q10cLayout::new(fmt, stride, size, visible).unwrap();
+            assert_eq!((l.uv_offset, l.size, l.rows), (uv_offset, size, fmt.1));
+            assert_eq!((l.width, l.height), visible);
+        }
+        // The 8192x4080 primer gets smaller buffers than an 8192x4096 stream.
+        let primer = Q10cLayout::new((8256, 4080), 11008, 67_751_936, (8192, 4080)).unwrap();
+        assert!(primer.size < 67_928_064);
+        // A stride or size the rules don't give is not a layout we know.
+        assert!(Q10cLayout::new((1920, 1088), 2048, 4_210_688, (1920, 1080)).is_none());
+        assert!(Q10cLayout::new((1920, 1088), 2560, 4_210_689, (1920, 1080)).is_none());
+        assert!(Q10cLayout::new((1920, 1088), 2560, 4_210_688, (1920, 1100)).is_none());
     }
 
     #[test]

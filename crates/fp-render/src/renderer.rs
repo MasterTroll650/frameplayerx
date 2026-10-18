@@ -10,6 +10,7 @@ use crate::gpu::Gpu;
 use crate::mem::{self, Buffer, Image};
 use crate::params::{self, SceneParams, VideoParams};
 use crate::pipeline::{self, PipelineDesc};
+use crate::q10c::Converter;
 use crate::video::VideoPlanes;
 use crate::{Result, VkContext};
 use ash::vk;
@@ -165,6 +166,8 @@ pub struct Renderer {
     videos: [Option<VideoPlanes>; 2],
     video_cur: usize,
     video_gen: [u64; 2],
+    /// Shows hardware-decoded 10-bit frames, on GPUs that can.
+    q10c: Option<Converter>,
     current: usize,
     recording: bool,
 }
@@ -346,6 +349,7 @@ impl Renderer {
                 videos: [None, None],
                 video_cur: 0,
                 video_gen: [0, 0],
+                q10c: Converter::new(&gpu),
                 current: 0,
                 recording: false,
             };
@@ -685,6 +689,7 @@ impl Renderer {
                 slot.cmd,
                 f,
                 &mut slot.garbage,
+                self.q10c.as_ref(),
             ) {
                 Ok(recreated) => {
                     if recreated {
@@ -708,6 +713,12 @@ impl Renderer {
         }
         slot.has_video = true;
         Ok(())
+    }
+
+    /// Whether hardware-decoded 10-bit HEVC ([`fp_media::PixelLayout::Q10c`]
+    /// frames) can be shown; see [`fp_media::set_hevc_10bit_hardware`].
+    pub fn shows_q10c(&self) -> bool {
+        self.q10c.is_some()
     }
 
     /// The video image set this slot shows, if any.
@@ -1586,6 +1597,9 @@ impl Drop for Renderer {
                 if let Some(mut v) = v.take() {
                     v.destroy(&gpu);
                 }
+            }
+            if let Some(mut c) = self.q10c.take() {
+                c.destroy(&gpu);
             }
             for mut s in self.slots.drain(..) {
                 for mut i in s.garbage.drain(..) {

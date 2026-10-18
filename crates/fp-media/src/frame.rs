@@ -16,6 +16,11 @@ pub enum PixelLayout {
     P010,
     /// GPU buffer shared as DMA-BUF file descriptors (zero copy).
     DrmPrime,
+    /// The Steam Frame decoder's 10-bit output, Q10C: Qualcomm's compressed
+    /// (UBWC) TP10, three 10-bit samples in four bytes, as one buffer of Y
+    /// metadata, Y, UV metadata and UV ([`VideoFrame::q10c`]). Only the GPU
+    /// can read it.
+    Q10c,
 }
 
 impl PixelLayout {
@@ -43,6 +48,22 @@ pub struct ColorInfo {
     /// BT.2020 primaries (needs gamut mapping to the display's BT.709).
     pub wide_gamut: bool,
 }
+
+/// The buffer of a [`PixelLayout::Q10c`] frame.
+pub struct Q10cPicture<'a> {
+    /// The whole buffer: Y metadata, Y, UV metadata, UV.
+    pub data: &'a [u8],
+    /// Bytes per row of both planes.
+    pub stride: u32,
+    /// Luma rows the buffer is laid out for (the frame height or more).
+    pub rows: u32,
+    /// Where the UV plane (its metadata first) starts.
+    pub uv_offset: usize,
+}
+
+/// `AVFrame::format` of [`PixelLayout::Q10c`] frames. FFmpeg has no such
+/// format, so this is its fourcc, far outside FFmpeg's own values.
+pub(crate) const PIX_FMT_Q10C: ff::AVPixelFormat = 0x4330_3151;
 
 /// One plane of a frame.
 pub struct Plane<'a> {
@@ -107,7 +128,7 @@ impl VideoFrame {
         let (n, chroma_components) = match self.layout {
             PixelLayout::I420 { .. } => (3, 1),
             PixelLayout::Nv12 | PixelLayout::P010 => (2, 2),
-            PixelLayout::DrmPrime => return Vec::new(),
+            PixelLayout::DrmPrime | PixelLayout::Q10c => return Vec::new(),
         };
         let bps = self.layout.bytes_per_sample();
         // SAFETY: frame is a valid decoded frame of this layout; plane sizes
@@ -277,6 +298,32 @@ impl VideoFrame {
         unsafe { ((*self.frame).data[0] as *const ff::AVDRMFrameDescriptor).as_ref() }
     }
 
+    /// The decoder's buffer, when the layout is Q10c. Such frames keep the
+    /// whole buffer in `data[0]`, the UV plane's start in `data[1]`, the
+    /// stride in `linesize[0]` and the buffer's luma rows in `linesize[2]`.
+    pub fn q10c(&self) -> Option<Q10cPicture<'_>> {
+        if self.layout != PixelLayout::Q10c {
+            return None;
+        }
+        // SAFETY: Q10c frames are built by `set_q10c`: buf[0] holds the
+        // whole picture starting at data[0], and data[1] lies inside it.
+        unsafe {
+            let f = &*self.frame;
+            if f.buf[0].is_null() || f.data[0].is_null() || f.data[1].is_null() {
+                return None;
+            }
+            let len = (*f.buf[0]).size;
+            let uv_offset = f.data[1].offset_from(f.data[0]);
+            let data = std::slice::from_raw_parts(f.data[0], len);
+            (uv_offset > 0 && (uv_offset as usize) < len).then_some(Q10cPicture {
+                data,
+                stride: f.linesize[0] as u32,
+                rows: f.linesize[2] as u32,
+                uv_offset: uv_offset as usize,
+            })
+        }
+    }
+
     /// Copies the frame into tightly packed planes (for tests and thumbnails).
     pub fn packed_planes(&self) -> Vec<Vec<u8>> {
         self.planes()
@@ -291,6 +338,34 @@ impl VideoFrame {
             })
             .collect()
     }
+}
+
+/// Makes `f` a Q10c frame holding the picture in `buf`, laid out as
+/// [`VideoFrame::q10c`] reads it back.
+///
+/// # Safety
+/// `f` is an unreferenced frame and takes over the reference `buf`, which
+/// holds the whole picture; `uv_offset` lies inside it.
+pub(crate) unsafe fn set_q10c(
+    f: &mut ff::AVFrame,
+    buf: *mut ff::AVBufferRef,
+    stride: u32,
+    rows: u32,
+    uv_offset: usize,
+    size: (u32, u32),
+) {
+    // SAFETY: buf is a valid reference with uv_offset inside it (caller).
+    unsafe {
+        f.buf[0] = buf;
+        f.data[0] = (*buf).data;
+        f.data[1] = (*buf).data.add(uv_offset);
+    }
+    f.linesize[0] = stride as i32;
+    f.linesize[1] = stride as i32;
+    f.linesize[2] = rows as i32;
+    f.format = PIX_FMT_Q10C;
+    f.width = size.0 as i32;
+    f.height = size.1 as i32;
 }
 
 fn color_info(f: &ff::AVFrame) -> ColorInfo {
@@ -394,6 +469,7 @@ impl FrameConverter {
             ff::AV_PIX_FMT_YUV420P10LE => Some(PixelLayout::I420 { bits: 10 }),
             ff::AV_PIX_FMT_NV12 => Some(PixelLayout::Nv12),
             ff::AV_PIX_FMT_P010LE => Some(PixelLayout::P010),
+            PIX_FMT_Q10C => Some(PixelLayout::Q10c),
             _ => None,
         };
         let color = color_info(f);

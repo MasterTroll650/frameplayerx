@@ -96,7 +96,11 @@ protocol is implemented in Rust and looks like a file to FFmpeg. H.264 and
 HEVC go to the Frame's V4L2 stateful decoder; anything it can't take is
 decoded in software. Frames are uploaded to Vulkan as YUV and converted in
 the shader, which maps each pixel of each eye onto the video for the chosen
-projection and stereo layout. HDR is tone mapped there too.
+projection and stereo layout. HDR is tone mapped there too. 10-bit HEVC
+comes out of the decoder as Q10C (Qualcomm's compressed TP10), which only
+the GPU can read: `fp-render/src/q10c.rs` reads it through TP10 texture
+descriptors made from Turnip's own (`VK_EXT_descriptor_buffer`) and turns
+it into P010 planes in a compute pass.
 
 **Sources and browsing.** Every source implements one `Source` trait
 (`list`, `open`, `details`). Each kind gets its own browser in `ui/`:
@@ -260,8 +264,12 @@ What the code relies on about the platform:
 - SteamVR's per-app video settings override what an app asks for through
   OpenXR, which is why the launcher sets the refresh rate and resolution
   there.
-- The hardware decoder is a V4L2 stateful decoder for 8-bit 4:2:0 H.264
-  and HEVC. It's shared with Steam's own streaming, so it can be busy.
+- The hardware decoder is a V4L2 stateful decoder for 4:2:0 H.264 (8-bit)
+  and HEVC (8- and 10-bit). It's shared with Steam's own streaming, so it
+  can be busy. It writes 10-bit pictures correctly only as Q10C: asked for
+  NV12, it clamps the samples to 8 bits.
+- Turnip has no TP10 images, though the GPU reads TP10. A TP10 texture
+  reads wrongly past 2^24 samples, so 10-bit planes are read in bands.
 - SteamOS only mounts ext4 microSD cards itself, and no USB drives;
   FramePlayerX mounts exFAT, FAT32 and NTFS itself under
   `/run/media/steamos/<name>`.

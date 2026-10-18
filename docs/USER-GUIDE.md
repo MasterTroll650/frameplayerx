@@ -7,7 +7,7 @@ or your network.
 - [Install](#install), [updating](#updating) and [uninstall](#uninstall)
 - [Where your videos can be](#where-your-videos-can-be): browsing,
   PIN locks, microSD cards and USB drives
-- [Video formats](#video-formats), and [videos that stutter](#videos-that-stutter-10-bit-hevc-and-av1)
+- [Video formats](#video-formats), and [videos that stutter](#videos-that-stutter-av1-and-422)
 - [Controls](#controls)
 - [Passthrough videos](#passthrough-videos)
 - [Haptics](#haptics)
@@ -326,19 +326,19 @@ font for it (the Noto fonts cover every language) into
 `~/.local/share/fonts` and restart FramePlayerX; frameplayerx.log names
 the characters it had no font for.
 
-### Videos that stutter: 10-bit HEVC and AV1
+### Videos that stutter: AV1 and 4:2:2
 
-The Frame's hardware decoder plays 8-bit 4:2:0 H.264 and HEVC (H.265), up
-to 8K. 10-bit HEVC, 4:2:2 or 4:4:4 colour and AV1 have no hardware path on
-the Frame, so they decode on the CPU, which can't keep up with VR
-resolutions: they stutter or stop to buffer, and the control bar says why
-("No hardware decoding for 10-bit HEVC", "… for 4:2:2 HEVC"). Convert them
-to 8-bit 4:2:0 HEVC once on a PC and they play smoothly.
+The Frame's hardware decoder plays 4:2:0 HEVC (H.265, 8- and 10-bit) and
+H.264 (8-bit), up to 8K. AV1, 4:2:2 or 4:4:4 colour and 10-bit H.264 have
+no hardware path on the Frame, so they decode on the CPU, which can't keep
+up with VR resolutions: they stutter or stop to buffer, and the control bar
+says why ("No hardware decoding for AV1", "… for 4:2:2 HEVC"). Convert them
+to 4:2:0 HEVC once on a PC and they play smoothly.
 
 "Hardware decoder busy" means the file is fine but the decoder had no room
-for it (Steam's own streaming uses it too). "The hardware decoder can't
-play this HEVC" means it tried and refused the file; frameplayerx.log says
-why.
+for it (Steam's own streaming uses it too, and a 10-bit 8192×4096 video
+only fits when nothing else is decoding). "The hardware decoder can't play
+this HEVC" means it tried and refused the file; frameplayerx.log says why.
 
 The pill next to the format on the control bar says which decoder plays
 the video: HW, or SW in amber, with the codec and bit depth. Hover it, or
@@ -346,9 +346,10 @@ open Adjust → Format → Video stream, to see why a video isn't decoded in
 hardware.
 
 To check a file: `ffprobe -v error -select_streams v:0 -show_entries
-stream=codec_name,profile,pix_fmt video.mp4` (`Main 10` / `yuv420p10le`
-is 10-bit, `yuv422p` is 4:2:2), or MediaInfo's *Bit depth* and *Chroma
-subsampling*. Windows' file properties don't tell these reliably.
+stream=codec_name,profile,pix_fmt video.mp4` (`yuv422p` or `yuv422p10le`
+is 4:2:2, `yuv420p10le` is 10-bit), or MediaInfo's *Format*, *Bit depth*
+and *Chroma subsampling*. Windows' file properties don't tell these
+reliably.
 
 With an NVIDIA graphics card (fast):
 

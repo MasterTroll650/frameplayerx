@@ -61,7 +61,8 @@ pub struct BenchReport {
 }
 
 /// FNV-1a over Y, then U, then V samples, so NV12 and I420 decodes of the
-/// same picture hash alike.
+/// same picture hash alike. Q10C frames hash their compressed buffer, which
+/// only matches other Q10C decodes.
 pub fn yuv_checksum(f: &VideoFrame) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut eat = |b: u8| {
@@ -77,6 +78,11 @@ pub fn yuv_checksum(f: &VideoFrame) -> u64 {
                 for pair in planes[1].chunks(2 * bps) {
                     pair[offset..offset + bps].iter().for_each(|&b| eat(b));
                 }
+            }
+        }
+        PixelLayout::Q10c => {
+            if let Some(q) = f.q10c() {
+                q.data.iter().for_each(|&b| eat(b));
             }
         }
         _ => planes.iter().flatten().for_each(|&b| eat(b)),
