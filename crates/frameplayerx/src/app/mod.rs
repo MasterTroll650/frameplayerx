@@ -18,8 +18,7 @@ use crate::ui::{
     self, Action, Browse, QuickConnect, Screen, SourcePage, SourceView, UiState, UpdateStatus, View,
 };
 use crate::world::{
-    Follow, Panel, Pointer, anchor_from_head, facing_screen, place, place_around,
-    turned_with_picture,
+    Panel, Pointer, anchor_from_head, follow, place, place_around, turned_with_picture,
 };
 use fp_core::PlaybackStatus;
 use fp_core::format::Projection;
@@ -124,7 +123,6 @@ pub struct App {
     jobs: Jobs<Job>,
     anchor: Option<Mat4>,
     reanchor: bool,
-    follow: Follow,
     ui_visible: bool,
     show_browser: bool,
     last_activity: Instant,
@@ -234,7 +232,6 @@ impl App {
             jobs: Jobs::new(),
             anchor: None,
             reanchor: true,
-            follow: Follow::default(),
             ui_visible: true,
             show_browser: true,
             last_activity: Instant::now(),

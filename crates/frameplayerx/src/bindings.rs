@@ -1,7 +1,8 @@
 //! Remappable controller bindings, saved in settings.json. Each hand's face
 //! buttons, Menu/View, bumper and thumbstick press run a [`ButtonAction`];
 //! its thumbstick and grip + thumbstick axes run an [`AxisAction`]. Pointing,
-//! the trigger, grip + trigger drags and paging/scrolling menus are fixed.
+//! the trigger, grip + trigger drags, paging/scrolling menus and stepping
+//! sliders are fixed.
 
 use serde::{Deserialize, Serialize};
 

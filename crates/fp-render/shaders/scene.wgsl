@@ -301,8 +301,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (kind == 0u) {
         uv = flat_uv(origin, world_dir);
     } else {
-        // In the room frame (turned with the viewer when recentred lying
-        // down): per-eye stereo corrections, then the picture's rotation.
+        // In the room frame the video was centred in, so per-eye stereo
+        // corrections stay the eyes' own; then the picture's rotation.
         let s = select(-0.5, 0.5, eye == 1u);
         var d = (params.anchor_inv * vec4<f32>(world_dir, 0.0)).xyz;
         d = rot_y(params.proj.w * s) * d;

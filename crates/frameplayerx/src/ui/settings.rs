@@ -149,6 +149,10 @@ fn controller(ui: &mut egui::Ui, v: &mut View) {
                 "Pointing at a menu",
                 "Thumbstick left / right pages it, up / down scrolls it",
             ),
+            (
+                "Pointing at a slider",
+                "Thumbstick left / right moves it one step",
+            ),
         ] {
             r.row(k, None, |ui| {
                 ui.label(RichText::new(d).color(theme::TEXT_2));
@@ -302,8 +306,8 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
         r.switch(
             "Screen follows you",
             Some(
-                "Flat videos and the menus move to where you settle, \
-                 such as after turning over in bed.",
+                "Flat videos and the menus stay in front of you as you \
+                 turn, lie back or roll onto your side.",
             ),
             &mut s.follow,
         );

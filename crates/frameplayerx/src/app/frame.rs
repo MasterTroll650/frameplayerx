@@ -34,7 +34,14 @@ impl App {
         buzz: &mut Vec<(usize, f32, i64)>,
     ) {
         use crate::controls::{GRIP, angles, wrap};
-        let anchor_rot = anchor.to_scale_rotation_translation().1;
+        // The adjust panel sits beside the control bar, turned with the
+        // picture; the library panel is placed in the room.
+        let room = anchor.to_scale_rotation_translation().1;
+        let beside_bar = self
+            .picture_anchor(anchor)
+            .to_scale_rotation_translation()
+            .1;
+        let frame_of = move |panel: usize| if panel == ADJUST { beside_bar } else { room };
         let grab = grab.and_then(|(panel, hand)| match panel {
             KEYBOARD => self.keyboard_target().map(|t| (t, hand)),
             MAIN | ADJUST => Some((panel, hand)),
@@ -51,7 +58,7 @@ impl App {
             self.panel_drag = Some(PanelDrag {
                 panel,
                 hand,
-                start: angles(rot, anchor_rot),
+                start: angles(rot, frame_of(panel)),
                 from: start,
             });
             buzz.push((hand, 0.3, 14));
@@ -68,7 +75,7 @@ impl App {
         let h = &hands[hand];
         if h.squeeze > GRIP * 0.6 {
             if let Some((_, rot)) = h.aim {
-                let (y, p) = angles(rot, anchor_rot);
+                let (y, p) = angles(rot, frame_of(panel));
                 let to = [wrap(oy + wrap(y - y0)), (op + p - p0).clamp(-45.0, 45.0)];
                 if panel == MAIN {
                     self.offsets.main = to;
@@ -131,12 +138,10 @@ impl App {
             if self.reanchor || self.anchor.is_none() {
                 self.anchor = Some(anchor_from_head(pos, rot));
                 self.reanchor = false;
-                self.follow = Follow::default();
             } else if let Some(anchor) = self.anchor
                 && self.follows()
             {
-                let facing = self.facing_ours(anchor, pos, rot * Vec3::NEG_Z);
-                self.anchor = Some(self.follow.step(anchor, (pos, rot), facing, input.dt));
+                self.anchor = Some(follow(anchor, (pos, rot), input.dt));
             }
         }
         let mut anchor = self.anchor.unwrap_or(Mat4::IDENTITY);
@@ -144,12 +149,13 @@ impl App {
         // filmed from one spot), so it moves along when you lean; panels
         // fixed in the room then seem to slide against it. During such a
         // video the panels keep to the head's position (not its turning),
-        // so they stay put relative to the picture.
+        // so they stay put relative to the picture. It stays level, even
+        // when following tilted the anchor.
         if let (Some((pos, _)), Some(p)) = (input.head, &self.playback)
             && p.format.projection != Projection::Flat
         {
             let (_, rot, _) = anchor.to_scale_rotation_translation();
-            anchor = Mat4::from_rotation_translation(rot, pos);
+            anchor = anchor_from_head(pos, rot);
         }
         anchor
     }
@@ -166,20 +172,17 @@ impl App {
                 .is_none_or(|p| p.format.projection == Projection::Flat)
     }
 
-    /// Whether the head, at `pos` looking along `dir`, faces a panel
-    /// showing or the flat screen.
-    fn facing_ours(&self, anchor: Mat4, pos: Vec3, dir: Vec3) -> bool {
-        if self
-            .panels
-            .iter()
-            .any(|p| p.visible && p.hit(pos, dir).is_some())
-        {
-            return true;
+    /// Where the control bar and the adjust panel beside it are placed
+    /// from: turned with a 180°/360° picture, so they go with it when it is
+    /// dragged or turned.
+    fn picture_anchor(&self, anchor: Mat4) -> Mat4 {
+        match &self.playback {
+            Some(p) if p.format.projection != Projection::Flat => {
+                let s = p.shown_settings(&self.settings.default_view);
+                turned_with_picture(anchor, s.yaw, s.pitch)
+            }
+            _ => anchor,
         }
-        self.playback.as_ref().is_some_and(|p| {
-            let s = p.shown_settings(&self.settings.default_view);
-            facing_screen(anchor, dir, s.screen_width * s.zoom, s.screen_distance)
-        })
     }
 
     /// The performance overlay while Settings › About turns it on: low and
@@ -284,27 +287,21 @@ impl App {
     /// (A flat screen doesn't turn, and the adjust panel stays put so its
     /// yaw/pitch sliders don't move away from the pointer.)
     fn place_panels(&mut self, anchor: Mat4, kb_target: Option<usize>) {
-        let bar_anchor = match &self.playback {
-            Some(p) if p.format.projection != Projection::Flat => {
-                let s = p.shown_settings(&self.settings.default_view);
-                turned_with_picture(anchor, s.yaw, s.pitch)
-            }
-            _ => anchor,
-        };
+        let bar_anchor = self.picture_anchor(anchor);
         let [my, mp] = self.offsets.main;
         let [ay, ap] = self.offsets.adjust;
         self.panels[MAIN].pose = place_around(anchor, my, mp, 1.5, -0.08);
         self.panels[BAR].pose = place(bar_anchor, 0.0, 1.05, -0.42, 28.0);
         // To the right, clear of the control bar's end.
-        self.panels[ADJUST].pose = place_around(anchor, -48.0 + ay, ap, 1.15, -0.08);
+        self.panels[ADJUST].pose = place_around(bar_anchor, -48.0 + ay, ap, 1.15, -0.08);
         // The keyboard sits below the panel it types into, turned with it, so
         // it is where that panel was moved to.
-        let [ky, kp] = match kb_target {
-            Some(ADJUST) => [-48.0 + ay, ap],
-            Some(_) => [my, mp],
-            None => [0.0, 0.0],
+        let (kb_from, [ky, kp]) = match kb_target {
+            Some(ADJUST) => (bar_anchor, [-48.0 + ay, ap]),
+            Some(_) => (anchor, [my, mp]),
+            None => (anchor, [0.0, 0.0]),
         };
-        let kb_anchor = place_around(anchor, ky, kp, 0.0, 0.0);
+        let kb_anchor = place_around(kb_from, ky, kp, 0.0, 0.0);
         self.panels[KEYBOARD].pose = place(kb_anchor, 0.0, 0.95, -0.55, 35.0);
     }
 

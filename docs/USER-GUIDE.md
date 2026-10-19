@@ -422,25 +422,22 @@ picture. Play/pause and seeking are under either thumb.
 Both grips together also recenter. Point at the library or adjust panel (or
 the keyboard under it) and hold grip to move it; it stays where you leave
 it. Recentering brings them back in front of you, at the height you left
-them. The format on the control bar (for example 180° SBS) opens the adjust
-panel's Format tab.
+them. When you drag a 180° or 360° picture, the control bar and the adjust
+panel beside it move with it. The format on the control bar (for example
+180° SBS) opens the adjust panel's Format tab.
 
 ### Watching lying down
 
-Recenter once you're lying down, on your back or on your side: the picture
-moves to where you're looking and turns with your head, so a 3D video stays
-lined up with your eyes. Sitting or standing, recentering keeps it level.
-
-With **Screen follows you** on (the bed button on the control bar, or
-Settings › Playback), a flat video and the menus move by themselves. When you settle facing somewhere else, such as
-after turning over in bed, they glide over after a second or two. Looking
-around the screen leaves it where it is, and 180° and 360° videos stay put.
+Turn on **Screen follows you** (the bed button on the control bar, or
+Settings › Playback). A flat video and the menus then follow your head and
+stay in front of you as you turn, lie back or roll onto your side. 180° and
+360° videos don't follow, since you look around those.
 
 Every button and thumbstick direction above can be changed in Settings ›
 Controller (tap a row, pick an action; Reset to defaults puts this layout
 back). For example, to zoom with the right thumbstick, set the right controller's
 thumbstick **↑↓ Up / down** (or **Grip + ↑↓**) to Zoom. The trigger,
-grip + trigger drags, both grips and menu paging are fixed.
+grip + trigger drags, both grips, menu paging and slider steps are fixed.
 
 Drags, turns, tilts and zoom count as adjustments: save them for that video
 under ⚙, or press the left thumbstick to undo them.

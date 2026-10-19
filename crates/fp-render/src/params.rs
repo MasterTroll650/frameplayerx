@@ -49,7 +49,7 @@ pub struct VideoParams {
     pub background: [f32; 4],
     /// The room frame the video was centred in (recentering's anchor): a
     /// 180°/360° picture, its per-eye corrections and the viewer's height
-    /// and forward turn with it. Level unless recentred lying down.
+    /// and forward turn with it.
     pub anchor: Quat,
 }
 

@@ -83,8 +83,7 @@ pub struct Settings {
     pub check_updates: bool,
     /// UI text size multiplier.
     pub ui_scale: f32,
-    /// Flat videos and the panels glide to where the viewer settles
-    /// ([`crate::world::Follow`]).
+    /// Flat videos and the panels follow the head ([`crate::world::follow`]).
     pub follow: bool,
     /// The performance overlay (Settings › About › Diagnostics).
     pub perf_overlay: bool,
