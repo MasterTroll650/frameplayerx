@@ -290,6 +290,18 @@ pub fn anchor_from_head(position: Vec3, orientation: Quat) -> Mat4 {
     Mat4::from_rotation_translation(Quat::from_rotation_y(yaw), position)
 }
 
+/// The anchor a recenter sets: at the head position, facing where it looks,
+/// up or down too, but never rolled.
+pub fn anchor_facing(position: Vec3, orientation: Quat) -> Mat4 {
+    let d = orientation * Vec3::NEG_Z;
+    let yaw = (-d.x).atan2(-d.z);
+    let pitch = d.y.clamp(-1.0, 1.0).asin();
+    Mat4::from_rotation_translation(
+        Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch),
+        position,
+    )
+}
+
 /// How closely a followed anchor trails the head: the gap halves every this
 /// many seconds.
 const FOLLOW_HALF_LIFE_S: f32 = 0.1;
@@ -773,6 +785,28 @@ mod tests {
             assert!((size.x * ppp - 1000.0).abs() < 0.5, "{scale}: {size:?}");
             assert!((size.y * ppp - 600.0).abs() < 0.5, "{scale}: {size:?}");
         }
+    }
+
+    #[test]
+    fn recentering_faces_where_you_look_without_rolling() {
+        let head = Vec3::new(0.2, 1.1, -0.3);
+        // Turned 30° left, looking 40° up, head tilted on its side.
+        let look = Quat::from_euler(
+            glam::EulerRot::YXZ,
+            30f32.to_radians(),
+            40f32.to_radians(),
+            0.0,
+        );
+        let rolled = look * Quat::from_rotation_z(70f32.to_radians());
+        let a = anchor_facing(head, rolled);
+        let ahead = a.transform_vector3(Vec3::NEG_Z);
+        assert!((ahead - look * Vec3::NEG_Z).length() < 1e-5, "{ahead}");
+        assert!(a.transform_vector3(Vec3::X).y.abs() < 1e-5, "no roll");
+        assert_eq!(a.w_axis.truncate(), head);
+        // A panel placed from it sits where you look, facing you.
+        let m = place(a, 0.0, 2.0, 0.0, 0.0);
+        let centre = m.transform_point3(Vec3::ZERO);
+        assert!(((centre - head).normalize() - look * Vec3::NEG_Z).length() < 1e-5);
     }
 
     #[test]

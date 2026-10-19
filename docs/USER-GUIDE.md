@@ -417,22 +417,30 @@ picture. Play/pause and seeking are under either thumb.
 | Menu / View | Library | Recenter |
 | Bumper | Forward 1 minute | Back 1 minute |
 | Grip + thumbstick | Up / down raises or lowers you | Left / right turns the picture, up / down zooms in / out |
-| Hold grip + trigger, move | Drag the picture (the dome follows your hand) | The same |
+| Hold grip + trigger, move | Drag the picture (a flat screen or the dome follows your hand) | The same |
 | Trigger | Click; on empty space, show or hide the controls | The same |
 
-Both grips together also recenter. Point at the library or adjust panel (or
-the keyboard under it) and hold grip to move it; it stays where you leave
-it. Recentering brings them back in front of you, at the height you left
-them. When you drag a 180° or 360° picture, the control bar and the adjust
-panel beside it move with it. The format on the control bar (for example
-180° SBS) opens the adjust panel's Format tab.
+To recenter, hold the Steam button, as in any game (both grips together, or
+the left Menu button, do it too). The picture and the panels come to where
+you are looking, up or down included. The library panel and a flat screen
+come back in front of you (a 180° or 360° picture keeps its turn), and the
+adjust panel stays beside the control bar.
+
+The picture, the control bar and the adjust panel beside it move as one
+player: drag the picture, or hold grip on the control bar and move it, and
+they all go together. Point at the library or adjust panel (or the keyboard
+under it) and hold grip to move it; it stays where you leave it, the adjust
+panel in its place beside the control bar. The format on the control bar
+(for example 180° SBS) opens the adjust panel's Format tab.
 
 ### Watching lying down
 
-Turn on **Screen follows you** (the bed button on the control bar, or
-Settings › Playback). A flat video and the menus then follow your head and
-stay in front of you as you turn, lie back or roll onto your side. 180° and
-360° videos don't follow, since you look around those.
+Lie back, look where you want the picture, and hold the Steam button to
+recenter: it comes up to where you look. Or turn on **Screen follows you**
+(the bed button on the control bar, or Settings › Playback): a flat video
+and the menus then follow your head and stay in front of you as you turn,
+lie back or roll onto your side. 180° and 360° videos don't follow, since
+you look around those.
 
 Every button and thumbstick direction above can be changed in Settings ›
 Controller (tap a row, pick an action; Reset to defaults puts this layout

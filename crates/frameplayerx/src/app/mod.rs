@@ -18,7 +18,8 @@ use crate::ui::{
     self, Action, Browse, QuickConnect, Screen, SourcePage, SourceView, UiState, UpdateStatus, View,
 };
 use crate::world::{
-    Panel, Pointer, anchor_from_head, follow, place, place_around, turned_with_picture,
+    Panel, Pointer, anchor_facing, anchor_from_head, follow, place, place_around,
+    turned_with_picture,
 };
 use fp_core::PlaybackStatus;
 use fp_core::format::Projection;
@@ -47,6 +48,8 @@ pub struct FrameInput {
     /// refresh rate (OpenXR), for the performance overlay.
     pub frame_ms: Option<f32>,
     pub display_hz: Option<f32>,
+    /// The system recentered (the Steam button held) since the last frame.
+    pub recentred: bool,
 }
 
 /// A panel or pointer ray for the compositor to draw as its own quad layer,

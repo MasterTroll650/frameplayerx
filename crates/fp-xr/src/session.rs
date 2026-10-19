@@ -70,6 +70,9 @@ pub struct XrSession {
     running: bool,
     pub blend_mode: xr::EnvironmentBlendMode,
     event_buf: xr::EventDataBuffer,
+    /// When the system's recenter (holding the Steam button) moves the
+    /// LOCAL space; see [`XrSession::recentred_by`].
+    recenter_at: Option<xr::Time>,
     /// Offset of our play space within the runtime's LOCAL space.
     space_origin: (Vec3, Quat),
     quads: std::collections::HashMap<u64, QuadLayer>,
@@ -179,6 +182,7 @@ impl XrSession {
             running: false,
             blend_mode,
             event_buf: xr::EventDataBuffer::new(),
+            recenter_at: None,
             space_origin: (Vec3::ZERO, Quat::IDENTITY),
             quads: std::collections::HashMap::new(),
         })
@@ -247,6 +251,12 @@ impl XrSession {
                         _ => {}
                     }
                 }
+                xr::Event::ReferenceSpaceChangePending(e)
+                    if e.reference_space_type() == xr::ReferenceSpaceType::LOCAL =>
+                {
+                    log::info!("system recenter");
+                    self.recenter_at = Some(e.change_time());
+                }
                 xr::Event::InstanceLossPending(_) => return Ok(SessionEvent::Exit),
                 _ => {}
             }
@@ -255,6 +265,19 @@ impl XrSession {
             result = SessionEvent::Running;
         }
         Ok(result)
+    }
+
+    /// Whether the system recentered and the moved LOCAL space is in use by
+    /// `time` (a frame's predicted display time); true once per recenter.
+    /// The space stays level, so it only turns to where the head faces.
+    pub fn recentred_by(&mut self, time: xr::Time) -> bool {
+        match self.recenter_at {
+            Some(at) if time.as_nanos() >= at.as_nanos() => {
+                self.recenter_at = None;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Waits for the next frame, locates the views and acquires swapchain

@@ -457,6 +457,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
             SessionEvent::Running => {}
         }
         let frame = session.begin_frame()?;
+        let recentred = session.recentred_by(frame.state.predicted_display_time);
         let work = Instant::now();
         let input = session.input(frame.state.predicted_display_time);
         let dt = last.elapsed().as_secs_f32().min(0.1);
@@ -475,6 +476,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
                 display_hz: Some(frame.state.predicted_display_period.as_nanos())
                     .filter(|&ns| ns > 0)
                     .map(|ns| 1e9 / ns as f32),
+                recentred,
             },
         );
         frames += 1;

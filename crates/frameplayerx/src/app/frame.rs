@@ -4,15 +4,25 @@
 use super::*;
 
 impl App {
-    /// Forward becomes where the head faces, and the library and adjust
-    /// panels come back in front: moved round to the side or behind, they
-    /// stayed there after recentering. How high they were moved is kept.
+    /// Forward becomes where the head faces, and the library panel comes
+    /// back in front: moved round to the side or behind, it stayed there
+    /// after recentering. How high it was moved is kept. A flat screen comes
+    /// back in front too (its yaw and pitch only place it; a 180°/360°
+    /// picture keeps its turn). The adjust panel keeps its place beside the
+    /// player.
     pub(super) fn recenter(&mut self) {
         self.reanchor = true;
         self.panel_drag = None;
         self.offsets.main[0] = 0.0;
-        self.offsets.adjust[0] = 0.0;
         self.settings.panel_offsets = self.offsets;
+        if let Some(p) = &mut self.playback
+            && p.format.projection == Projection::Flat
+            && (p.settings.yaw, p.settings.pitch) != (0.0, 0.0)
+        {
+            p.settings.yaw = 0.0;
+            p.settings.pitch = 0.0;
+            p.settings_dirty = true;
+        }
     }
 
     /// The panel the keyboard types into: the library or adjust panel with
@@ -24,8 +34,11 @@ impl App {
     }
 
     /// Squeezing a grip on the library or adjust panel moves it round the
-    /// viewer with that hand; where it is let go is saved. Squeezing one on
-    /// the keyboard moves the panel it types into, and the keyboard with it.
+    /// viewer with that hand; where it is let go is saved (the adjust
+    /// panel's relative to the player). Squeezing one on the keyboard moves
+    /// the panel it types into, and the keyboard with it. Squeezing one on
+    /// the control bar drags the player: the picture, and with it a flat
+    /// screen, the bar and the adjust panel.
     pub(super) fn move_panels(
         &mut self,
         grab: Option<(usize, usize)>,
@@ -45,15 +58,19 @@ impl App {
         let grab = grab.and_then(|(panel, hand)| match panel {
             KEYBOARD => self.keyboard_target().map(|t| (t, hand)),
             MAIN | ADJUST => Some((panel, hand)),
+            BAR if self.playback.is_some() => Some((panel, hand)),
             _ => None,
         });
         if let Some((panel, hand)) = grab
             && let Some((_, rot)) = hands[hand].aim
         {
-            let start = if panel == MAIN {
-                self.offsets.main
-            } else {
-                self.offsets.adjust
+            let start = match panel {
+                MAIN => self.offsets.main,
+                ADJUST => self.offsets.adjust,
+                _ => self
+                    .playback
+                    .as_ref()
+                    .map_or([0.0; 2], |p| [p.settings.yaw, p.settings.pitch]),
             };
             self.panel_drag = Some(PanelDrag {
                 panel,
@@ -76,11 +93,17 @@ impl App {
         if h.squeeze > GRIP * 0.6 {
             if let Some((_, rot)) = h.aim {
                 let (y, p) = angles(rot, frame_of(panel));
-                let to = [wrap(oy + wrap(y - y0)), (op + p - p0).clamp(-45.0, 45.0)];
-                if panel == MAIN {
-                    self.offsets.main = to;
-                } else {
-                    self.offsets.adjust = to;
+                let yaw = wrap(oy + wrap(y - y0));
+                match panel {
+                    MAIN => self.offsets.main = [yaw, (op + p - p0).clamp(-45.0, 45.0)],
+                    ADJUST => self.offsets.adjust = [yaw, (op + p - p0).clamp(-45.0, 45.0)],
+                    _ => {
+                        if let Some(pb) = &mut self.playback {
+                            pb.settings.yaw = yaw;
+                            pb.settings.pitch = (op + p - p0).clamp(-90.0, 90.0);
+                            pb.settings_dirty = true;
+                        }
+                    }
                 }
                 self.last_activity = Instant::now();
             }
@@ -92,6 +115,9 @@ impl App {
 
     pub fn frame(&mut self, renderer: &mut Renderer, input: FrameInput) -> FrameOutput {
         self.update();
+        if input.recentred {
+            self.recenter();
+        }
         let anchor = self.anchor(&input);
         let eye = input.head.map(|h| h.0).unwrap_or(anchor.w_axis.truncate());
         self.update_visibility();
@@ -136,7 +162,11 @@ impl App {
     fn anchor(&mut self, input: &FrameInput) -> Mat4 {
         if let Some((pos, rot)) = input.head {
             if self.reanchor || self.anchor.is_none() {
-                self.anchor = Some(anchor_from_head(pos, rot));
+                // Level at start; a recenter faces where you look.
+                self.anchor = Some(match self.anchor {
+                    Some(_) => anchor_facing(pos, rot),
+                    None => anchor_from_head(pos, rot),
+                });
                 self.reanchor = false;
             } else if let Some(anchor) = self.anchor
                 && self.follows()
@@ -149,13 +179,13 @@ impl App {
         // filmed from one spot), so it moves along when you lean; panels
         // fixed in the room then seem to slide against it. During such a
         // video the panels keep to the head's position (not its turning),
-        // so they stay put relative to the picture. It stays level, even
-        // when following tilted the anchor.
+        // so they stay put relative to the picture. It never rolls, even
+        // when following turned the anchor on its side.
         if let (Some((pos, _)), Some(p)) = (input.head, &self.playback)
             && p.format.projection != Projection::Flat
         {
             let (_, rot, _) = anchor.to_scale_rotation_translation();
-            anchor = anchor_from_head(pos, rot);
+            anchor = anchor_facing(pos, rot);
         }
         anchor
     }
@@ -172,16 +202,17 @@ impl App {
                 .is_none_or(|p| p.format.projection == Projection::Flat)
     }
 
-    /// Where the control bar and the adjust panel beside it are placed
-    /// from: turned with a 180°/360° picture, so they go with it when it is
-    /// dragged or turned.
+    /// The player: what the picture's yaw and pitch turn (by dragging it,
+    /// or the Position sliders). A flat screen, the control bar, the adjust
+    /// panel beside it and the subtitles are placed from it, so they move
+    /// together; a 180°/360° picture turns the same way.
     fn picture_anchor(&self, anchor: Mat4) -> Mat4 {
         match &self.playback {
-            Some(p) if p.format.projection != Projection::Flat => {
+            Some(p) => {
                 let s = p.shown_settings(&self.settings.default_view);
                 turned_with_picture(anchor, s.yaw, s.pitch)
             }
-            _ => anchor,
+            None => anchor,
         }
     }
 
@@ -282,9 +313,9 @@ impl App {
         self.panels[ADJUST].visible = self.panels[BAR].visible && self.ui.adjust_open;
     }
 
-    /// Where each panel goes. During 180°/360° video the control bar, and
-    /// the adjust panel beside it, turn with the picture's yaw and pitch, so
-    /// they stay below what you watch. (A flat screen doesn't turn.)
+    /// Where each panel goes: the control bar, and the adjust panel at its
+    /// own place beside it, go with the player (see `picture_anchor`), so
+    /// they stay below what you watch.
     fn place_panels(&mut self, anchor: Mat4, kb_target: Option<usize>) {
         let bar_anchor = self.picture_anchor(anchor);
         // The adjust panel holds still while the trigger is held on it: its
@@ -439,18 +470,19 @@ impl App {
             video.background = [0.0; 4];
         }
         let anchor_rot = anchor.to_scale_rotation_translation().1;
+        let player = self.picture_anchor(anchor);
         if let Some(p) = &self.playback {
             frame = p.player.current_frame();
             let s = p.shown_settings(&self.settings.default_view);
             video.format = p.format;
-            video.screen_pose = place(anchor, 0.0, s.screen_distance, 0.0, 0.0);
+            video.screen_pose = place(player, 0.0, s.screen_distance, 0.0, 0.0);
             video.anchor = anchor_rot;
             video.settings = s;
             if let Some((_, rot)) = input.head {
                 let rel = anchor_rot.inverse() * rot;
                 p.player.set_head_orientation(rel.to_array());
             }
-            self.subtitles(renderer, input.time, anchor, &s);
+            self.subtitles(renderer, input.time, player, &s);
         } else {
             self.subs.visible = false;
         }

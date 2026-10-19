@@ -30,7 +30,6 @@ pub const CLOCK: &str = "\u{E19A}";
 pub const CLOSED_CAPTIONING: &str = "\u{E1A4}";
 pub const CLOUD: &str = "\u{E1AA}";
 pub const CLOUD_ARROW_DOWN: &str = "\u{E1AC}";
-pub const CROSSHAIR: &str = "\u{E1D6}";
 pub const CUBE: &str = "\u{E1DA}";
 pub const DATABASE: &str = "\u{E1DE}";
 pub const DEVICE_MOBILE: &str = "\u{E1E0}";

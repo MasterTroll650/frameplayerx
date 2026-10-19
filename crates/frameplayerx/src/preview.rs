@@ -84,6 +84,7 @@ impl Sim {
                 layers: false,
                 frame_ms: None,
                 display_hz: None,
+                recentred: false,
             },
         );
         if let Err(e) = self.renderer.set_video(out.frame.as_ref()) {

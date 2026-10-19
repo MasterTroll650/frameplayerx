@@ -286,7 +286,7 @@ fn transport(
     }
 }
 
-/// Close, hide, room, recenter, follow, bookmark and adjust.
+/// Close, hide, room, follow, bookmark and adjust.
 fn view_keys(
     ui: &mut egui::Ui,
     pb: &crate::playback::Playback,
@@ -325,12 +325,6 @@ fn view_keys(
         {
             actions.push(Action::SetFormat(Some(f)));
         }
-    }
-    if widgets::key(ui, icons::CROSSHAIR, 52.0, false)
-        .tip("Recenter")
-        .clicked()
-    {
-        actions.push(Action::Recenter);
     }
     // Only a flat screen follows: around 180°/360° video you look about.
     if pb.format.projection == Projection::Flat

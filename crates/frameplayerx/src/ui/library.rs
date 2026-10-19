@@ -218,7 +218,7 @@ fn nav(ui: &mut egui::Ui, v: &mut View) {
                     + 64.0
             })
             .sum();
-        let right = if v.playback.is_some() { 330.0 } else { 180.0 };
+        let right = if v.playback.is_some() { 270.0 } else { 120.0 };
         let labelled = ui.available_width() >= labels + right;
         for (s, icon, label) in tabs {
             let selected = v.state.screen == s && v.state.details.is_none();
@@ -256,12 +256,6 @@ fn nav(ui: &mut egui::Ui, v: &mut View) {
                     .clicked()
             {
                 v.actions.push(Action::TogglePassthrough);
-            }
-            if widgets::icon_button(ui, icons::CROSSHAIR, 48.0, false)
-                .tip("Recenter")
-                .clicked()
-            {
-                v.actions.push(Action::Recenter);
             }
             if let Some(s) = &v.state.worker_status {
                 ui.label(
