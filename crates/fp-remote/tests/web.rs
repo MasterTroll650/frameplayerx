@@ -315,6 +315,57 @@ fn live_status_stream() {
     assert!(wait_for(Duration::from_secs(8), || hub.web_client_count() == 0));
 }
 
+/// Opens `/api/events` and reads past the response head.
+fn open_stream(addr: SocketAddr, token: &str) -> (TcpStream, Vec<u8>) {
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    write!(
+        s,
+        "GET /api/events?token={token} HTTP/1.1\r\nHost: x\r\n\r\n"
+    )
+    .unwrap();
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+        let n = s.read(&mut chunk).unwrap();
+        assert!(n > 0);
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let split = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    buf.drain(..split + 4);
+    (s, buf)
+}
+
+#[test]
+fn closing_the_video_reaches_live_streams() {
+    let (hub, addr, token) = started();
+    let (mut s, mut buf) = open_stream(addr, &token);
+    hub.publish(&playing("/media/live.mp4", 3.0));
+    next_data(&mut s, &mut buf, |v| v["location"] == "/media/live.mp4");
+    hub.publish(&fp_core::PlaybackStatus::default());
+    next_data(&mut s, &mut buf, |v| {
+        v["location"] == "" && v["playing"] == false
+    });
+}
+
+#[test]
+fn unpairing_ends_live_streams() {
+    let (hub, addr, token) = started();
+    let (mut s, mut buf) = open_stream(addr, &token);
+    next_data(&mut s, &mut buf, |v| v["location"] == "");
+    hub.regenerate_token().unwrap();
+    hub.publish(&playing("/media/private.mp4", 3.0));
+    // The stream ends without telling the old phone what plays now.
+    let mut rest = Vec::new();
+    let _ = s.read_to_end(&mut rest);
+    buf.extend_from_slice(&rest);
+    assert!(
+        !String::from_utf8_lossy(&buf).contains("private"),
+        "{}",
+        String::from_utf8_lossy(&buf)
+    );
+}
+
 #[test]
 fn event_streams_are_capped() {
     let hub = RemoteHub::new(fp_remote::RemoteConfig {

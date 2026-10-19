@@ -113,12 +113,55 @@ impl Opener {
         self.open_in(None, location)
     }
 
+    /// A small file (a script) whole, through the source it came from when
+    /// that can open it (an SMB share, a server that wants a login), else
+    /// as [`Self::fetch`].
+    pub fn fetch_in(
+        &self,
+        source_id: Option<&str>,
+        location: &str,
+        limit: u64,
+    ) -> Result<Vec<u8>, String> {
+        if let Some(src) = source_id.and_then(|id| self.source(id))
+            && !location.starts_with('/')
+        {
+            let read = src
+                .open(location)
+                .map_err(|e| e.to_string())
+                .and_then(|f| read_whole(&*f, limit));
+            match read {
+                Ok(bytes) => return Ok(bytes),
+                Err(e) if !fp_sources::urlutil::is_http_url(location) => return Err(e),
+                Err(e) => log::debug!("{location} through its source: {e}"),
+            }
+        }
+        self.fetch(location, limit)
+    }
+
     /// Small downloads (thumbnails, scripts) from any http(s) URL.
     pub fn fetch(&self, url: &str, limit: u64) -> Result<Vec<u8>, String> {
         if url.starts_with('/') {
             return std::fs::read(url).map_err(|e| e.to_string());
         }
         self.http.get_bytes(url, limit).map_err(|e| e.to_string())
+    }
+}
+
+/// All of `f`, refused past `limit` bytes.
+fn read_whole(f: &dyn ByteSource, limit: u64) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut chunk = vec![0u8; 64 << 10];
+    loop {
+        let n = f
+            .read_at(out.len() as u64, &mut chunk)
+            .map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Ok(out);
+        }
+        out.extend_from_slice(&chunk[..n]);
+        if out.len() as u64 > limit {
+            return Err(format!("larger than {} MB", limit >> 20));
+        }
     }
 }
 
@@ -516,5 +559,36 @@ mod tests {
         std::fs::write(&path, "not an id!\n").unwrap();
         assert_ne!(device_id(&path), "not an id!");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file of `len` bytes that hands out at most 1000 bytes a read, as
+    /// network sources may.
+    struct Dribble(usize);
+
+    impl ByteSource for Dribble {
+        fn size(&self) -> Option<u64> {
+            Some(self.0 as u64)
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = buf
+                .len()
+                .min(1000)
+                .min(self.0.saturating_sub(offset as usize));
+            buf[..n].fill(7);
+            Ok(n)
+        }
+        fn describe(&self) -> String {
+            "dribble".into()
+        }
+    }
+
+    #[test]
+    fn small_files_are_read_whole_within_a_limit() {
+        assert_eq!(
+            read_whole(&Dribble(150_000), 1 << 20).unwrap().len(),
+            150_000
+        );
+        assert_eq!(read_whole(&Dribble(0), 1 << 20).unwrap().len(), 0);
+        assert!(read_whole(&Dribble(3 << 20), 1 << 20).is_err());
     }
 }

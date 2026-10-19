@@ -149,6 +149,10 @@ fn controller(ui: &mut egui::Ui, v: &mut View) {
                 "Pointing at a menu",
                 "Thumbstick left / right pages it, up / down scrolls it",
             ),
+            (
+                "Pointing at a slider",
+                "Thumbstick left / right moves it one step",
+            ),
         ] {
             r.row(k, None, |ui| {
                 ui.label(RichText::new(d).color(theme::TEXT_2));
@@ -294,10 +298,18 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
             "Interface size",
             Some("Text and buttons on every panel."),
             &mut s.ui_scale,
-            0.8..=1.5,
+            crate::settings::UI_SCALES,
             1.0,
             "×",
             2,
+        );
+        r.switch(
+            "Screen follows you",
+            Some(
+                "Flat videos and the menus stay in front of you as you \
+                 turn, lie back or roll onto your side.",
+            ),
+            &mut s.follow,
         );
     });
 }
@@ -867,8 +879,8 @@ fn updates(ui: &mut egui::Ui, v: &mut View) {
                 &format!("Version {version} is installed"),
                 Some("Restart FramePlayerX to use it."),
                 |ui| {
-                    if widgets::button(ui, None, "Quit now", Kind::Primary).clicked() {
-                        v.actions.push(Action::Quit);
+                    if widgets::button(ui, None, "Restart now", Kind::Primary).clicked() {
+                        v.actions.push(Action::Restart);
                     }
                 },
             );
@@ -913,6 +925,17 @@ fn about(ui: &mut egui::Ui, v: &mut View) {
             &crate::settings::Settings::path().display().to_string(),
         );
         r.info("Log", &crate::logger::log_path().display().to_string());
+    });
+    heading(ui, "Diagnostics");
+    widgets::rows(ui, |r| {
+        r.switch(
+            "Performance overlay",
+            Some(
+                "Frame time, the video's frame rate and decoder, CPU, GPU and memory, \
+                 low in your view.",
+            ),
+            &mut v.settings.perf_overlay,
+        );
     });
     ui.add_space(6.0);
     note(

@@ -145,6 +145,36 @@ class OldVersions(unittest.TestCase):
             _, folders = fai.old_versions(self.app, dest, [(9, 'FramePlayerX', os.path.join(outside, 'frameplayerx.sh'))], home)
             self.assertEqual(folders, [])
 
+    def test_never_takes_a_shared_folder_for_a_copy(self):
+        with tempfile.TemporaryDirectory() as home:
+            # A launcher left loose in Downloads, and the install inside a
+            # folder that also holds one.
+            downloads = self.copy(os.path.join(home, 'Downloads'))
+            outer = self.copy(os.path.join(home, 'frameplayer-things'))
+            dest = os.path.join(outer, 'frameplayerx')
+            entries = [
+                (2, 'FramePlayerX', os.path.join(downloads, 'frameplayerx.sh')),
+                (3, 'FramePlayerX (old)', os.path.join(outer, 'frameplayerx.sh')),
+            ]
+            old, folders = fai.old_versions(self.app, dest, entries, home)
+            self.assertEqual(sorted(a for a, _, _ in old), [2, 3])  # the entries go
+            self.assertEqual(folders, [])  # the folders stay
+
+    def test_running_matches_the_binary_exactly(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as proc:
+            dest = os.path.realpath(self.copy(os.path.join(home, 'frameplayerx')))
+            other = os.path.realpath(self.copy(os.path.join(home, 'frameplayerx.old')))
+            os.makedirs(os.path.join(proc, 'self'))
+            os.makedirs(os.path.join(proc, '41'))
+            os.symlink(os.path.join(other, 'frameplayerx'), os.path.join(proc, '41', 'exe'))
+            self.assertFalse(fai.running(self.app, dest, proc))
+            self.assertTrue(fai.running(self.app, other, proc))
+            # Replaced on disk while it runs.
+            os.makedirs(os.path.join(proc, '42'))
+            os.symlink(os.path.join(dest, 'frameplayerx') + ' (deleted)',
+                       os.path.join(proc, '42', 'exe'))
+            self.assertTrue(fai.running(self.app, dest, proc))
+
     def test_remove_appids(self):
         doc = [['shortcuts', [['0', other('a', fai.signed(0x8f000001))], ['1', other('b', 7)],
                               ['2', other('c', 8)]]]]

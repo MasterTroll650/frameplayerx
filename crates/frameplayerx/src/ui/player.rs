@@ -93,6 +93,7 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
                 v.state,
                 v.settings.passthrough,
                 v.passthrough_available,
+                v.settings.follow,
                 v.actions,
             );
         });
@@ -285,13 +286,14 @@ fn transport(
     }
 }
 
-/// Close, hide, room, recenter, bookmark and adjust.
+/// Close, hide, room, follow, bookmark and adjust.
 fn view_keys(
     ui: &mut egui::Ui,
     pb: &crate::playback::Playback,
     state: &mut super::UiState,
     passthrough: bool,
     passthrough_available: bool,
+    follow: bool,
     actions: &mut Vec<Action>,
 ) {
     if widgets::key(ui, icons::X, 52.0, false)
@@ -324,11 +326,13 @@ fn view_keys(
             actions.push(Action::SetFormat(Some(f)));
         }
     }
-    if widgets::key(ui, icons::CROSSHAIR, 52.0, false)
-        .tip("Recenter")
-        .clicked()
+    // Only a flat screen follows: around 180°/360° video you look about.
+    if pb.format.projection == Projection::Flat
+        && widgets::key(ui, icons::BED, 52.0, follow)
+            .tip("Screen follows you")
+            .clicked()
     {
-        actions.push(Action::Recenter);
+        actions.push(Action::ToggleFollow);
     }
     if widgets::key(ui, icons::BOOKMARK_SIMPLE, 52.0, false)
         .tip("Bookmark")
@@ -390,7 +394,7 @@ fn format_pill(ui: &mut egui::Ui, text: &str) -> egui::Response {
 
 /// Short summary label and detailed tooltip for a video stream.
 /// `hardware_on` is the hardware decoding setting.
-fn stream_info_labels(
+pub(crate) fn stream_info_labels(
     v: &fp_media::StreamInfo,
     st: &fp_media::Stats,
     hardware_on: bool,
@@ -764,7 +768,7 @@ fn format_tab(
         widgets::section_label(ui, "Fisheye lens");
         widgets::rows(ui, |r| {
             let mut f = fov;
-            if r.slider("Field of view", None, &mut f, 150.0..=240.0, fov, "°", 0) {
+            if r.slider("Field of view", None, &mut f, 120.0..=300.0, fov, "°", 0) {
                 actions.push(Action::SetFormat(Some(VideoFormat {
                     projection: Projection::Fisheye { fov: f.round() },
                     ..pb.format
@@ -773,6 +777,36 @@ fn format_tab(
             r.slider("Lens k1", None, &mut s.lens_k1, -0.5..=0.5, 0.0, "", 2);
             r.slider("Lens k2", None, &mut s.lens_k2, -0.5..=0.5, 0.0, "", 2);
         });
+        ui.add_space(6.0);
+        widgets::section_label(ui, "Lens centre");
+        let images: &[[&str; 2]] = match pb.format.stereo {
+            StereoLayout::Mono => &[["Across", "Up"]],
+            StereoLayout::SideBySide | StereoLayout::HalfSideBySide => {
+                &[["Left, across", "Left, up"], ["Right, across", "Right, up"]]
+            }
+            StereoLayout::TopBottom | StereoLayout::HalfTopBottom => {
+                &[["Top, across", "Top, up"], ["Bottom, across", "Bottom, up"]]
+            }
+        };
+        widgets::rows(ui, |r| {
+            for (i, titles) in images.iter().enumerate() {
+                for (j, title) in titles.iter().enumerate() {
+                    // Shown in percent of the image.
+                    let mut v = s.lens_centre[i][j] * 100.0;
+                    if r.slider(title, None, &mut v, -10.0..=10.0, 0.0, "%", 1) {
+                        s.lens_centre[i][j] = v / 100.0;
+                    }
+                }
+            }
+        });
+        ui.label(
+            RichText::new(
+                "Where each image circle's centre is, if not in the middle. \
+                 Point at a slider and push the thumbstick left or right \
+                 for fine steps.",
+            )
+            .color(theme::TEXT_3),
+        );
     }
     if pb.format.projection == Projection::Flat {
         ui.add_space(6.0);
@@ -1376,13 +1410,19 @@ fn haptics_tab(
 
 /// Subtitle cues, drawn large on a dark plate on a transparent panel. Text
 /// is set by `shaper` once the fonts have loaded, by egui (Latin, Greek and
-/// Cyrillic only) before.
+/// Cyrillic only) before. With `stereo`, the cues are a 3D video's pictures
+/// (see [`stereo_pictures`]).
 pub fn subtitles(
     ctx: &egui::Context,
     cues: &[fp_media::subtitle::Cue],
     textures: &mut Vec<egui::TextureHandle>,
     shaper: Option<&mut super::subtitle_text::SubtitleText>,
+    stereo: Option<&crate::subtitles::StereoSubs>,
 ) {
+    if let Some(s) = stereo {
+        stereo_pictures(ctx, cues, textures, s);
+        return;
+    }
     let frame = egui::Frame::new().fill(Color32::TRANSPARENT);
     egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
         let text: Vec<&str> = cues
@@ -1447,5 +1487,61 @@ pub fn subtitles(
                 .rect_filled(rect, 12.0, Color32::from_black_alpha(150));
             ui.painter().galley(rect.min + pad, galley, Color32::WHITE);
         });
+    });
+}
+
+/// A 3D video's picture subtitles: each eye's parts on its half of the
+/// panel, squeezed to half width as in a side-by-side frame, since each eye
+/// is shown its half stretched across the panel. They keep their places in
+/// the frame, so the two copies keep the depth they were made with.
+fn stereo_pictures(
+    ctx: &egui::Context,
+    cues: &[fp_media::subtitle::Cue],
+    textures: &mut Vec<egui::TextureHandle>,
+    s: &crate::subtitles::StereoSubs,
+) {
+    let frame = egui::Frame::new().fill(Color32::TRANSPARENT);
+    egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
+        textures.clear();
+        let panel = ui.max_rect();
+        let ((half_width, _), (sx, sy)) = s.half();
+        // A point per pixel of the eye's picture as shown, as 2D pictures
+        // get, with the frame centred on the panel.
+        let g = 1.0;
+        let left = (panel.width() - half_width as f32 * sx * g) / 2.0;
+        let parts: Vec<_> = (0..2)
+            .flat_map(|eye| {
+                cues.iter()
+                    .flat_map(|c| &c.bitmaps)
+                    .filter_map(move |b| s.part(b, eye).map(|p| (eye, p)))
+            })
+            .collect();
+        // The lowest picture rests on the panel's bottom edge.
+        let Some(lowest) = parts
+            .iter()
+            .map(|(_, p)| (p.y + p.height as i32) as f32 * sy * g)
+            .reduce(f32::max)
+        else {
+            return;
+        };
+        for (i, (eye, p)) in parts.iter().enumerate() {
+            let img = egui::ColorImage::from_rgba_unmultiplied(
+                [p.width as usize, p.height as usize],
+                &p.rgba,
+            );
+            let tex = ctx.load_texture(format!("sub{i}"), img, egui::TextureOptions::LINEAR);
+            let min = egui::pos2(
+                panel.left() + (*eye as f32 * panel.width() + left + p.x as f32 * sx * g) / 2.0,
+                panel.bottom() - lowest + p.y as f32 * sy * g,
+            );
+            let size = Vec2::new(p.width as f32 * sx * g / 2.0, p.height as f32 * sy * g);
+            ui.painter().image(
+                tex.id(),
+                egui::Rect::from_min_size(min, size),
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+            textures.push(tex);
+        }
     });
 }

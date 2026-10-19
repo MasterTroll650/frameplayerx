@@ -7,8 +7,9 @@ or your network.
 - [Install](#install), [updating](#updating) and [uninstall](#uninstall)
 - [Where your videos can be](#where-your-videos-can-be): browsing,
   PIN locks, microSD cards and USB drives
-- [Video formats](#video-formats), and [videos that stutter](#videos-that-stutter-av1-and-422)
-- [Controls](#controls)
+- [Video formats](#video-formats), [fisheye lenses](#fisheye-lenses) and
+  [videos that stutter](#videos-that-stutter-av1-and-422)
+- [Controls](#controls), and [watching lying down](#watching-lying-down)
 - [Passthrough videos](#passthrough-videos)
 - [Haptics](#haptics)
 - [Remote control](#remote-control)
@@ -65,6 +66,7 @@ PC from the release page and run it:
 ```
 frameplayerx-install pair 192.168.0.68       # once: the headset's IP address
 frameplayerx-install                         # latest release
+frameplayerx-install --channel beta          # newest release, betas too
 frameplayerx-install --zip frameplayerx-0.1.0-aarch64.zip
 frameplayerx-install status | uninstall
 ```
@@ -89,8 +91,8 @@ and add `~/frameplayerx/frameplayerx.sh` to Steam as a non-Steam game.
 FramePlayerX checks for a new version each time it starts, but doesn't
 install it by itself. To update, open **Settings › Updates**: when a new
 version is out it's listed there with what changed. Press **Download and
-install**, then **Quit now** and start FramePlayerX again. **Check now**
-looks again without restarting.
+install**, then **Restart now**. **Check now** looks again without
+restarting.
 
 The **Stable** channel gets finished releases only; **Beta** also gets
 test versions before they are released. Switch off **Check for updates at
@@ -297,6 +299,26 @@ MP3, DTS, TrueHD, PCM (Blu-ray and DVD LPCM too), and spatial (ambisonic)
 audio that follows your head.
 Subtitles: SRT, ASS/SSA, WebVTT, and embedded text or picture subtitles.
 
+### Fisheye lenses
+
+The fisheye presets (190° for the Canon RF 5.2 mm, 200° and 220° for
+`_MKX200` and `_MKX220` files) suit most videos. If one still looks wrong,
+for example if straight lines bend as you look around or the eyes stop
+lining up towards the edges, open **⚙ › Format** and use the sliders under
+**Fisheye lens**:
+
+- **Field of view**: the lens's angle, 120° to 300°. The image circle fills
+  the shorter side of each eye's image.
+- **Lens k1** and **Lens k2**: correct a lens that doesn't keep to an even
+  fisheye spread towards its edge.
+- **Lens centre**: where each image circle's centre is, if it isn't in the
+  middle of its half of the frame. This is common in footage straight from
+  a camera. In 3D, each image has its own.
+
+To fine-tune a slider, point at it and push the thumbstick left or right.
+Each push is one step, and holding repeats. **Save for this video** keeps
+the settings for that file.
+
 ### Subtitles
 
 Subtitles come from inside the video or from files beside it, named after
@@ -336,8 +358,8 @@ says why ("No hardware decoding for AV1", "… for 4:2:2 HEVC"). Convert them
 to 4:2:0 HEVC once on a PC and they play smoothly.
 
 "Hardware decoder busy" means the file is fine but the decoder had no room
-for it (Steam's own streaming uses it too, and a 10-bit 8192×4096 video
-only fits when nothing else is decoding). "The hardware decoder can't play
+for it (Steam's own streaming uses it too, and an 8192×4096 H.264 or
+10-bit HEVC video only fits when nothing else is decoding). "The hardware decoder can't play
 this HEVC" means it tried and refused the file; frameplayerx.log says why.
 
 The pill next to the format on the control bar says which decoder plays
@@ -363,10 +385,16 @@ Any PC (slower; `-crf` lower is better quality and bigger):
 ffmpeg -i video.mp4 -map 0:v:0 -map 0:a? -c:v libx265 -preset fast -crf 20 -profile:v main -pix_fmt yuv420p -tag:v hvc1 -c:a copy -movflags +faststart video_8bit.mp4
 ```
 
+These make 8-bit HEVC, which always plays in hardware. To keep a 10-bit or
+HDR video at 10 bits, use `-profile:v main10` with `-pix_fmt p010le`
+(NVIDIA) or `-pix_fmt yuv420p10le` (any PC); it plays in hardware too, but
+at 8192×4096 only while nothing else is using the decoder.
+
 Or in HandBrake: the **H.265** encoder for your graphics card (NVEnc, AMD
-VCE or Intel QSV, not one marked 10-bit), Constant Quality about 20,
-framerate Same as source, audio Passthru, and **Dimensions › Cropping:
-None** (automatic cropping cuts into side-by-side VR pictures).
+VCE or Intel QSV; the 10-bit one for a 10-bit or HDR video), Constant
+Quality about 20, framerate Same as source, audio Passthru, and
+**Dimensions › Cropping: None** (automatic cropping cuts into side-by-side
+VR pictures).
 
 Keep the format tags in the name (`_180_LR` and so on); conversions drop
 the VR metadata, so a file without tags may need its format set once
@@ -379,7 +407,7 @@ picture. Play/pause and seeking are under either thumb.
 
 | Control | Right hand | Left hand |
 |---|---|---|
-| Thumbstick left / right | Seek back / forward 10 s (adjustable; hold to repeat). Pointing at a list: previous / next page | The same |
+| Thumbstick left / right | Seek back / forward 10 s (adjustable; hold to repeat). Pointing at a list: previous / next page. Pointing at a slider: one fine step | The same |
 | Thumbstick up / down | Volume (or scroll a menu you point at) | Tilt the picture (or scroll a menu you point at) |
 | Thumbstick press | Mute | Reset the picture |
 | A / D-pad down | Play / pause | Play / pause |
@@ -389,20 +417,36 @@ picture. Play/pause and seeking are under either thumb.
 | Menu / View | Library | Recenter |
 | Bumper | Forward 1 minute | Back 1 minute |
 | Grip + thumbstick | Up / down raises or lowers you | Left / right turns the picture, up / down zooms in / out |
-| Hold grip + trigger, move | Drag the picture (the dome follows your hand) | The same |
+| Hold grip + trigger, move | Drag the picture (a flat screen or the dome follows your hand) | The same |
 | Trigger | Click; on empty space, show or hide the controls | The same |
 
-Both grips together also recenter. Point at the library or adjust panel (or
-the keyboard under it) and hold grip to move it; it stays where you leave
-it. Recentering brings them back in front of you, at the height you left
-them. The format on the control bar (for example 180° SBS) opens the adjust
-panel's Format tab.
+To recenter, hold the Steam button, as in any game (both grips together, or
+the left Menu button, do it too). The picture and the panels come to where
+you are looking, up or down included. The library panel and a flat screen
+come back in front of you (a 180° or 360° picture keeps its turn), and the
+adjust panel stays beside the control bar.
+
+The picture, the control bar and the adjust panel beside it move as one
+player: drag the picture, or hold grip on the control bar and move it, and
+they all go together. Point at the library or adjust panel (or the keyboard
+under it) and hold grip to move it; it stays where you leave it, the adjust
+panel in its place beside the control bar. The format on the control bar
+(for example 180° SBS) opens the adjust panel's Format tab.
+
+### Watching lying down
+
+Lie back, look where you want the picture, and hold the Steam button to
+recenter: it comes up to where you look. Or turn on **Screen follows you**
+(the bed button on the control bar, or Settings › Playback): a flat video
+and the menus then follow your head and stay in front of you as you turn,
+lie back or roll onto your side. 180° and 360° videos don't follow, since
+you look around those.
 
 Every button and thumbstick direction above can be changed in Settings ›
 Controller (tap a row, pick an action; Reset to defaults puts this layout
 back). For example, to zoom with the right thumbstick, set the right controller's
 thumbstick **↑↓ Up / down** (or **Grip + ↑↓**) to Zoom. The trigger,
-grip + trigger drags, both grips and menu paging are fixed.
+grip + trigger drags, both grips, menu paging and slider steps are fixed.
 
 Drags, turns, tilts and zoom count as adjustments: save them for that video
 under ⚙, or press the left thumbstick to undo them.
@@ -465,6 +509,10 @@ protocol. Both only answer devices on your local network.
 
 ## Troubleshooting
 
+- When a video stutters, turn on Settings › About › **Performance
+  overlay**. Low in your view, it shows how long each frame takes to draw
+  (amber when longer than the display allows), the video's frame rate and
+  dropped frames, its decoder, how busy the CPU and GPU are, and memory.
 - After a crash, the next start asks whether to send a crash report to
   FramePlayerX's developers, as a private issue on GitHub. It contains the
   versions of FramePlayerX and the headset's system, what went wrong, and

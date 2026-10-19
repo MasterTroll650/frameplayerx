@@ -261,6 +261,7 @@ fn request(source: &str, scene: &FeedScene, start_at: Option<f64>) -> OpenReques
         location: scene.url.clone(),
         source_id: Some(source.to_string()),
         entry: Some(scene.to_entry()),
+        title: None,
         start_at,
     }
 }

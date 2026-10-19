@@ -19,7 +19,8 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 ## Features
 
 - **VR and flat videos**: plays 180°, 360°, fisheye and flat videos, in 2D or 3D. The format is detected automatically, and you can change it for any video
-- **Picture adjustments**: position, zoom, depth and picture settings, saved for each video
+- **Hardware decoding**: HEVC (H.265) in 8 and 10 bits and H.264, both up to 8K, and VP9 play on the Frame's own video decoder. Anything else, AV1 included, plays with software decoding
+- **Picture adjustments**: position, zoom, depth, picture settings and fisheye lens calibration, saved for each video, and a screen that follows your head for watching lying down
 - **Videos on the headset**: finds videos in the Videos and Downloads folders and on microSD cards and USB drives, including cards formatted on Windows or a Mac
 - **Media servers**: browse and play from Jellyfin, Emby, any server with a DeoVR feed or HereSphere API, network shares (SMB), WebDAV, DLNA servers and web folders. Jellyfin, Emby and HereSphere APIs hear what you watch, so their resume points, watched marks and play counts stay in step with the headset
 - **Watch history**: carry on where you left off, and mark favorites and ratings
@@ -69,7 +70,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 
 2. **Start it** from the Steam library on the headset. FramePlayerX finds the videos on the headset and its cards and drives by itself. Add a media server under **Sources › Add source**.
 
-To update later, open **Settings › Updates** and press **Download and install** when a new version is listed, then restart FramePlayerX. To remove it again, see [Uninstall](docs/USER-GUIDE.md#uninstall) in the user guide.
+To update later, open **Settings › Updates** and press **Download and install** when a new version is listed, then **Restart now**. To remove it again, see [Uninstall](docs/USER-GUIDE.md#uninstall) in the user guide.
 
 ---
 
@@ -90,7 +91,7 @@ To update later, open **Settings › Updates** and press **Download and install*
 | VR | OpenXR, talking to the runtime directly (no Khronos loader) |
 | Graphics | Vulkan through [ash](https://github.com/ash-rs/ash); the projections are drawn per pixel in a shader |
 | Interface | [egui](https://github.com/emilk/egui) panels in VR, with the [Inter](https://rsms.me/inter/) font and [Phosphor](https://phosphoricons.com/) icons; subtitle text set by [cosmic-text](https://github.com/pop-os/cosmic-text) |
-| Video | [FFmpeg](https://ffmpeg.org/) 7.1 for demuxing and software decoding, the Frame's V4L2 hardware decoder, [dav1d](https://code.videolan.org/videolan/dav1d) for AV1 |
+| Video | [FFmpeg](https://ffmpeg.org/) 7.1 for demuxing and software decoding, the Frame's V4L2 hardware decoder (H.264, and 8- and 10-bit HEVC), [dav1d](https://code.videolan.org/videolan/dav1d) for AV1 |
 | Audio | ALSA |
 | Storage | SQLite (videos, watch history, adjustments), JSON settings |
 | Builds | `cargo zigbuild` for Linux ARM64 against glibc 2.28 |

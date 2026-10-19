@@ -7,17 +7,20 @@ mod input;
 mod sources;
 mod tasks;
 
-use frame::escape;
+use frame::{escape, key};
 use tasks::Job;
 
 use crate::jobs::Jobs;
 use crate::playback::{self, OpenRequest, Opened, Playback};
 use crate::services::Services;
-use crate::settings::Settings;
+use crate::settings::{Settings, UI_SCALES};
 use crate::ui::{
     self, Action, Browse, QuickConnect, Screen, SourcePage, SourceView, UiState, UpdateStatus, View,
 };
-use crate::world::{Panel, Pointer, anchor_from_head, place, place_around, turned_with_picture};
+use crate::world::{
+    Panel, Pointer, anchor_facing, anchor_from_head, follow, place, place_around,
+    turned_with_picture,
+};
 use fp_core::PlaybackStatus;
 use fp_core::format::Projection;
 use fp_library::Library;
@@ -41,6 +44,12 @@ pub struct FrameInput {
     /// The compositor can draw panels and rays as quad layers (OpenXR);
     /// otherwise (the desktop preview) everything is drawn into the eyes.
     pub layers: bool,
+    /// Render-thread time of the previous frame, ms, and the display's
+    /// refresh rate (OpenXR), for the performance overlay.
+    pub frame_ms: Option<f32>,
+    pub display_hz: Option<f32>,
+    /// The system recentered (the Steam button held) since the last frame.
+    pub recentred: bool,
 }
 
 /// A panel or pointer ray for the compositor to draw as its own quad layer,
@@ -74,12 +83,18 @@ pub struct FrameOutput {
     /// (hand, amplitude, milliseconds)
     pub buzz: Vec<(usize, f32, i64)>,
     pub quit: bool,
+    /// With `quit`: start again.
+    pub restart: bool,
 }
 
 const MAIN: usize = 0;
 const BAR: usize = 1;
 const ADJUST: usize = 2;
 const KEYBOARD: usize = 3;
+/// The performance overlay's quad layer (the panels' are their indices).
+const PERF_LAYER: u64 = 8;
+/// Where the performance overlay sits from the eyes: low and to the left.
+const PERF_OFFSET: Vec3 = Vec3::new(-0.3, -0.12, -0.85);
 
 /// How long a video may take to open before the app gives up on it. A
 /// server that never sends a frame (a live transcode it can't keep up with)
@@ -94,8 +109,16 @@ pub struct App {
     thumbs: ui::thumbs::Thumbs,
     panels: [Panel; 4],
     subs: Panel,
+    /// The performance overlay, its sampler while it shows, the last
+    /// second of frame times, and the video's counters at its last paint.
+    perf: Panel,
+    perf_monitor: Option<crate::perf::Monitor>,
+    frame_times: std::collections::VecDeque<f32>,
+    perf_video: Option<(Instant, u64, u64)>,
     sub_key: String,
     sub_textures: Vec<egui::TextureHandle>,
+    /// The subtitle panel holds a 3D video's pictures, an eye's on each half.
+    subs_split: bool,
     /// Sets subtitle text in any script, once its fonts have loaded.
     sub_shaper: Option<ui::subtitle_text::SubtitleText>,
     sub_fonts: Jobs<ui::subtitle_text::SubtitleText>,
@@ -117,6 +140,9 @@ pub struct App {
     /// Yaw/pitch when a dome drag began.
     drag_start: Option<(f32, f32)>,
     panel_drag: Option<PanelDrag>,
+    /// Where the adjust panel was placed from when the trigger went down on
+    /// it (see `place_panels`).
+    adjust_hold: Option<Mat4>,
     /// Where the library and adjust panels sit now (saved when let go).
     offsets: crate::settings::PanelOffsets,
     /// The list the open video came from, for next/previous.
@@ -141,6 +167,7 @@ pub struct App {
     feed_queue: std::collections::VecDeque<(String, String)>,
     feed_busy: usize,
     quit: bool,
+    restart: bool,
 }
 
 /// A panel held by a grip: which panel and hand, and the hand's aim angles
@@ -161,6 +188,15 @@ fn panel(px: [u32; 2], width_m: f32, ppp: f32) -> Panel {
 /// A panel whose body is `px` pixels and `width_m` wide, floating with
 /// room round it for its shadow (ui::widgets::SHADOW_ROOM) at the same
 /// scale.
+/// A [`floating_panel`] with a fixed layout (the control bar, the
+/// keyboard), which grows with Settings › Interface size: its texture is
+/// fine enough for the largest size from the start.
+fn growing_panel(px: [u32; 2], width_m: f32, ppp: f32) -> Panel {
+    let s = *UI_SCALES.end();
+    let px = px.map(|n| (n as f32 * s).round() as u32);
+    floating_panel(px, width_m, ppp * s).growing()
+}
+
 fn floating_panel(px: [u32; 2], width_m: f32, ppp: f32) -> Panel {
     let room = ui::widgets::SHADOW_ROOM;
     let extra = [
@@ -177,14 +213,18 @@ impl App {
         let thumbs = ui::thumbs::Thumbs::new(services.opener.clone());
         let mut panels = [
             floating_panel([1600, 1000], 1.8, 1.25),
-            floating_panel([1400, 268], 1.2, 1.25),
+            growing_panel([1400, 268], 1.2, 1.25),
             floating_panel([900, 1020], 0.75, 1.25),
-            floating_panel([1200, 456], 1.0, 1.25),
+            growing_panel([1200, 456], 1.0, 1.25),
         ];
         panels[BAR].refresh = Some(Duration::from_millis(250));
         panels[ADJUST].refresh = Some(Duration::from_millis(1000));
         panels[MAIN].refresh = Some(Duration::from_millis(1000));
         let subs = panel([1600, 320], 1.6, 1.0);
+        let mut perf = panel([640, 300], 0.4, 1.0);
+        perf.ctx
+            .style_mut(|s| s.visuals.panel_fill = egui::Color32::TRANSPARENT);
+        perf.refresh = Some(Duration::from_millis(500));
         subs.ctx
             .style_mut(|s| s.visuals.panel_fill = egui::Color32::TRANSPARENT);
         let sub_fonts = Jobs::new();
@@ -197,8 +237,13 @@ impl App {
             thumbs,
             panels,
             subs,
+            perf,
+            perf_monitor: None,
+            frame_times: Default::default(),
+            perf_video: None,
             sub_key: String::new(),
             sub_textures: Vec::new(),
+            subs_split: false,
             sub_shaper: None,
             sub_fonts,
             pointer: Pointer::default(),
@@ -216,6 +261,7 @@ impl App {
             trigger_prev: [0.0; 2],
             drag_start: None,
             panel_drag: None,
+            adjust_hold: None,
             offsets: Default::default(),
             queue: Vec::new(),
             queue_pos: 0,
@@ -233,8 +279,10 @@ impl App {
             feed_queue: Default::default(),
             feed_busy: 0,
             quit: false,
+            restart: false,
         };
         app.offsets = app.settings.panel_offsets;
+        app.apply_ui_scale();
         app.check_last_run();
         app.rescan(false);
         app.connect_devices();
@@ -243,6 +291,17 @@ impl App {
             app.start_check = Some(app.update_check);
         }
         app
+    }
+
+    /// Settings › Interface size, on every panel.
+    fn apply_ui_scale(&mut self) {
+        let scale = self
+            .settings
+            .ui_scale
+            .clamp(*UI_SCALES.start(), *UI_SCALES.end());
+        for p in self.panels.iter_mut() {
+            p.set_scale(scale);
+        }
     }
 
     pub fn set_about(&mut self, about: Vec<(String, String)>) {
@@ -331,9 +390,7 @@ impl App {
             }
         }
         if self.settings.ui_scale != self.saved.ui_scale {
-            for p in self.panels.iter_mut() {
-                p.ctx.set_zoom_factor(self.settings.ui_scale);
-            }
+            self.apply_ui_scale();
         }
         if let Err(e) = self.settings.save(&Settings::path()) {
             log::warn!("saving settings: {e}");
@@ -397,7 +454,19 @@ impl App {
     /// Publishes playback status to remotes and the haptics engine.
     fn publish_status(&mut self) {
         let Some(p) = &self.playback else {
-            self.last_status = None;
+            // Once, so remotes and haptics stop following the closed video.
+            if self.last_status.take().is_some() {
+                let idle = PlaybackStatus {
+                    sampled_at_ms: fp_core::playback::now_ms(),
+                    ..Default::default()
+                };
+                if let Some(h) = self.services.haptics() {
+                    h.set_status(idle.clone());
+                }
+                if let Some(r) = &self.services.remote {
+                    r.publish(&idle);
+                }
+            }
             return;
         };
         let s = p.status();

@@ -12,7 +12,7 @@ use fp_core::view::{Keyframes, ViewSettings};
 use fp_core::{PlaybackStatus, playback::now_ms};
 use fp_haptics::{Axis, Heatmap, Script};
 use fp_library::{Library, MediaId, SessionId};
-use fp_media::{Player, PlayerConfig, PlayerState, StreamInfo};
+use fp_media::{Cue, Player, PlayerConfig, PlayerState, StreamInfo};
 use fp_sources::sidecar::subtitle_file;
 use fp_sources::urlutil::last_segment;
 use std::sync::Mutex;
@@ -25,8 +25,23 @@ pub struct OpenRequest {
     pub source_id: Option<String>,
     /// The browse entry, when opened from a source (carries feed metadata).
     pub entry: Option<Entry>,
+    /// The library record's title, when opened from the library.
+    pub title: Option<String>,
     /// Start here instead of the saved resume position.
     pub start_at: Option<f64>,
+}
+
+impl OpenRequest {
+    /// What to call the video while it opens: the entry's or the record's
+    /// title, else its file name.
+    pub fn shown_title(&self) -> String {
+        self.entry
+            .as_ref()
+            .map(|e| e.name.clone())
+            .or_else(|| self.title.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| title_from_name(&last_segment(&self.location)))
+    }
 }
 
 pub struct Playback {
@@ -189,7 +204,12 @@ pub fn open(
         log::warn!("saving the format of {location}: {e}");
     }
 
-    let scripts = load_scripts(opener, &script_locs);
+    let script_source = req
+        .source_id
+        .clone()
+        .or_else(|| record.as_ref().map(|r| r.source_id.clone()))
+        .filter(|id| !id.is_empty());
+    let scripts = load_scripts(opener, script_source.as_deref(), &script_locs);
     let duration_ms = (info.duration * 1000.0) as i64;
     let heatmap = scripts
         .iter()
@@ -197,9 +217,10 @@ pub fn open(
         .filter(|_| duration_ms > 0)
         .map(|(_, s)| fp_haptics::heatmap_range(s, 0, duration_ms, 240));
     let active_subtitle_file = match pick {
-        Pick::File(i) => load_subtitle_file(opener, &player, &subs[i])
-            .ok()
-            .map(|()| i),
+        Pick::File(i) => read_subtitle_file(opener, &subs[i]).ok().map(|cues| {
+            player.set_external_subtitles(cues);
+            i
+        }),
         _ => None,
     };
 
@@ -375,10 +396,14 @@ fn sidecars(
     (scripts, subs)
 }
 
-fn load_scripts(opener: &Opener, locations: &[String]) -> Vec<(Axis, Script)> {
+fn load_scripts(
+    opener: &Opener,
+    source_id: Option<&str>,
+    locations: &[String],
+) -> Vec<(Axis, Script)> {
     let mut scripts = Vec::new();
     for loc in locations {
-        match opener.fetch(loc, 64 << 20).and_then(|bytes| {
+        match opener.fetch_in(source_id, loc, 64 << 20).and_then(|bytes| {
             fp_haptics::funscript::parse_script_file(&last_segment(loc), &bytes)
                 .map_err(|e| e.to_string())
         }) {
@@ -389,21 +414,16 @@ fn load_scripts(opener: &Opener, locations: &[String]) -> Vec<(Axis, Script)> {
     scripts
 }
 
-/// Shows a subtitle file in place of any other.
-pub fn load_subtitle_file(
-    opener: &Opener,
-    player: &Player,
-    file: &SubtitleFile,
-) -> Result<(), String> {
-    let loaded = opener.open(&file.location).and_then(|s| {
-        player
-            .load_subtitles(s, &last_segment(&file.location))
-            .map_err(|e| e.to_string())
+/// A subtitle file's cues. Blocks while a server answers, so not on the
+/// frame loop.
+pub fn read_subtitle_file(opener: &Opener, file: &SubtitleFile) -> Result<Vec<Cue>, String> {
+    let read = opener.open(&file.location).and_then(|s| {
+        fp_media::subtitle::load_file(s, &last_segment(&file.location)).map_err(|e| e.to_string())
     });
-    if let Err(e) = &loaded {
+    if let Err(e) = &read {
         log::warn!("subtitles {}: {e}", file.location);
     }
-    loaded.map(|_| ())
+    read
 }
 
 /// Chapters, the source's markers and the user's bookmarks, in time order.
@@ -790,6 +810,31 @@ mod tests {
     #[test]
     fn titles_from_names() {
         assert_eq!(title_from_name("My.Video_2024.mkv"), "My Video 2024");
+    }
+
+    #[test]
+    fn an_opening_video_shows_its_title_not_its_address() {
+        let from_library = OpenRequest {
+            location: "https://server/heresphere/4127".into(),
+            title: Some("Beach Day".into()),
+            ..Default::default()
+        };
+        assert_eq!(from_library.shown_title(), "Beach Day");
+        let from_a_feed = OpenRequest {
+            location: "https://server/deovr/4127".into(),
+            entry: Some(Entry::new(
+                "Beach Day",
+                "https://server/deovr/4127",
+                EntryKind::Video,
+            )),
+            ..Default::default()
+        };
+        assert_eq!(from_a_feed.shown_title(), "Beach Day");
+        let by_address = OpenRequest {
+            location: "https://nas/videos/Beach_Day.mp4?token=abc".into(),
+            ..Default::default()
+        };
+        assert_eq!(by_address.shown_title(), "Beach Day");
     }
 
     #[test]

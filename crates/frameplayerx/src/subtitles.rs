@@ -1,8 +1,10 @@
 //! Which subtitles a video starts with, and how its tracks are named.
 
 use crate::settings::SubtitleMode;
+use fp_core::format::StereoLayout;
 use fp_core::language::Tag;
 use fp_core::source::SubtitleFile;
+use fp_media::subtitle::SubBitmap;
 use fp_media::{MediaInfo, StreamInfo};
 use fp_sources::urlutil::last_segment;
 
@@ -256,6 +258,64 @@ pub fn rows(language: &str, info: &MediaInfo, files: &[SubtitleFile]) -> Vec<Row
         .collect()
 }
 
+/// Picture subtitles of a 3D video, which are drawn on the whole frame like
+/// the video itself: each eye's copy in that eye's half, a little to the side
+/// of the other for depth.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StereoSubs {
+    pub layout: StereoLayout,
+    /// The frame the pictures are placed on: the video's size.
+    pub canvas: (u32, u32),
+    pub swap_eyes: bool,
+}
+
+impl StereoSubs {
+    /// The size of an eye's half of the frame, and how many times wider and
+    /// taller it shows (a half side-by-side eye is squeezed to half width).
+    pub fn half(&self) -> ((u32, u32), (f32, f32)) {
+        let (w, h) = self.canvas;
+        match self.layout {
+            StereoLayout::Mono => ((w, h), (1.0, 1.0)),
+            StereoLayout::SideBySide => ((w / 2, h), (1.0, 1.0)),
+            StereoLayout::HalfSideBySide => ((w / 2, h), (2.0, 1.0)),
+            StereoLayout::TopBottom => ((w, h / 2), (1.0, 1.0)),
+            StereoLayout::HalfTopBottom => ((w, h / 2), (1.0, 2.0)),
+        }
+    }
+
+    /// The part of `b` in `eye`'s half (0 left, 1 right), placed within
+    /// that half.
+    pub fn part(&self, b: &SubBitmap, eye: usize) -> Option<SubBitmap> {
+        let ((hw, hh), _) = self.half();
+        let half = (eye ^ self.swap_eyes as usize) as i32;
+        let (x0, y0) = match self.layout {
+            StereoLayout::SideBySide | StereoLayout::HalfSideBySide => (half * hw as i32, 0),
+            StereoLayout::TopBottom | StereoLayout::HalfTopBottom => (0, half * hh as i32),
+            StereoLayout::Mono => (0, 0),
+        };
+        let left = b.x.max(x0);
+        let top = b.y.max(y0);
+        let right = (b.x + b.width as i32).min(x0 + hw as i32);
+        let bottom = (b.y + b.height as i32).min(y0 + hh as i32);
+        if left >= right || top >= bottom || b.rgba.len() < (b.width * b.height * 4) as usize {
+            return None;
+        }
+        let (w, h) = ((right - left) as usize, (bottom - top) as usize);
+        let mut rgba = Vec::with_capacity(w * h * 4);
+        for row in (top - b.y) as usize..(bottom - b.y) as usize {
+            let start = (row * b.width as usize + (left - b.x) as usize) * 4;
+            rgba.extend_from_slice(&b.rgba[start..start + w * 4]);
+        }
+        Some(SubBitmap {
+            x: left - x0,
+            y: top - y0,
+            width: w as u32,
+            height: h as u32,
+            rgba,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,5 +532,55 @@ mod tests {
                 (Pick::File(0), "French".into(), true),
             ]
         );
+    }
+
+    /// A picture `width` wide whose pixels hold their own x position.
+    fn strip(x: i32, y: i32, width: u32, height: u32) -> SubBitmap {
+        let rgba = (0..height)
+            .flat_map(|_| (0..width).flat_map(|i| [(x + i as i32) as u8, 0, 0, 255]))
+            .collect();
+        SubBitmap {
+            x,
+            y,
+            width,
+            height,
+            rgba,
+        }
+    }
+
+    #[test]
+    fn each_eye_gets_its_copy_of_a_3d_picture() {
+        let sbs = StereoSubs {
+            layout: StereoLayout::HalfSideBySide,
+            canvas: (200, 100),
+            swap_eyes: false,
+        };
+        // Both copies in one picture, across the middle.
+        let b = strip(40, 80, 120, 10);
+        let left = sbs.part(&b, 0).unwrap();
+        let right = sbs.part(&b, 1).unwrap();
+        assert_eq!((left.x, left.y, left.width, left.height), (40, 80, 60, 10));
+        assert_eq!(
+            (right.x, right.y, right.width, right.height),
+            (0, 80, 60, 10)
+        );
+        assert_eq!(&left.rgba[..4], &[40, 0, 0, 255]);
+        assert_eq!(&right.rgba[..4], &[100, 0, 0, 255]);
+        assert_eq!(sbs.half(), ((100, 100), (2.0, 1.0)));
+
+        let swapped = StereoSubs {
+            swap_eyes: true,
+            ..sbs
+        };
+        assert_eq!(swapped.part(&b, 0), Some(right));
+        assert!(sbs.part(&strip(110, 0, 20, 5), 0).is_none());
+
+        let tb = StereoSubs {
+            layout: StereoLayout::HalfTopBottom,
+            ..sbs
+        };
+        let b = strip(10, 40, 30, 20);
+        assert_eq!(tb.part(&b, 0).map(|p| (p.y, p.height)), Some((40, 10)));
+        assert_eq!(tb.part(&b, 1).map(|p| (p.y, p.height)), Some((0, 10)));
     }
 }

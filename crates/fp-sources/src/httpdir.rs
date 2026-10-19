@@ -66,7 +66,7 @@ impl HttpDirSource {
             id: config.id.clone(),
             name: config.name.clone(),
             root: with_trailing_slash(&url),
-            client: HttpClient::new(opts, creds.as_ref()),
+            client: HttpClient::new(opts, creds.as_ref()).scoped_to(&url),
         })
     }
 

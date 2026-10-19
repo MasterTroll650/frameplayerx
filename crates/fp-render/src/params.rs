@@ -5,7 +5,7 @@ use fp_core::view::ViewSettings;
 use fp_media::PixelLayout;
 use fp_media::frame::{ColorInfo, Matrix};
 use fp_media::info::Transfer;
-use glam::{EulerRot, Mat4, Vec4};
+use glam::{EulerRot, Mat4, Quat, Vec4};
 
 /// Matches `struct Params` in shaders/scene.wgsl (std140-compatible: every
 /// member is 16-byte aligned).
@@ -14,10 +14,13 @@ use glam::{EulerRot, Mat4, Vec4};
 pub(crate) struct SceneParams {
     pub inv_view_proj: [Mat4; 2],
     pub correction: Mat4,
+    pub anchor_inv: Mat4,
     pub screen_inv: Mat4,
     pub mode: [u32; 4],
     pub proj: Vec4,
     pub lens: Vec4,
+    pub circle: Vec4,
+    pub centres: Vec4,
     pub screen: Vec4,
     pub yuv_r: Vec4,
     pub yuv_g: Vec4,
@@ -44,9 +47,10 @@ pub struct VideoParams {
     /// Background around/behind the video, linear premultiplied RGBA.
     /// Alpha 0 lets passthrough show through.
     pub background: [f32; 4],
-    /// Which way, degrees about world up, the viewer's "forward" (height and
-    /// forward settings) points: the yaw the video was centred on.
-    pub forward_yaw: f32,
+    /// The room frame the video was centred in (recentering's anchor): a
+    /// 180°/360° picture, its per-eye corrections and the viewer's height
+    /// and forward turn with it.
+    pub anchor: Quat,
 }
 
 impl Default for VideoParams {
@@ -56,7 +60,7 @@ impl Default for VideoParams {
             settings: ViewSettings::default(),
             screen_pose: Mat4::from_translation(glam::vec3(0.0, 0.0, -4.0)),
             background: [0.008, 0.008, 0.012, 1.0],
-            forward_yaw: 0.0,
+            anchor: Quat::IDENTITY,
         }
     }
 }
@@ -163,6 +167,10 @@ pub(crate) fn build(
             (tex.0 as f32, tex.1 as f32)
         }
     };
+    // A fisheye's image circle fills the eye image's shorter side, and stays
+    // round when the image is not square.
+    let circle = Vec4::new((eh / ew).min(1.0), (ew / eh).min(1.0), 0.0, 0.0);
+    let [c0, c1] = s.lens_centre;
     let screen_w = s.screen_width * s.zoom;
     let screen_h = screen_w * eh / ew.max(1.0);
     let arc = s.screen_curvature.clamp(0.0, 1.0) * std::f32::consts::TAU / 3.0;
@@ -183,6 +191,7 @@ pub(crate) fn build(
     SceneParams {
         inv_view_proj,
         correction,
+        anchor_inv: Mat4::from_quat(video.anchor.inverse()),
         screen_inv: video.screen_pose.inverse(),
         mode: [kind, stereo, swap, layout_code],
         proj: Vec4::new(h_fov, v_fov, s.zoom.max(0.05), deg(s.ipd_offset)),
@@ -192,6 +201,8 @@ pub(crate) fn build(
             deg(s.vertical_align),
             deg(s.rotation_align),
         ),
+        circle,
+        centres: Vec4::new(c0[0], -c0[1], c1[0], -c1[1]),
         screen: Vec4::new(screen_w, screen_h, arc, frame.is_some() as u32 as f32),
         yuv_r: rows[0],
         yuv_g: rows[1],
@@ -213,9 +224,7 @@ pub(crate) fn build(
             video.format.alpha_pack_scale().unwrap_or(0.0),
             0.0,
         ),
-        viewer: (glam::Quat::from_rotation_y(deg(video.forward_yaw))
-            * glam::vec3(0.0, s.height, -s.forward))
-        .extend(SPHERE_RADIUS),
+        viewer: glam::vec3(0.0, s.height, -s.forward).extend(SPHERE_RADIUS),
     }
 }
 

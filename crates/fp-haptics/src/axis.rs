@@ -123,6 +123,17 @@ impl Axis {
         Some(axis)
     }
 
+    /// Where an output that holds its level rests: vibration, pump and
+    /// suction off, and twist at its centre, which stops a rotator. `None`
+    /// for axes that only move to a position and stay there.
+    pub fn rest(self) -> Option<f32> {
+        match self {
+            Axis::V0 | Axis::V1 | Axis::A1 => Some(0.0),
+            Axis::R0 => Some(0.5),
+            _ => None,
+        }
+    }
+
     /// Whether this is a positional axis (linear or rotation) whose resting
     /// position is the centre, as opposed to an intensity axis (V*, A*).
     pub fn is_positional(self) -> bool {

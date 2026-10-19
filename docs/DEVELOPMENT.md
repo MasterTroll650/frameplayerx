@@ -20,7 +20,7 @@ needs with apt, then builds FFmpeg, in one go.
 ## Build and test
 
 ```bash
-tools/build-ffmpeg.sh x86_64 aarch64      # once: FFmpeg 7.1 and dav1d into third_party/
+tools/build-ffmpeg.sh x86_64 aarch64      # FFmpeg 7.1 with dav1d and zlib into third_party/
 export LD_LIBRARY_PATH=$PWD/third_party/ffmpeg/x86_64/lib
 cargo test --workspace                    # GPU tests use any Vulkan device (lavapipe is fine)
 cargo clippy --workspace --all-targets   # lints are in [workspace.lints]
@@ -58,8 +58,8 @@ Comments say what the code can't:
 | `frameplayerx` | The app: the XR loop, the interface, and wiring everything together |
 | `fp-core` | Shared types: formats and their detection, view settings, the source contract, data folders |
 | `fp-ffmpeg-sys` | Bindings to the bundled FFmpeg 7.1, per architecture (`tools/gen-ffmpeg-bindings.sh`) |
-| `fp-media` | Demuxing, decoding (V4L2 hardware, software), the A/V clock, ALSA audio, subtitles, thumbnails |
-| `fp-render` | The Vulkan renderer: the projection shader for every format, egui panels, quads |
+| `fp-media` | Demuxing, decoding (V4L2 hardware, 10-bit HEVC as Q10C; software), the A/V clock, ALSA audio, subtitles, thumbnails |
+| `fp-render` | The Vulkan renderer: the projection shader for every format, the Q10C to P010 conversion, egui panels, quads |
 | `fp-xr` | OpenXR: the session and swapchains, controller input, passthrough |
 | `fp-xr-loader` | Finds the active OpenXR runtime and loads it directly, with no Khronos loader to ship (shared with `frame-probe`) |
 | `fp-library` | The SQLite database: folder scanning, the metadata and thumbnail worker, search, watch history |
@@ -309,8 +309,9 @@ headset and copies the text and JSON reports into `probe-reports/`.
    - Pushing a `vX.Y.Z` or `vX.Y.Z-anything` tag releases exactly that
      version (a pre-release if it has a `-`).
 
-The app finds updates in GitHub's release list: the highest version on
-the Stable channel without a `-` part, on Beta any version. In-app updates
+The app and `frameplayerx-install` find releases in GitHub's release list:
+the highest version on the Stable channel without a `-` part, on Beta any
+version (`releases/latest` never offers a pre-release). In-app updates
 and `frameplayerx-install` without `--zip` only install releases whose
 manifest is signed with the release key.
 

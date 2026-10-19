@@ -45,6 +45,9 @@ pub enum SubtitleMode {
     Always,
 }
 
+/// Settings › Interface size: the sizes offered.
+pub const UI_SCALES: std::ops::RangeInclusive<f32> = 0.8..=1.5;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -81,8 +84,12 @@ pub struct Settings {
     pub haptic_devices: Vec<HapticDeviceConfig>,
     pub update_channel: fp_updater::Channel,
     pub check_updates: bool,
-    /// UI text size multiplier.
+    /// UI text size multiplier, in [`UI_SCALES`].
     pub ui_scale: f32,
+    /// Flat videos and the panels follow the head ([`crate::world::follow`]).
+    pub follow: bool,
+    /// The performance overlay (Settings › About › Diagnostics).
+    pub perf_overlay: bool,
     /// What the controller buttons and thumbsticks do.
     pub controls: crate::bindings::Bindings,
     /// Where the library and adjust panels were moved to: yaw and pitch in
@@ -144,6 +151,8 @@ impl Default for Settings {
             },
             check_updates: true,
             ui_scale: 1.0,
+            follow: false,
+            perf_overlay: false,
             controls: crate::bindings::Bindings::default(),
             panel_offsets: PanelOffsets::default(),
             browse_sort: fp_sources::EntrySort::default(),

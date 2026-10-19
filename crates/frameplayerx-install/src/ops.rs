@@ -88,13 +88,22 @@ pub fn connect(remote: &mut dyn Remote, force: bool) -> Result<DeviceInfo> {
     Ok(device)
 }
 
-/// Downloads the latest release for the headset (aarch64) from the signed
-/// manifest at `manifest_url`, into `cache_dir`. Signature and SHA-256 are
-/// verified by `fp-updater`; a cached complete download is reused.
-pub fn fetch_latest(manifest_url: &str, channel: Channel, cache_dir: &Path) -> Result<PathBuf> {
+/// Downloads the latest release for the headset (aarch64) into
+/// `cache_dir`, from the signed manifest at `manifest_url` or else the
+/// newest release on `channel`. Signature and SHA-256 are verified by
+/// `fp-updater`; a cached complete download is reused.
+pub fn fetch_latest(
+    manifest_url: Option<&str>,
+    channel: Channel,
+    cache_dir: &Path,
+) -> Result<PathBuf> {
     println!("Checking for the latest FramePlayerX release ({channel}) ...");
     let updater = Updater::new()?.arch("aarch64");
-    let manifest = updater.fetch_manifest(manifest_url)?;
+    let url = match manifest_url {
+        Some(url) => url.to_string(),
+        None => fp_updater::channel_manifest_url(&updater, channel)?,
+    };
+    let manifest = updater.fetch_manifest(&url)?;
     let update =
         select_update(&manifest, &Version::new(0, 0, 0), channel, "aarch64")?.ok_or_else(|| {
             InstallError::NoRelease(format!(

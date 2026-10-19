@@ -439,6 +439,73 @@ fn deovr_feed_login() {
     assert!(matches!(src.list(None), Err(Error::Auth(_))));
 }
 
+#[test]
+fn logins_stay_with_the_feeds_server() {
+    // Another host the feed links to: a scene document and its video.
+    let elsewhere = TestServer::start(|req| match req.path() {
+        "/scene" => resp(
+            200,
+            r#"{"title":"Away","encodings":[{"name":"h264","videoSources":[
+                {"resolution":1080,"height":1080,"width":1920,"url":"/v.mp4"}]}]}"#,
+            &[("Content-Type", "application/json")],
+        ),
+        "/v.mp4" => serve_bytes(req, b"video elsewhere", true),
+        _ => resp(404, "", &[]),
+    });
+    let away = elsewhere.url("/scene");
+    let feed_server = TestServer::start(move |req| match req.path() {
+        "/deovr" => resp(
+            200,
+            format!(
+                r#"{{"authorized":"1","scenes":[{{"name":"All","list":[{{"title":"Away","video_url":"{away}"}}]}}]}}"#
+            ),
+            &[("Content-Type", "application/json")],
+        ),
+        _ => resp(404, "", &[]),
+    });
+    let src = build(&SourceConfig::DeoVr(feed(
+        feed_server.url("/deovr"),
+        Some(Credentials::new("bob", "p@ss")),
+        None,
+    )))
+    .unwrap();
+    let scenes = src.list(None).unwrap();
+    let scene = scenes
+        .iter()
+        .flat_map(|g| src.list(Some(&g.location)).unwrap())
+        .find(|e| e.name == "Away")
+        .expect("the scene");
+    let f = src.open(&scene.location).unwrap();
+    let mut buf = [0u8; 15];
+    assert_eq!(f.read_at(0, &mut buf).unwrap(), 15);
+    assert_eq!(&buf, b"video elsewhere");
+    let f = src.open(&elsewhere.url("/v.mp4")).unwrap();
+    assert_eq!(f.size(), Some(15));
+
+    // The feed's own server has the login; the other host never sees it.
+    assert!(
+        feed_server
+            .requests()
+            .iter()
+            .all(|r| r.header("authorization").is_some() && r.body.contains("bob"))
+    );
+    let away = elsewhere.requests();
+    assert!(away.iter().any(|r| r.path() == "/v.mp4"));
+    for r in &away {
+        assert!(
+            r.header("authorization").is_none(),
+            "{} {}",
+            r.method,
+            r.url
+        );
+        assert!(
+            !r.body.contains("bob") && !r.body.contains("p%40ss"),
+            "{}",
+            r.body
+        );
+    }
+}
+
 // ---------------------------------------------------------------- HereSphere
 
 #[test]

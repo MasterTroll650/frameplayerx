@@ -817,8 +817,34 @@ pub fn slider_control(
                 .color(theme::TEXT_2),
         ),
     );
-    changed |= slider(ui, value, range, 240.0).changed();
+    let resp = slider(ui, value, range.clone(), 240.0);
+    changed |= resp.changed();
+    if resp.hovered() {
+        let ctx = ui.ctx().clone();
+        let pass = ctx.cumulative_pass_nr();
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(OVER_SLIDER), pass));
+        let dir = ui.input_mut(|i| {
+            let mut n = |key| i.count_and_consume_key(egui::Modifiers::NONE, key) as f32;
+            n(egui::Key::ArrowRight) - n(egui::Key::ArrowLeft)
+        });
+        if dir != 0.0 {
+            // A step of the shown precision, landing on it.
+            let step = 10f32.powi(-(decimals as i32));
+            *value = (((*value / step).round() + dir) * step).clamp(*range.start(), *range.end());
+            changed = true;
+            ctx.request_repaint();
+        }
+    }
     changed
+}
+
+const OVER_SLIDER: &str = "over-slider";
+
+/// Whether the pointer was on a [`slider_control`] in the panel's last pass:
+/// the thumbstick then steps it (arrow keys) instead of paging.
+pub fn over_slider(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(egui::Id::new(OVER_SLIDER)))
+        .is_some_and(|pass| pass + 1 == ctx.cumulative_pass_nr())
 }
 
 /// A slider: a slim rail filled in the accent up to a white knob.
@@ -917,6 +943,15 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, &str)], selected: usize) -> Option
     }
     let n = items.len().max(1) as f32;
     let w = (rect.width() - 8.0) / n;
+    // At a large interface size a label may not fit its segment: then all
+    // show their icons alone, the labels as tips.
+    let label_font = theme::font(Weight::SemiBold, 13.0);
+    let labelled = items.iter().all(|(_, label)| {
+        let g = ui
+            .painter()
+            .layout_no_wrap(label.to_string(), label_font.clone(), Color32::WHITE);
+        g.size().x <= w - 8.0
+    });
     let mut clicked = None;
     for (i, (icon, label)) in items.iter().enumerate() {
         let seg = Rect::from_min_size(
@@ -924,6 +959,7 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, &str)], selected: usize) -> Option
             Vec2::new(w, h - 8.0),
         );
         let resp = ui.interact(seg, ui.id().with(("segment", i)), Sense::click());
+        let resp = if labelled { resp } else { resp.tip(label) };
         let t = anim(ui, resp.id, resp.hovered());
         let s = anim(ui, resp.id.with("sel"), i == selected);
         let p = ui.painter();
@@ -952,20 +988,23 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, &str)], selected: usize) -> Option
             p.rect_filled(seg, CornerRadius::same(12), bg);
         }
         let fg = mix(mix(theme::TEXT_2, theme::TEXT, t), Color32::WHITE, s);
+        let lift = if labelled { 10.0 } else { 0.0 };
         p.text(
-            seg.center() - Vec2::new(0.0, 10.0),
+            seg.center() - Vec2::new(0.0, lift),
             Align2::CENTER_CENTER,
             *icon,
             theme::icon(22.0),
             mix(fg, theme::ACCENT_HOVER, s),
         );
-        p.text(
-            seg.center() + Vec2::new(0.0, 14.0),
-            Align2::CENTER_CENTER,
-            *label,
-            theme::font(Weight::SemiBold, 13.0),
-            fg,
-        );
+        if labelled {
+            p.text(
+                seg.center() + Vec2::new(0.0, 14.0),
+                Align2::CENTER_CENTER,
+                *label,
+                label_font.clone(),
+                fg,
+            );
+        }
         if resp.clicked() {
             clicked = Some(i);
         }
@@ -974,18 +1013,20 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, &str)], selected: usize) -> Option
 }
 
 /// A top-level navigation tab: icon and label, an accent bar under the
-/// selected one.
-pub fn nav_tab(ui: &mut Ui, icon: &str, label: &str, selected: bool) -> Response {
+/// selected one. With `labelled` false, its icon alone, the label as a tip.
+pub fn nav_tab(ui: &mut Ui, icon: &str, label: &str, selected: bool, labelled: bool) -> Response {
     let text = ui.painter().layout_no_wrap(
-        label.to_string(),
+        if labelled { label } else { "" }.to_string(),
         theme::font(Weight::SemiBold, 18.0),
         Color32::WHITE,
     );
     let icon_g = ui
         .painter()
         .layout_no_wrap(icon.to_string(), theme::icon(22.0), Color32::WHITE);
-    let content = icon_g.size().x + 8.0 + text.size().x;
+    let gap = if labelled { 8.0 } else { 0.0 };
+    let content = icon_g.size().x + gap + text.size().x;
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(content + 28.0, 52.0), Sense::click());
+    let resp = if labelled { resp } else { resp.tip(label) };
     if ui.is_rect_visible(rect) {
         let t = anim(ui, resp.id, resp.hovered());
         let s = anim(ui, resp.id.with("sel"), selected);
@@ -1225,5 +1266,55 @@ mod tests {
         assert_eq!(display_title("180_SBS"), "180_SBS");
         // Tags mid-title stay: only trailing ones are format.
         assert_eq!(display_title("Top 360 Moments_LR"), "Top 360 Moments");
+    }
+
+    #[test]
+    fn the_thumbstick_steps_the_slider_it_points_at() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let pass = |events: Vec<egui::Event>, value: &mut f32| {
+            let mut rect = Rect::NOTHING;
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    rect = ui
+                        .horizontal(|ui| slider_control(ui, value, -10.0..=10.0, 0.0, "%", 1))
+                        .response
+                        .rect;
+                });
+            });
+            rect
+        };
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut v = 1.23;
+        let rect = pass(vec![], &mut v);
+        assert!(!over_slider(&ctx));
+        let on_rail = Pos2::new(rect.right() - 120.0, rect.center().y);
+        pass(vec![egui::Event::PointerMoved(on_rail)], &mut v);
+        assert!(over_slider(&ctx));
+
+        // Steps of the shown precision, landing on it.
+        pass(vec![key(egui::Key::ArrowRight)], &mut v);
+        assert!((v - 1.3).abs() < 1e-5, "{v}");
+        pass(
+            vec![key(egui::Key::ArrowLeft), key(egui::Key::ArrowLeft)],
+            &mut v,
+        );
+        assert!((v - 1.1).abs() < 1e-5, "{v}");
+
+        let below = Pos2::new(on_rail.x, rect.bottom() + 100.0);
+        pass(vec![egui::Event::PointerMoved(below)], &mut v);
+        assert!(!over_slider(&ctx));
+        pass(vec![key(egui::Key::ArrowRight)], &mut v);
+        assert!((v - 1.1).abs() < 1e-5, "not pointed at: {v}");
     }
 }

@@ -64,6 +64,8 @@ pub struct QuadDraw {
     pub uv: [Vec2; 2],
     /// Linear, premultiplied tint.
     pub color: [f32; 4],
+    /// Drawn for this eye only (0 left, 1 right); `None` for both.
+    pub eye: Option<usize>,
 }
 
 impl QuadDraw {
@@ -83,6 +85,7 @@ impl QuadDraw {
             corners: [p(-w, h), p(w, h), p(w, -h), p(-w, -h)],
             uv: [Vec2::ZERO, Vec2::ONE],
             color: [opacity; 4],
+            eye: None,
         }
     }
 
@@ -96,6 +99,7 @@ impl QuadDraw {
             corners: [a - side, a + side, b + side, b - side],
             uv: [Vec2::ZERO, Vec2::ONE],
             color,
+            eye: None,
         }
     }
 }
@@ -1128,7 +1132,7 @@ impl Renderer {
                     color: q.color,
                 });
             }
-            sets.push(set);
+            sets.push((set, q.eye));
         }
         {
             let slot = &mut self.slots[slot_idx];
@@ -1225,13 +1229,16 @@ impl Renderer {
                         bytemuck::bytes_of(&vp),
                     );
                     d.cmd_bind_vertex_buffers(cmd, 0, &[slot.quad_vb.buffer], &[0]);
-                    for (i, set) in sets.iter().enumerate() {
+                    for (i, &(set, only)) in sets.iter().enumerate() {
+                        if only.is_some_and(|e| e != eye) {
+                            continue;
+                        }
                         d.cmd_bind_descriptor_sets(
                             cmd,
                             vk::PipelineBindPoint::GRAPHICS,
                             self.quad_pl,
                             0,
-                            &[*set],
+                            &[set],
                             &[],
                         );
                         d.cmd_draw(cmd, 6, 1, (i * 6) as u32, 0);

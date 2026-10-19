@@ -473,8 +473,14 @@ impl Player {
     pub fn load_subtitles(&self, src: Arc<dyn ByteSource>, name: &str) -> Result<usize> {
         let cues = subtitle::load_file(src, name)?;
         let n = cues.len();
-        *lock(&self.shared.external_cues) = cues;
+        self.set_external_subtitles(cues);
         Ok(n)
+    }
+
+    /// Shows `cues` (from [`subtitle::load_file`]) in place of the
+    /// embedded subtitles.
+    pub fn set_external_subtitles(&self, cues: Vec<Cue>) {
+        *lock(&self.shared.external_cues) = cues;
     }
 
     pub fn clear_external_subtitles(&self) {
@@ -605,6 +611,23 @@ impl Drop for Player {
     }
 }
 
+/// Whether the demuxer has read far enough ahead for now: `ahead` seconds
+/// and `bytes` of packets queued, `video_packets` of them video.
+fn read_enough(
+    cfg: &PlayerConfig,
+    ahead: f64,
+    bytes: usize,
+    video_packets: usize,
+    audio_starved: bool,
+) -> bool {
+    let budget = ahead > cfg.read_ahead_secs || bytes > cfg.read_ahead_bytes || video_packets > 600;
+    // Starved audio may read past the budget to find its next packets, but
+    // only so far: audio that ended early, or lags far behind, would
+    // otherwise queue the rest of the video in memory.
+    let ceiling = bytes > cfg.read_ahead_bytes.saturating_mul(4) || video_packets > 2400;
+    ceiling || (budget && !audio_starved)
+}
+
 /// Which queued frame (times oldest first) to show at clock `t`; the ones
 /// before it are dropped. The oldest due frame at most `late` behind the
 /// clock, so frames a software decoder delivers in bursts while behind are
@@ -693,9 +716,7 @@ fn demux_thread(
             .unwrap_or(0.0);
         let bytes = sh.vpkts.bytes.load(Ordering::Relaxed) + sh.apkts.bytes.load(Ordering::Relaxed);
         let audio_starved = sh.has_audio.load(Ordering::Acquire) && sh.apkts.len() < 4;
-        if (ahead > cfg.read_ahead_secs || bytes > cfg.read_ahead_bytes || sh.vpkts.len() > 600)
-            && !audio_starved
-        {
+        if read_enough(&cfg, ahead, bytes, sh.vpkts.len(), audio_starved) {
             let c = sh.ctl();
             let _ = sh.ctl_cv.wait_timeout(c, Duration::from_millis(10));
             continue;
@@ -725,14 +746,7 @@ fn demux_thread(
                     if let Some((_, dec)) = subs.0.iter_mut().find(|(i, _)| *i == idx)
                         && let Some(cue) = subtitle::decode_packet(dec, &pkt)
                     {
-                        let mut cues = lock(&sh.cues);
-                        if !cues
-                            .iter()
-                            .any(|c| (c.start - cue.start).abs() < 1e-3 && c.text == cue.text)
-                        {
-                            let pos = cues.partition_point(|c| c.start <= cue.start);
-                            cues.insert(pos, cue);
-                        }
+                        subtitle::add(&mut lock(&sh.cues), cue);
                     }
                     pkt.unref();
                 } else {
@@ -1099,6 +1113,22 @@ mod tests {
         let st = p.stats();
         assert_eq!(st.video_decoder, "h264");
         assert_eq!(st.audio_sink, "null");
+    }
+
+    #[test]
+    fn starved_audio_reads_ahead_only_so_far() {
+        let cfg = PlayerConfig {
+            read_ahead_secs: 4.0,
+            read_ahead_bytes: 1000,
+            ..cfg()
+        };
+        assert!(!read_enough(&cfg, 1.0, 500, 10, false));
+        assert!(read_enough(&cfg, 5.0, 500, 10, false), "time");
+        assert!(read_enough(&cfg, 1.0, 1500, 10, false), "bytes");
+        // Waiting for audio packets: past the budget, up to four times it.
+        assert!(!read_enough(&cfg, 60.0, 3000, 10, true));
+        assert!(read_enough(&cfg, 60.0, 4001, 10, true));
+        assert!(read_enough(&cfg, 60.0, 100, 2401, true));
     }
 
     #[test]

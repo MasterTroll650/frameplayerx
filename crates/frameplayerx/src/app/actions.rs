@@ -168,6 +168,7 @@ impl App {
             Action::DismissCrashReport => self.ui.crash = None,
             Action::Recenter => self.recenter(),
             Action::TogglePassthrough => self.settings.passthrough = !self.settings.passthrough,
+            Action::ToggleFollow => self.settings.follow = !self.settings.follow,
             Action::ShowBrowser(show) => {
                 self.show_browser = show;
                 if show {
@@ -176,6 +177,10 @@ impl App {
                 }
             }
             Action::Quit => self.quit = true,
+            Action::Restart => {
+                self.quit = true;
+                self.restart = true;
+            }
             Action::HideControls => {
                 self.ui_visible = false;
                 self.show_browser = false;
@@ -207,9 +212,13 @@ impl App {
         }
     }
 
-    fn close_playback(&mut self) {
+    /// Closes the video, and drops one still opening.
+    pub(super) fn close_playback(&mut self) {
         if let Some(p) = self.playback.take() {
             p.close(&self.services.library);
+        }
+        if self.ui.opening.take().is_some() {
+            self.open_seq += 1;
         }
         if let Some(h) = self.services.haptics() {
             h.clear();
@@ -240,14 +249,19 @@ impl App {
     fn select_subtitle_file(&mut self, i: Option<usize>) {
         let Some(p) = &mut self.playback else { return };
         p.player.clear_external_subtitles();
-        p.active_subtitle_file = None;
-        let Some(file) = i.and_then(|i| p.subtitle_files.get(i)) else {
+        let picked = i.and_then(|i| p.subtitle_files.get(i).map(|f| (i, f.clone())));
+        p.active_subtitle_file = picked.as_ref().map(|(i, _)| *i);
+        let Some((index, file)) = picked else {
             return;
         };
-        match playback::load_subtitle_file(&self.services.opener, &p.player, file) {
-            Ok(()) => p.active_subtitle_file = i,
-            Err(e) => self.ui.toast(format!("Subtitles: {e}")),
-        }
+        // Read on a job: the file may be on a server.
+        let opener = self.services.opener.clone();
+        let seq = self.open_seq;
+        self.jobs.spawn("subtitles", move || Job::Subtitles {
+            seq,
+            index,
+            result: playback::read_subtitle_file(&opener, &file),
+        });
     }
 
     fn clear_history(&mut self) {

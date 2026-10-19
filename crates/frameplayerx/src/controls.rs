@@ -17,7 +17,8 @@
 //!
 //! Fixed: the trigger clicks (on empty space it shows or hides the
 //! controls), grip + trigger drags the picture, both grips recenter, and a
-//! thumbstick pointed at a list pages it left / right.
+//! thumbstick pointed at a list pages it left / right (at a slider, steps
+//! it).
 
 use crate::bindings::{Axis, AxisAction, Bindings, Button, ButtonAction};
 use fp_xr::Hand;
@@ -58,7 +59,7 @@ pub enum Cmd {
     ToggleUi,
     ToggleAdjust,
     TogglePassthrough,
-    /// Page the pointed-at list: -1 back, +1 forward.
+    /// Page the pointed-at list, or step the slider: -1 back, +1 forward.
     Page(i32),
 }
 
@@ -183,9 +184,10 @@ impl Controls {
             let s = hand.stick;
             let grip = gripping(hand);
             if !grip && (!playing || ctx.over_ui) {
-                // Menus: left / right pages the list pointed at (up / down
-                // scrolls it, through the pointer).
-                if let Some(dir) = self.step(i, Axis::StickX, s.x, ctx.dt, false) {
+                // Menus: left / right pages the list pointed at, or steps the
+                // slider, repeating while held (up / down scrolls, through
+                // the pointer).
+                if let Some(dir) = self.step(i, Axis::StickX, s.x, ctx.dt, true) {
                     out.push(Cmd::Page(dir));
                 }
                 continue;

@@ -5,9 +5,10 @@ use crate::input::{Actions, InputState};
 use crate::{Error, Result, XrContextExt};
 use ash::vk::{self, Handle};
 use fp_render::{EyeTarget, EyeView, Gpu};
-use glam::{Mat4, Quat, Vec3};
+use glam::{Quat, Vec3};
 use openxr as xr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// What happened while polling events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,8 +71,13 @@ pub struct XrSession {
     running: bool,
     pub blend_mode: xr::EnvironmentBlendMode,
     event_buf: xr::EventDataBuffer,
-    /// Offset of our play space within the runtime's LOCAL space.
-    space_origin: (Vec3, Quat),
+    /// When the system's recenter (holding the Steam button) moves the play
+    /// space; see [`XrSession::recentred_by`].
+    recenter_at: Option<xr::Time>,
+    /// Dashboard closes left before the first focus, and when the last was;
+    /// see [`XrSession::close_dashboard_at_launch`].
+    launch_closes: u32,
+    launch_closed_at: Option<Instant>,
     quads: std::collections::HashMap<u64, QuadLayer>,
 }
 
@@ -107,9 +113,21 @@ impl XrSession {
             unsafe { ctx.instance.create_session::<xr::Vulkan>(ctx.system, &info) }
                 .ctx("xrCreateSession")?;
         actions.attach(&session)?;
+        // STAGE, as games use. With LOCAL SteamVR switches to seated
+        // tracking, and the dashboard opened at Quit came up far too high.
+        let base = if session
+            .enumerate_reference_spaces()
+            .ctx("xrEnumerateReferenceSpaces")?
+            .contains(&xr::ReferenceSpaceType::STAGE)
+        {
+            xr::ReferenceSpaceType::STAGE
+        } else {
+            xr::ReferenceSpaceType::LOCAL
+        };
         let space = session
-            .create_reference_space(xr::ReferenceSpaceType::LOCAL, xr::Posef::IDENTITY)
-            .ctx("local space")?;
+            .create_reference_space(base, xr::Posef::IDENTITY)
+            .ctx("play space")?;
+        log::info!("play space {base:?}");
         let view_space = session
             .create_reference_space(xr::ReferenceSpaceType::VIEW, xr::Posef::IDENTITY)
             .ctx("view space")?;
@@ -179,7 +197,9 @@ impl XrSession {
             running: false,
             blend_mode,
             event_buf: xr::EventDataBuffer::new(),
-            space_origin: (Vec3::ZERO, Quat::IDENTITY),
+            recenter_at: None,
+            launch_closes: 3,
+            launch_closed_at: None,
             quads: std::collections::HashMap::new(),
         })
     }
@@ -217,6 +237,27 @@ impl XrSession {
         }
     }
 
+    /// Closes SteamVR's dashboard while it covers the app before the app's
+    /// first focus, 3 times at most, 2 s apart: Steam leaves it, with its
+    /// game menu, in front of a non-Steam shortcut it starts, where SteamVR
+    /// closes it for a store game. Call once per loop iteration.
+    pub fn close_dashboard_at_launch(&mut self) {
+        match self.state {
+            xr::SessionState::FOCUSED => self.launch_closes = 0,
+            xr::SessionState::VISIBLE
+                if self.launch_closes > 0
+                    && self
+                        .launch_closed_at
+                        .is_none_or(|t| t.elapsed() >= Duration::from_secs(2)) =>
+            {
+                self.ctx.hide_steamvr_dashboard();
+                self.launch_closes -= 1;
+                self.launch_closed_at = Some(Instant::now());
+            }
+            _ => {}
+        }
+    }
+
     /// Processes runtime events. Call once per loop iteration.
     pub fn poll(&mut self) -> Result<SessionEvent> {
         let mut result = SessionEvent::None;
@@ -247,6 +288,15 @@ impl XrSession {
                         _ => {}
                     }
                 }
+                xr::Event::ReferenceSpaceChangePending(e)
+                    if matches!(
+                        e.reference_space_type(),
+                        xr::ReferenceSpaceType::STAGE | xr::ReferenceSpaceType::LOCAL
+                    ) =>
+                {
+                    log::info!("system recenter");
+                    self.recenter_at = Some(e.change_time());
+                }
                 xr::Event::InstanceLossPending(_) => return Ok(SessionEvent::Exit),
                 _ => {}
             }
@@ -255,6 +305,19 @@ impl XrSession {
             result = SessionEvent::Running;
         }
         Ok(result)
+    }
+
+    /// Whether the system recentered and the moved play space is in use by
+    /// `time` (a frame's predicted display time); true once per recenter.
+    /// The space stays level, so it only turns to where the head faces.
+    pub fn recentred_by(&mut self, time: xr::Time) -> bool {
+        match self.recenter_at {
+            Some(at) if time.as_nanos() >= at.as_nanos() => {
+                self.recenter_at = None;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Waits for the next frame, locates the views and acquires swapchain
@@ -522,31 +585,6 @@ impl XrSession {
     /// Interaction profiles that accepted bindings.
     pub fn bindings(&self) -> &[crate::BoundProfile] {
         &self.actions.bound
-    }
-
-    /// Makes the current head direction (yaw only) and position the origin.
-    pub fn recenter(&mut self, time: xr::Time) -> Result<()> {
-        let loc = self
-            .view_space
-            .locate(&self.space, time)
-            .ctx("locate head")?;
-        let (p, q) = crate::pose(loc.pose);
-        let (yaw, _, _) = q.to_euler(glam::EulerRot::YXZ);
-        // New origin in the old space: head position at floor-relative height
-        // kept, facing the head's yaw.
-        let origin = crate::to_pose(Vec3::new(p.x, 0.0, p.z), Quat::from_rotation_y(yaw));
-        // Compose with the existing reference offset by re-creating the space
-        // relative to the runtime's LOCAL origin.
-        let current = self.space_origin;
-        let combined = Mat4::from_rotation_translation(current.1, current.0)
-            * Mat4::from_rotation_translation(crate::pose(origin).1, crate::pose(origin).0);
-        let (_, rot, pos) = combined.to_scale_rotation_translation();
-        self.space = self
-            .session
-            .create_reference_space(xr::ReferenceSpaceType::LOCAL, crate::to_pose(pos, rot))
-            .ctx("recenter")?;
-        self.space_origin = (pos, rot);
-        Ok(())
     }
 }
 

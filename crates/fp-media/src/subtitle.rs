@@ -60,7 +60,9 @@ pub fn ass_to_text(ass: &str) -> String {
 }
 
 /// Converts a decoded `AVSubtitle` to cues. `pkt_pts`/`pkt_duration` are in
-/// seconds and used when the subtitle carries no end time.
+/// seconds and used when the subtitle carries no end time. One with nothing
+/// in it, which picture subtitles send to clear the screen, is an empty cue
+/// (see [`add`]).
 pub(crate) fn convert(sub: &ff::AVSubtitle, pkt_pts: f64, pkt_duration: f64) -> Option<Cue> {
     let base = if sub.pts != ff::AV_NOPTS_VALUE {
         sub.pts as f64 / ff::AV_TIME_BASE as f64
@@ -68,6 +70,14 @@ pub(crate) fn convert(sub: &ff::AVSubtitle, pkt_pts: f64, pkt_duration: f64) -> 
         pkt_pts
     };
     let start = base + sub.start_display_time as f64 / 1000.0;
+    if sub.num_rects == 0 {
+        return Some(Cue {
+            start,
+            end: start,
+            text: String::new(),
+            bitmaps: Vec::new(),
+        });
+    }
     let end = if sub.end_display_time > 0 && sub.end_display_time != u32::MAX {
         base + sub.end_display_time as f64 / 1000.0
     } else if pkt_duration > 0.0 {
@@ -181,13 +191,34 @@ pub fn load_file(src: Arc<dyn ByteSource>, name: &str) -> Result<Vec<Cue>> {
         if pkt.stream_index() == idx
             && let Some(c) = decode_packet(&mut dec, &pkt)
         {
-            cues.push(c);
+            add(&mut cues, c);
         }
         pkt.unref();
     }
     check(0, "")?;
-    cues.sort_by(|a, b| a.start.total_cmp(&b.start));
     Ok(cues)
+}
+
+/// Adds a decoded cue to `cues`, kept in order of start. Picture subtitles
+/// (PGS, DVD) give no end time: a picture lasts until the empty cue that
+/// clears the screen, or until the next picture replaces it.
+pub(crate) fn add(cues: &mut Vec<Cue>, cue: Cue) {
+    let clear = cue.text.is_empty() && cue.bitmaps.is_empty();
+    for c in cues.iter_mut() {
+        let replaced = !cue.bitmaps.is_empty() && !c.bitmaps.is_empty();
+        if (clear || replaced) && c.start < cue.start && cue.start < c.end {
+            c.end = cue.start;
+        }
+    }
+    // A seek reads cues again.
+    let known = cues
+        .iter()
+        .any(|c| (c.start - cue.start).abs() < 1e-3 && c.text == cue.text);
+    if clear || known {
+        return;
+    }
+    let at = cues.partition_point(|c| c.start <= cue.start);
+    cues.insert(at, cue);
 }
 
 /// Cues visible at time `t`.
@@ -227,6 +258,36 @@ mod tests {
         assert_eq!(cues[1].text, "Second line\nwith break");
         assert_eq!(active(&cues, 0.5).len(), 1);
         assert_eq!(active(&cues, 1.1).len(), 0);
+    }
+
+    #[test]
+    fn a_picture_shows_until_cleared_or_replaced() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/pgs.mkv");
+        let cues = load_file(Arc::new(FileSource::open(&path).unwrap()), "pgs.mkv").unwrap();
+        let times: Vec<_> = cues.iter().map(|c| (c.start, c.end)).collect();
+        assert_eq!(times, [(0.5, 1.5), (2.0, 3.0), (3.0, 3.5)]);
+        assert!(
+            cues.iter()
+                .all(|c| c.bitmaps.len() == 1 && c.text.is_empty())
+        );
+        assert_eq!(active(&cues, 1.0).len(), 1);
+        assert_eq!(active(&cues, 1.7).len(), 0);
+        assert_eq!(active(&cues, 2.5).len(), 1);
+    }
+
+    #[test]
+    fn text_cues_may_overlap() {
+        let cue = |start: f64, end: f64, text: &str| Cue {
+            start,
+            end,
+            text: text.into(),
+            bitmaps: Vec::new(),
+        };
+        let mut cues = Vec::new();
+        add(&mut cues, cue(1.0, 4.0, "Over there"));
+        add(&mut cues, cue(2.0, 3.0, "Sign"));
+        add(&mut cues, cue(1.0, 4.0, "Over there"));
+        assert_eq!(cues, [cue(1.0, 4.0, "Over there"), cue(2.0, 3.0, "Sign")]);
     }
 
     #[test]

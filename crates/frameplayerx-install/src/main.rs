@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use fp_updater::{Channel, DEFAULT_MANIFEST_URL};
+use fp_updater::Channel;
 use frameplayerx_install::device::DeviceInfo;
 use frameplayerx_install::ops::{
     self, DEFAULT_INSTALL_DIR, InstallOptions, ShortcutMethod, UninstallOptions,
@@ -90,9 +90,10 @@ struct InstallArgs {
     #[arg(long, default_value = "stable", value_parser = parse_channel)]
     channel: Channel,
 
-    /// Signed release manifest to download from.
-    #[arg(long, default_value = DEFAULT_MANIFEST_URL, value_name = "URL")]
-    manifest_url: String,
+    /// Signed release manifest to download from, instead of the newest
+    /// release on the channel.
+    #[arg(long, value_name = "URL")]
+    manifest_url: Option<String>,
 
     /// Name shown in the Steam library.
     #[arg(long, default_value = DEFAULT_APP_NAME)]
@@ -255,7 +256,7 @@ fn install(args: InstallArgs) -> Result<()> {
         }
         None => {
             let cache = std::env::temp_dir().join("frameplayerx-install");
-            ops::fetch_latest(&args.manifest_url, args.channel, &cache)?
+            ops::fetch_latest(args.manifest_url.as_deref(), args.channel, &cache)?
         }
     };
     let version = ops::install_zip(
@@ -295,7 +296,7 @@ mod tests {
         assert_eq!(cli.install.conn.host, "frame");
         assert_eq!(cli.install.dir, "frameplayerx");
         assert_eq!(cli.install.channel, Channel::Stable);
-        assert_eq!(cli.install.manifest_url, DEFAULT_MANIFEST_URL);
+        assert_eq!(cli.install.manifest_url, None);
 
         let cli = Cli::try_parse_from([
             "frameplayerx-install",

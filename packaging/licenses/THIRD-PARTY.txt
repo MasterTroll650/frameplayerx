@@ -15,8 +15,14 @@ dav1d 1.5.3 (statically linked into libavcodec)
   Licence: BSD 2-Clause, text in dav1d-COPYING.txt.
   Source: https://code.videolan.org/videolan/dav1d
 
+zlib 1.3.1 (statically linked into libavformat and libavcodec)
+  Licence: zlib licence, text in zlib-LICENSE.txt.
+  Source: https://zlib.net/fossils/zlib-1.3.1.tar.gz
+
 Rust crates compiled into the frameplayerx binary are under MIT, Apache-2.0,
-BSD, ISC, Zlib, Unicode-3.0 or MPL-2.0 licences; see rust-crates.txt.
+BSD, ISC, Zlib, Unicode-3.0 and similar licences. rust-crates.txt lists them,
+then gives the licence, copyright and notice files each one ships;
+rust-crates-extra.txt has the licences of those that ship none.
 
 Fonts embedded in the frameplayerx binary:
 
@@ -27,6 +33,12 @@ Inter 4.1 by Rasmus Andersson (Regular, Medium, SemiBold, Bold; subset)
 Phosphor Icons (regular and fill weights)
   Licence: MIT, text in Phosphor-MIT.txt.
   Source: https://github.com/phosphor-icons/core
+
+Ubuntu Light, Hack, Noto Emoji and emoji-icon-font, which egui builds in as
+  fallbacks for symbols and emoji
+  Licences: Ubuntu Font Licence 1.0, Hack's licence, SIL Open Font
+  License 1.1 and MIT; texts in rust-crates-extra.txt.
+  Source: https://github.com/emilk/egui (crates/epaint_default_fonts)
 
 Pictures embedded in the frameplayerx binary:
 

@@ -214,11 +214,24 @@ pub fn webdav_to_http(url: &str) -> String {
         ("webdav://", "http://"),
         ("dav://", "http://"),
     ] {
-        if url.len() >= from.len() && url[..from.len()].eq_ignore_ascii_case(from) {
+        if url
+            .as_bytes()
+            .get(..from.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(from.as_bytes()))
+        {
             return format!("{to}{}", &url[from.len()..]);
         }
     }
     url.to_string()
+}
+
+/// Whether two http(s) URLs are on the same origin: scheme, host and port
+/// (a scheme's default port when none is given).
+pub fn same_origin(a: &str, b: &str) -> bool {
+    match (url::Url::parse(a), url::Url::parse(b)) {
+        (Ok(a), Ok(b)) => a.origin().is_tuple() && a.origin() == b.origin(),
+        _ => false,
+    }
 }
 
 /// True for `http://` and `https://` URLs.
@@ -248,7 +261,8 @@ pub fn html_unescape(s: &str) -> String {
     while let Some(i) = rest.find('&') {
         out.push_str(&rest[..i]);
         rest = &rest[i..];
-        let Some(end) = rest[..rest.len().min(12)].find(';') else {
+        // Bytes, as twelve bytes in may fall inside a character.
+        let Some(end) = rest.bytes().take(12).position(|b| b == b';') else {
             out.push('&');
             rest = &rest[1..];
             continue;
@@ -429,10 +443,30 @@ mod tests {
     }
 
     #[test]
+    fn origins() {
+        assert!(same_origin(
+            "http://nas:8080/feed",
+            "http://NAS:8080/v/a.mp4"
+        ));
+        assert!(same_origin("https://h/x", "https://h:443/y"));
+        assert!(same_origin("http://u:p@h/x", "http://h/y"));
+        assert!(!same_origin("http://h:8080/x", "http://h:8081/x"));
+        assert!(!same_origin("https://h/x", "http://h/x"));
+        assert!(!same_origin("http://h/x", "http://cdn.h/x"));
+        assert!(!same_origin("smb://h/s", "smb://h/s"));
+        assert!(!same_origin("http://h/x", "not a url"));
+    }
+
+    #[test]
     fn webdav_schemes() {
         assert_eq!(webdav_to_http("webdavs://h/x"), "https://h/x");
         assert_eq!(webdav_to_http("DAV://h/x"), "http://h/x");
         assert_eq!(webdav_to_http("http://h/x"), "http://h/x");
+        assert_eq!(
+            webdav_to_http("https://日本.example/media/"),
+            "https://日本.example/media/"
+        );
+        assert_eq!(webdav_to_http("dav://日本/x"), "http://日本/x");
         assert!(is_http_url("HTTPS://x"));
         assert!(!is_http_url("smb://x"));
     }
@@ -444,6 +478,9 @@ mod tests {
             "a & b <c> 'd' \""
         );
         assert_eq!(html_unescape("AT&T &bogus; &"), "AT&T &bogus; &");
+        // Non-ASCII text right after an entity.
+        assert_eq!(html_unescape("&amp;日本語.mp4"), "&日本語.mp4");
+        assert_eq!(html_unescape("a&日本語;b"), "a&日本語;b");
     }
 
     #[test]

@@ -72,7 +72,11 @@ APPS = {
         'exes': ('frameplayerx.sh',),
         'icons': ['assets/steam/icon.png'],
         'art': 'assets/steam',
-        'process': 'frameplayerx/frameplayerx',
+        # The binary, relative to the install folder.
+        'process': 'frameplayerx',
+        # What every copy's folder is called (any case), so a folder that
+        # merely holds a launcher, such as Downloads, is never taken for one.
+        'folder_word': 'frameplayer',
     },
 }
 
@@ -221,9 +225,20 @@ def extract(zip_path, dest):
                 os.chmod(target, mode)
 
 
-def running(app, dest):
-    pattern = os.path.join(dest, app['process'])
-    return subprocess.run(['pgrep', '-f', pattern], capture_output=True).returncode == 0
+def running(app, dest, proc='/proc'):
+    """Whether the copy in dest is running: a process whose executable is its
+    binary (still so after it was replaced on disk)."""
+    binary = os.path.realpath(os.path.join(dest, app['process']))
+    for pid in os.listdir(proc):
+        if not pid.isdigit():
+            continue
+        try:
+            exe = os.readlink(os.path.join(proc, pid, 'exe'))
+        except OSError:
+            continue
+        if exe.removesuffix(' (deleted)') == binary:
+            return True
+    return False
 
 
 def install_files(app, zip_path, dest):
@@ -665,8 +680,10 @@ def old_versions(app, dest, entries, home=HOME):
     one for dest, which is updated in place (so it keeps its app id and the
     SteamVR settings stored under it); an entry with the app's own name and
     no known launcher counts as that one. Folders: the ones those entries
-    start from, and dest's leftover siblings; only folders in home that hold
-    one of the app's launchers, never dest itself or a folder ending in .keep."""
+    start from, and dest's leftover siblings; only folders in home named for
+    the app that hold one of its launchers, never dest, a folder holding it,
+    or one ending in .keep. An entry starting from any other folder (say
+    Downloads) goes, and the folder stays."""
     keep_exe = os.path.join(dest, app['exe'])
 
     def current(name, exe):
@@ -680,6 +697,8 @@ def old_versions(app, dest, entries, home=HOME):
     def consider(folder):
         f = os.path.realpath(folder)
         if (f != real_dest and f.startswith(home + os.sep) and not f.endswith('.keep')
+                and not real_dest.startswith(f + os.sep)
+                and app['folder_word'] in os.path.basename(f).lower()
                 and holds_copy(app, f)):
             folders.add(f)
 

@@ -15,7 +15,7 @@ use crate::error::{Error, Result};
 use crate::http::{HttpClient, HttpOptions, HttpReply};
 use crate::json::{array, boolean, get, num, text, uint};
 use crate::sidecar::Sidecars;
-use crate::urlutil::redact;
+use crate::urlutil::{encode_form_value, redact};
 use crate::watch::{WatchEvent, WatchKind, WatchSession};
 use fp_core::format::{Projection, StereoLayout, VideoFormat, detect_from_name};
 use fp_core::source::{ByteSource, Entry, EntryKind};
@@ -400,7 +400,7 @@ impl MediaBrowserSource {
                 insecure_tls: config.insecure_tls,
                 ..HttpOptions::default()
             };
-            let authed_client = HttpClient::new_with_header(opts, &authed_header);
+            let authed_client = HttpClient::new_with_header(opts, &authed_header, &base_url);
             Some(AuthState {
                 user_id: uid.clone(),
                 access_token: token.clone(),
@@ -480,7 +480,7 @@ impl MediaBrowserSource {
             .unwrap_or_else(|| "MediaBrowser Server".to_string());
 
         let authed_header = mediabrowser_header(Some(&access_token));
-        let authed_client = HttpClient::new_with_header(opts, &authed_header);
+        let authed_client = HttpClient::new_with_header(opts, &authed_header, &self.base_url);
 
         let mut auth = lock(&self.auth);
         *auth = Some(AuthState {
@@ -612,7 +612,7 @@ impl MediaBrowserSource {
             ..HttpOptions::default()
         };
         let client = HttpClient::new(opts.clone(), None);
-        let encoded_secret = crate::urlutil::encode_form_value(secret);
+        let encoded_secret = encode_form_value(secret);
         let url = format!(
             "{}/QuickConnect/Connect?secret={encoded_secret}",
             self.base_url
@@ -642,7 +642,8 @@ impl MediaBrowserSource {
                 uid
             } else {
                 let authed_header = mediabrowser_header(Some(&token));
-                let authed_client = HttpClient::new_with_header(opts.clone(), &authed_header);
+                let authed_client =
+                    HttpClient::new_with_header(opts.clone(), &authed_header, &self.base_url);
                 let me_url = format!("{}/Users/Me", self.base_url);
                 authed_client
                     .request(
@@ -688,7 +689,7 @@ impl MediaBrowserSource {
         };
 
         let authed_header = mediabrowser_header(Some(&token));
-        let authed_client = HttpClient::new_with_header(opts, &authed_header);
+        let authed_client = HttpClient::new_with_header(opts, &authed_header, &self.base_url);
 
         let info_url = format!("{}/System/Info/Public", self.base_url);
         let server_name = client
@@ -770,9 +771,9 @@ impl Source for MediaBrowserSource {
                         &StartIndex={start_index}&Limit={PAGE_SIZE}"
                     );
                     let v = self.api_get_json(&query)?;
-                    let items = parse_items(&v, &self.base_url);
-                    let count = items.len();
-                    all_entries.extend(items);
+                    // The page as sent: one of only photos still goes on.
+                    let count = array(&v, "Items").len();
+                    all_entries.extend(parse_items(&v, &self.base_url));
 
                     let total = num(&v, "TotalRecordCount").map(|n| n as usize).unwrap_or(0);
                     start_index += PAGE_SIZE;
@@ -795,16 +796,24 @@ impl Source for MediaBrowserSource {
 
     fn open(&self, location: &str) -> Result<Arc<dyn ByteSource>> {
         let id = item_id(location)?;
-        let (client, _) = self.client()?;
+        let (client, user_id) = self.client()?;
         let token = self.auth_credentials().map(|(t, _)| t).unwrap_or_default();
-        let url = if token.is_empty() {
-            format!("{}/Videos/{}/stream?static=true", self.base_url, id)
-        } else {
-            format!(
-                "{}/Videos/{}/stream?static=true&api_key={token}",
-                self.base_url, id
-            )
-        };
+        let mut url = format!("{}/Videos/{}/stream?static=true", self.base_url, id);
+        // The version the details and subtitles came from (max height);
+        // otherwise the server streams its own choice.
+        let version = self
+            .api_get_json(&format!("/Users/{user_id}/Items/{id}?Fields=MediaSources"))
+            .ok()
+            .and_then(|v| {
+                best_media_source(array(&v, "MediaSources"), self.max_height)
+                    .and_then(|ms| text(ms, "Id"))
+            });
+        if let Some(ms) = version {
+            url.push_str(&format!("&MediaSourceId={}", encode_form_value(&ms)));
+        }
+        if !token.is_empty() {
+            url.push_str(&format!("&api_key={token}"));
+        }
         Ok(Arc::new(client.open(&url)?))
     }
 
