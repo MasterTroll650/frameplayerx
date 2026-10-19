@@ -13,7 +13,7 @@ use tasks::Job;
 use crate::jobs::Jobs;
 use crate::playback::{self, OpenRequest, Opened, Playback};
 use crate::services::Services;
-use crate::settings::Settings;
+use crate::settings::{Settings, UI_SCALES};
 use crate::ui::{
     self, Action, Browse, QuickConnect, Screen, SourcePage, SourceView, UiState, UpdateStatus, View,
 };
@@ -133,6 +133,9 @@ pub struct App {
     /// Yaw/pitch when a dome drag began.
     drag_start: Option<(f32, f32)>,
     panel_drag: Option<PanelDrag>,
+    /// Where the adjust panel was placed from when the trigger went down on
+    /// it (see `place_panels`).
+    adjust_hold: Option<Mat4>,
     /// Where the library and adjust panels sit now (saved when let go).
     offsets: crate::settings::PanelOffsets,
     /// The list the open video came from, for next/previous.
@@ -177,6 +180,15 @@ fn panel(px: [u32; 2], width_m: f32, ppp: f32) -> Panel {
 /// A panel whose body is `px` pixels and `width_m` wide, floating with
 /// room round it for its shadow (ui::widgets::SHADOW_ROOM) at the same
 /// scale.
+/// A [`floating_panel`] with a fixed layout (the control bar, the
+/// keyboard), which grows with Settings › Interface size: its texture is
+/// fine enough for the largest size from the start.
+fn growing_panel(px: [u32; 2], width_m: f32, ppp: f32) -> Panel {
+    let s = *UI_SCALES.end();
+    let px = px.map(|n| (n as f32 * s).round() as u32);
+    floating_panel(px, width_m, ppp * s).growing()
+}
+
 fn floating_panel(px: [u32; 2], width_m: f32, ppp: f32) -> Panel {
     let room = ui::widgets::SHADOW_ROOM;
     let extra = [
@@ -193,9 +205,9 @@ impl App {
         let thumbs = ui::thumbs::Thumbs::new(services.opener.clone());
         let mut panels = [
             floating_panel([1600, 1000], 1.8, 1.25),
-            floating_panel([1400, 268], 1.2, 1.25),
+            growing_panel([1400, 268], 1.2, 1.25),
             floating_panel([900, 1020], 0.75, 1.25),
-            floating_panel([1200, 456], 1.0, 1.25),
+            growing_panel([1200, 456], 1.0, 1.25),
         ];
         panels[BAR].refresh = Some(Duration::from_millis(250));
         panels[ADJUST].refresh = Some(Duration::from_millis(1000));
@@ -240,6 +252,7 @@ impl App {
             trigger_prev: [0.0; 2],
             drag_start: None,
             panel_drag: None,
+            adjust_hold: None,
             offsets: Default::default(),
             queue: Vec::new(),
             queue_pos: 0,
@@ -259,6 +272,7 @@ impl App {
             quit: false,
         };
         app.offsets = app.settings.panel_offsets;
+        app.apply_ui_scale();
         app.check_last_run();
         app.rescan(false);
         app.connect_devices();
@@ -267,6 +281,17 @@ impl App {
             app.start_check = Some(app.update_check);
         }
         app
+    }
+
+    /// Settings › Interface size, on every panel.
+    fn apply_ui_scale(&mut self) {
+        let scale = self
+            .settings
+            .ui_scale
+            .clamp(*UI_SCALES.start(), *UI_SCALES.end());
+        for p in self.panels.iter_mut() {
+            p.set_scale(scale);
+        }
     }
 
     pub fn set_about(&mut self, about: Vec<(String, String)>) {
@@ -355,9 +380,7 @@ impl App {
             }
         }
         if self.settings.ui_scale != self.saved.ui_scale {
-            for p in self.panels.iter_mut() {
-                p.ctx.set_zoom_factor(self.settings.ui_scale);
-            }
+            self.apply_ui_scale();
         }
         if let Err(e) = self.settings.save(&Settings::path()) {
             log::warn!("saving settings: {e}");
@@ -421,7 +444,19 @@ impl App {
     /// Publishes playback status to remotes and the haptics engine.
     fn publish_status(&mut self) {
         let Some(p) = &self.playback else {
-            self.last_status = None;
+            // Once, so remotes and haptics stop following the closed video.
+            if self.last_status.take().is_some() {
+                let idle = PlaybackStatus {
+                    sampled_at_ms: fp_core::playback::now_ms(),
+                    ..Default::default()
+                };
+                if let Some(h) = self.services.haptics() {
+                    h.set_status(idle.clone());
+                }
+                if let Some(r) = &self.services.remote {
+                    r.publish(&idle);
+                }
+            }
             return;
         };
         let s = p.status();

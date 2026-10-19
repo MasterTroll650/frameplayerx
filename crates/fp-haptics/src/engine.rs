@@ -27,7 +27,7 @@ use crate::script::Script;
 use crate::settings::{AxisSettings, HapticsSettings};
 use fp_core::playback::PlaybackStatus;
 use fp_core::sync::lock;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
@@ -79,6 +79,9 @@ struct Slot {
     dev: Box<dyn Device>,
     mode: SyncMode,
     axis_state: BTreeMap<Axis, AxisState>,
+    /// Outputs that hold their level ([`Axis::rest`]) and were last sent
+    /// something else: they are set to rest once nothing drives them.
+    live: BTreeSet<Axis>,
     last_send_ms: Option<u64>,
     /// Script devices: a play command is due.
     pending_play: bool,
@@ -105,6 +108,7 @@ impl Slot {
     fn halt(&mut self, now: u64) {
         let r = self.dev.stop();
         self.record(r);
+        self.live.clear();
         self.last_send_ms = Some(now);
         self.resync();
     }
@@ -158,6 +162,7 @@ impl Core {
             mode: dev.sync_mode(),
             dev,
             axis_state: BTreeMap::new(),
+            live: BTreeSet::new(),
             last_send_ms: None,
             pending_play: true,
             last_error: None,
@@ -328,15 +333,18 @@ fn plan_moves(
 ) -> Vec<AxisMove> {
     let mut moves = Vec::new();
     for axis in slot.dev.axes() {
-        if !settings.sends(&slot.name, axis) {
-            continue;
-        }
         let ax: AxisSettings = settings.axis(axis);
-        let next = match scripts.get(&axis) {
+        let next = match scripts
+            .get(&axis)
+            .filter(|_| settings.sends(&slot.name, axis))
+        {
             Some(sc) => sc
                 .next_action_after(t)
                 .map(|(i, a)| (i, ax.apply(a.pos), a.at)),
-            None if axis == Axis::V0 && settings.stroke_to_vibration => {
+            None if axis == Axis::V0
+                && settings.stroke_to_vibration
+                && settings.sends(&slot.name, axis) =>
+            {
                 scripts.get(&Axis::L0).and_then(|sc| {
                     sc.next_action_after(t).map(|(i, a)| {
                         let level = (sc.speed_into(i) / VIBRATION_FULL_SPEED).clamp(0.0, 1.0);
@@ -347,6 +355,18 @@ fn plan_moves(
             None => None,
         };
         let Some((index, target, at)) = next else {
+            // Nothing drives it now (turned off, or its script is over): an
+            // output that holds its level would keep going.
+            if let Some(rest) = axis.rest()
+                && slot.live.remove(&axis)
+            {
+                slot.axis_state.remove(&axis);
+                moves.push(AxisMove {
+                    axis,
+                    pos: rest,
+                    duration_ms: 1,
+                });
+            }
             continue;
         };
         let state = slot.axis_state.entry(axis).or_default();
@@ -366,6 +386,13 @@ fn plan_moves(
         }
         state.last_index = Some(index);
         state.last_pos = Some(pos);
+        if let Some(rest) = axis.rest() {
+            if pos == rest {
+                slot.live.remove(&axis);
+            } else {
+                slot.live.insert(axis);
+            }
+        }
         moves.push(AxisMove {
             axis,
             pos,
@@ -900,7 +927,8 @@ pub(crate) mod tests {
         assert_eq!(m[1].axis, Axis::R0);
         assert_eq!(m[1].pos, 1.0);
 
-        // Disabling R0 for this device, then L0 globally.
+        // Disabling R0 for this device, then L0 globally. R0 holds its
+        // speed on a rotator, so it is set to rest once.
         s.device_mut("fake").disabled_axes.insert(Axis::R0);
         core.set_settings(s.clone(), T0 + 10);
         core.tick(T0 + 10);
@@ -909,7 +937,11 @@ pub(crate) mod tests {
         let Event::Move(m) = &ev[0] else {
             panic!("{ev:?}")
         };
-        assert_eq!(m.iter().map(|m| m.axis).collect::<Vec<_>>(), vec![Axis::L0]);
+        assert_eq!(
+            m.iter().map(|m| (m.axis, m.pos)).collect::<Vec<_>>()[1..],
+            [(Axis::R0, 0.5)]
+        );
+        assert_eq!(m[0].axis, Axis::L0);
         s.axis_mut(Axis::L0).enabled = false;
         core.set_settings(s.clone(), T0 + 20);
         core.tick(T0 + 20);
@@ -994,6 +1026,22 @@ pub(crate) mod tests {
             T0 + 10,
         );
         core.tick(T0 + 10);
+        assert_eq!(take(&log), vec![mv(Axis::V0, 0.0, 1)], "set to rest");
+        core.tick(T0 + 20);
+        assert!(take(&log).is_empty());
+    }
+
+    #[test]
+    fn vibration_rests_when_its_script_ends_first() {
+        let (dev, log) = FakeDevice::new(&[Axis::V0]);
+        let mut core = core_with(dev, vec![(Axis::V0, script(&[(0, 0.0), (100, 0.8)]))]);
+        core.set_status(playing(0.0, 1.0, T0));
+        core.tick(T0);
+        assert_eq!(take(&log), vec![mv(Axis::V0, 0.8, 100)]);
+        // The video plays on past the script's last action.
+        core.tick(T0 + 200);
+        assert_eq!(take(&log), vec![mv(Axis::V0, 0.0, 1)]);
+        core.tick(T0 + 400);
         assert!(take(&log).is_empty());
     }
 

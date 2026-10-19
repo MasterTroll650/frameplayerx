@@ -12,8 +12,13 @@ pub struct Panel {
     pub id: Option<PanelId>,
     /// Texture size in pixels.
     pub px: [u32; 2],
-    /// Pixels per egui point.
+    /// Pixels per egui point, before [`Panel::set_scale`].
     pub ppp: f32,
+    /// Settings › Interface size.
+    scale: f32,
+    /// See [`Panel::growing`].
+    grows: bool,
+    base_size: Vec2,
     /// Size in metres.
     pub size: Vec2,
     /// Centre and orientation; the panel faces +Z of this transform.
@@ -40,6 +45,9 @@ impl Panel {
             id: None,
             px,
             ppp,
+            scale: 1.0,
+            grows: false,
+            base_size: size,
             size,
             pose: Mat4::IDENTITY,
             visible: false,
@@ -55,7 +63,40 @@ impl Panel {
 
     /// Size of the panel in egui points.
     pub fn points(&self) -> egui::Vec2 {
-        egui::vec2(self.px[0] as f32 / self.ppp, self.px[1] as f32 / self.ppp)
+        let ppp = if self.grows {
+            self.ppp
+        } else {
+            self.ppp * self.scale
+        };
+        egui::vec2(self.px[0] as f32 / ppp, self.px[1] as f32 / ppp)
+    }
+
+    /// A panel whose layout is fixed (it cannot scroll or wrap): the whole
+    /// panel grows with [`Panel::set_scale`] instead of its contents. Its
+    /// texture should already be fine enough for the largest scale.
+    pub fn growing(mut self) -> Panel {
+        self.grows = true;
+        self
+    }
+
+    /// Size in metres at scale 1.
+    pub fn base_size(&self) -> Vec2 {
+        self.base_size
+    }
+
+    /// Makes text and controls `scale` times their size: laid out afresh in
+    /// the same panel, or for a [`Panel::growing`] one, the panel itself
+    /// that much bigger.
+    pub fn set_scale(&mut self, scale: f32) {
+        self.scale = scale;
+        if self.grows {
+            self.size = self.base_size * scale;
+        } else {
+            // egui's zoom is its pixels per point: the panel's times the
+            // scale.
+            self.ctx.set_pixels_per_point(self.ppp * scale);
+        }
+        self.repaint_requested = true;
     }
 
     /// Ray hit: distance along the ray and position in egui points.
@@ -112,6 +153,17 @@ impl Panel {
         }
     }
 
+    /// egui's input for one pass: the queued events, over the whole panel.
+    fn input(&mut self, time: f64) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, self.points())),
+            time: Some(time),
+            events: std::mem::take(&mut self.events),
+            focused: true,
+            ..Default::default()
+        }
+    }
+
     /// Runs egui with the queued input and paints into the renderer.
     pub fn paint(
         &mut self,
@@ -122,13 +174,7 @@ impl Panel {
         if self.id.is_none() {
             self.id = Some(renderer.create_panel(self.px[0], self.px[1])?);
         }
-        let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, self.points())),
-            time: Some(time),
-            events: std::mem::take(&mut self.events),
-            focused: true,
-            ..Default::default()
-        };
+        let input = self.input(time);
         let hovered = self.hovered;
         let mut ui = ui;
         let out = self.ctx.run(input, |ctx| {
@@ -465,6 +511,11 @@ impl Pointer {
         self.hovered_panel
     }
 
+    /// The panel the trigger is held on, from press to release.
+    pub fn pressed(&self) -> Option<usize> {
+        self.pressed_panel
+    }
+
     /// Pointer rays and cursor dots to draw.
     pub fn quads(&self, eye: Vec3, show: bool) -> Vec<QuadDraw> {
         let mut out = Vec::new();
@@ -697,6 +748,42 @@ mod tests {
             left.dot(fwd) > 0.0 && (left - Vec3::new(0.0, 1.6, 0.0)).dot(right) < 0.0,
             "positive yaw is to the left"
         );
+    }
+
+    #[test]
+    fn a_scaled_panel_still_fills_its_texture() {
+        let pass = |p: &mut Panel| {
+            let input = p.input(0.0);
+            let (mut size, mut ppp) = (egui::Vec2::ZERO, 0.0);
+            let _ = p.ctx.run(input, |ctx| {
+                size = ctx.screen_rect().size();
+                ppp = ctx.pixels_per_point();
+            });
+            (size, ppp)
+        };
+        let mut p = Panel::new([1000, 600], Vec2::new(1.0, 0.6), 1.25);
+        // egui lays out its very first pass at a size of its own; a panel
+        // has been painted a few times before its scale can change.
+        pass(&mut p);
+        pass(&mut p);
+        for scale in [1.4, 0.8, 1.0, 1.4] {
+            p.set_scale(scale);
+            let (size, ppp) = pass(&mut p);
+            assert!((ppp - 1.25 * scale).abs() < 1e-5, "{scale}: ppp {ppp}");
+            assert!((size.x * ppp - 1000.0).abs() < 0.5, "{scale}: {size:?}");
+            assert!((size.y * ppp - 600.0).abs() < 0.5, "{scale}: {size:?}");
+        }
+    }
+
+    #[test]
+    fn a_growing_panel_keeps_its_layout_and_grows() {
+        let mut p = Panel::new([1500, 600], Vec2::new(1.0, 0.4), 1.5).growing();
+        let points = p.points();
+        p.set_scale(1.5);
+        assert_eq!(p.points(), points, "same layout");
+        assert_eq!(p.size, Vec2::new(1.5, 0.6));
+        p.set_scale(1.0);
+        assert_eq!(p.size, p.base_size());
     }
 
     #[test]

@@ -121,6 +121,14 @@ impl App {
         if hidden != self.services.library.hidden() {
             self.services.library.set_hidden(hidden);
             self.ui.invalidate();
+            // Locking a source stops its video.
+            if self
+                .playback
+                .as_ref()
+                .is_some_and(|p| self.locked_source_of(&p.request).is_some())
+            {
+                self.close_playback();
+            }
             // A folder being browsed may hold what is hidden now.
             if let Some(b) = self.ui.folder_mut() {
                 let (source, location) = (b.source.clone(), b.location.clone());

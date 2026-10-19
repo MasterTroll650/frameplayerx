@@ -28,7 +28,7 @@ use crate::json::{array, get, num, text, uint};
 use crate::sidecar::Sidecars;
 use crate::urlutil::last_segment;
 use crate::urlutil::{
-    encode_form_value, encode_segment, is_http_url, percent_decode, redact, resolve,
+    encode_form_value, encode_segment, is_http_url, percent_decode, redact, resolve, same_origin,
 };
 use crate::watch::{WatchEvent, WatchKind, WatchSession};
 use crate::{Source, dir_entry};
@@ -244,7 +244,7 @@ impl FeedSource {
             protocol,
             id: config.id.clone(),
             name: config.name.clone(),
-            client: HttpClient::new(opts, creds.as_ref()),
+            client: HttpClient::new(opts, creds.as_ref()).scoped_to(&url),
             url,
             creds,
             max_height: config.max_height,
@@ -257,7 +257,7 @@ impl FeedSource {
     /// `with_media` asks a HereSphere video document for its media sources.
     fn fetch(&self, url: &str, with_media: Option<bool>) -> Result<Option<Value>> {
         match self.protocol {
-            Protocol::DeoVr => match &self.creds {
+            Protocol::DeoVr => match self.creds_for(url) {
                 Some(c) => {
                     let form = format!(
                         "login={}&password={}",
@@ -274,7 +274,7 @@ impl FeedSource {
                 None => self.json("GET", url, None, None),
             },
             Protocol::HereSphere => {
-                let mut body = self.heresphere_body();
+                let mut body = self.heresphere_body(url);
                 if let Some(m) = with_media {
                     body.insert("needsMediaSource".into(), Value::Bool(m));
                 }
@@ -284,11 +284,17 @@ impl FeedSource {
         }
     }
 
-    /// A HereSphere request's body: the user's name and password, when
-    /// configured.
-    fn heresphere_body(&self) -> serde_json::Map<String, Value> {
+    /// The login, for the feed's own server only: a document it links to
+    /// on another host gets none.
+    fn creds_for(&self, url: &str) -> Option<&Credentials> {
+        self.creds.as_ref().filter(|_| same_origin(url, &self.url))
+    }
+
+    /// A HereSphere request's body for `url`: the user's name and password,
+    /// when configured and `url` is on the feed's server.
+    fn heresphere_body(&self, url: &str) -> serde_json::Map<String, Value> {
         let mut body = serde_json::Map::new();
-        if let Some(c) = &self.creds {
+        if let Some(c) = self.creds_for(url) {
             body.insert("username".into(), Value::String(c.username.clone()));
             body.insert("password".into(), Value::String(c.password.clone()));
         }
@@ -420,7 +426,7 @@ impl SceneFeed for FeedSource {
                 "a DeoVR feed takes no favourites".into(),
             ));
         }
-        let mut body = self.heresphere_body();
+        let mut body = self.heresphere_body(url);
         body.insert("isFavorite".into(), Value::Bool(favorite));
         body.insert("needsMediaSource".into(), Value::Bool(false));
         let bytes = serde_json::to_vec(&Value::Object(body))?;

@@ -298,7 +298,7 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
             "Interface size",
             Some("Text and buttons on every panel."),
             &mut s.ui_scale,
-            0.8..=1.5,
+            crate::settings::UI_SCALES,
             1.0,
             "×",
             2,

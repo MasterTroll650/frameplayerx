@@ -53,6 +53,12 @@ pub(super) enum Job {
     /// The last run crashed: the report the user may send.
     CrashReport(Box<crate::crash::Report>),
     CrashSent(Result<(), String>),
+    /// Subtitle file `index` of the video opened as `seq`, read.
+    Subtitles {
+        seq: u64,
+        index: usize,
+        result: Result<Vec<fp_media::Cue>, String>,
+    },
 }
 
 impl App {
@@ -311,6 +317,23 @@ impl App {
             }
             Job::Toast(t) => self.ui.toast(t),
             Job::Done => {}
+            Job::Subtitles { seq, index, result } => {
+                // Only for the same video, and the file still picked.
+                let Some(p) = self.playback.as_mut().filter(|_| seq == self.open_seq) else {
+                    return;
+                };
+                if p.active_subtitle_file != Some(index) {
+                    return;
+                }
+                match result {
+                    Ok(cues) => p.player.set_external_subtitles(cues),
+                    Err(e) => {
+                        p.active_subtitle_file = None;
+                        self.ui.toast(format!("Subtitles: {e}"));
+                    }
+                }
+                self.ui.invalidate();
+            }
             Job::Dlna(r) => {
                 self.ui.dlna_searching = false;
                 match r {
@@ -377,6 +400,10 @@ impl App {
         }
         self.ui.opening = None;
         match r {
+            // Its source was locked while it opened.
+            Ok(o) if self.locked_source_of(&o.playback.request).is_some() => {
+                o.playback.close(&self.services.library);
+            }
             Ok(o) => {
                 if let Some(old) = self.playback.take() {
                     old.close(&self.services.library);

@@ -339,3 +339,88 @@ fn revoked_quick_connect_sign_in_says_pair_again() {
         assert!(err.to_string().contains("Quick Connect"), "{err}");
     }
 }
+
+/// A Jellyfin answering sign-in and `routes` (path, JSON), streaming
+/// `video` for any `/Videos/.../stream`.
+fn jellyfin(routes: Vec<(String, String)>, video: Arc<Vec<u8>>) -> TestServer {
+    TestServer::start(move |req: &Req| {
+        let json = |body: &str| resp(200, body, &[("Content-Type", "application/json")]);
+        match req.path() {
+            "/System/Info/Public" => {
+                json(r#"{"ProductName":"Jellyfin Server","Version":"10.9.11"}"#)
+            }
+            "/Users/AuthenticateByName" => json(r#"{"AccessToken":"tok","User":{"Id":"u1"}}"#),
+            p if p.starts_with("/Videos/") && p.ends_with("/stream") => {
+                serve_bytes(req, &video, true)
+            }
+            p => match routes.iter().find(|(path, _)| path == p) {
+                Some((_, body)) => json(body),
+                None => resp(404, "", &[]),
+            },
+        }
+    })
+}
+
+#[test]
+fn max_height_picks_the_version_that_plays() {
+    let item = r#"{"Id":"beach","Name":"Beach","Type":"Movie","MediaSources":[
+        {"Id":"ms_8k","MediaStreams":[{"Index":0,"Type":"Video","Width":8192,"Height":4096}]},
+        {"Id":"ms_4k","MediaStreams":[{"Index":0,"Type":"Video","Width":4096,"Height":2048}]}]}"#;
+    let server = jellyfin(
+        vec![("/Users/u1/Items/beach".into(), item.into())],
+        Arc::new(pattern(10_000)),
+    );
+    let mut config = mediabrowser_config(server.url(""), Some(Credentials::new("a", "b")));
+    config.max_height = Some(2160);
+    let src = build(&SourceConfig::MediaBrowser(config)).unwrap();
+    let f = src
+        .open(&format!("mb:{}#item=beach", server.url("")))
+        .unwrap();
+    assert_eq!(f.size(), Some(10_000));
+    let streams: Vec<String> = server
+        .requests()
+        .into_iter()
+        .filter(|r| r.path() == "/Videos/beach/stream")
+        .map(|r| r.url)
+        .collect();
+    assert!(!streams.is_empty());
+    assert!(
+        streams.iter().all(|u| u.contains("MediaSourceId=ms_4k")),
+        "{streams:?}"
+    );
+}
+
+#[test]
+fn folders_page_past_items_that_are_not_videos() {
+    // A first page of nothing but photos, then the video.
+    let photos: Vec<String> = (0..200)
+        .map(|i| format!(r#"{{"Id":"p{i}","Name":"Photo {i}","Type":"Photo"}}"#))
+        .collect();
+    let server = TestServer::start(move |req: &Req| {
+        let json = |body: String| resp(200, body, &[("Content-Type", "application/json")]);
+        match req.path() {
+            "/System/Info/Public" => {
+                json(r#"{"ProductName":"Jellyfin Server","Version":"10.9.11"}"#.into())
+            }
+            "/Users/AuthenticateByName" => {
+                json(r#"{"AccessToken":"tok","User":{"Id":"u1"}}"#.into())
+            }
+            "/Users/u1/Items" if req.url.contains("StartIndex=0") => json(format!(
+                r#"{{"Items":[{}],"TotalRecordCount":201}}"#,
+                photos.join(",")
+            )),
+            "/Users/u1/Items" => json(
+                r#"{"Items":[{"Id":"v1","Name":"Trip","Type":"Video"}],"TotalRecordCount":201}"#
+                    .into(),
+            ),
+            _ => resp(404, "", &[]),
+        }
+    });
+    let config = mediabrowser_config(server.url(""), Some(Credentials::new("a", "b")));
+    let src = build(&SourceConfig::MediaBrowser(config)).unwrap();
+    let entries = src
+        .list(Some(&format!("mb:{}#folder=f1", server.url(""))))
+        .unwrap();
+    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["Trip"]);
+}

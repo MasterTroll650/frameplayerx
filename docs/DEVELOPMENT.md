@@ -309,8 +309,9 @@ headset and copies the text and JSON reports into `probe-reports/`.
    - Pushing a `vX.Y.Z` or `vX.Y.Z-anything` tag releases exactly that
      version (a pre-release if it has a `-`).
 
-The app finds updates in GitHub's release list: the highest version on
-the Stable channel without a `-` part, on Beta any version. In-app updates
+The app and `frameplayerx-install` find releases in GitHub's release list:
+the highest version on the Stable channel without a `-` part, on Beta any
+version (`releases/latest` never offers a pre-release). In-app updates
 and `frameplayerx-install` without `--zip` only install releases whose
 manifest is signed with the release key.
 

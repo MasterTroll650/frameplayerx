@@ -592,9 +592,16 @@ fn event_stream(w: &mut dyn Write, ctx: &Ctx, cookie: Option<&str>) -> std::io::
 
     let mut tracker = ChangeTracker::new(STREAM_REFRESH);
     let mut last_write = Instant::now();
+    let token = ctx.shared.token();
     while !ctx.stop.load(Ordering::Acquire) {
         let now = now_ms();
-        if let Some(snap) = tracker.poll(&ctx.shared.status, now) {
+        let snap = tracker.poll(&ctx.shared.status, now);
+        // A new token unpairs every phone, this one too: checked after
+        // taking the status, so none published after it goes out.
+        if ctx.shared.token() != token {
+            break;
+        }
+        if let Some(snap) = snap {
             let json =
                 serde_json::to_string(&WebStatus::now(&snap)).map_err(std::io::Error::other)?;
             w.write_all(format!("data: {json}\n\n").as_bytes())?;

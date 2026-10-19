@@ -943,6 +943,15 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, &str)], selected: usize) -> Option
     }
     let n = items.len().max(1) as f32;
     let w = (rect.width() - 8.0) / n;
+    // At a large interface size a label may not fit its segment: then all
+    // show their icons alone, the labels as tips.
+    let label_font = theme::font(Weight::SemiBold, 13.0);
+    let labelled = items.iter().all(|(_, label)| {
+        let g = ui
+            .painter()
+            .layout_no_wrap(label.to_string(), label_font.clone(), Color32::WHITE);
+        g.size().x <= w - 8.0
+    });
     let mut clicked = None;
     for (i, (icon, label)) in items.iter().enumerate() {
         let seg = Rect::from_min_size(
@@ -950,6 +959,7 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, &str)], selected: usize) -> Option
             Vec2::new(w, h - 8.0),
         );
         let resp = ui.interact(seg, ui.id().with(("segment", i)), Sense::click());
+        let resp = if labelled { resp } else { resp.tip(label) };
         let t = anim(ui, resp.id, resp.hovered());
         let s = anim(ui, resp.id.with("sel"), i == selected);
         let p = ui.painter();
@@ -978,20 +988,23 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, &str)], selected: usize) -> Option
             p.rect_filled(seg, CornerRadius::same(12), bg);
         }
         let fg = mix(mix(theme::TEXT_2, theme::TEXT, t), Color32::WHITE, s);
+        let lift = if labelled { 10.0 } else { 0.0 };
         p.text(
-            seg.center() - Vec2::new(0.0, 10.0),
+            seg.center() - Vec2::new(0.0, lift),
             Align2::CENTER_CENTER,
             *icon,
             theme::icon(22.0),
             mix(fg, theme::ACCENT_HOVER, s),
         );
-        p.text(
-            seg.center() + Vec2::new(0.0, 14.0),
-            Align2::CENTER_CENTER,
-            *label,
-            theme::font(Weight::SemiBold, 13.0),
-            fg,
-        );
+        if labelled {
+            p.text(
+                seg.center() + Vec2::new(0.0, 14.0),
+                Align2::CENTER_CENTER,
+                *label,
+                label_font.clone(),
+                fg,
+            );
+        }
         if resp.clicked() {
             clicked = Some(i);
         }
@@ -1000,18 +1013,20 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, &str)], selected: usize) -> Option
 }
 
 /// A top-level navigation tab: icon and label, an accent bar under the
-/// selected one.
-pub fn nav_tab(ui: &mut Ui, icon: &str, label: &str, selected: bool) -> Response {
+/// selected one. With `labelled` false, its icon alone, the label as a tip.
+pub fn nav_tab(ui: &mut Ui, icon: &str, label: &str, selected: bool, labelled: bool) -> Response {
     let text = ui.painter().layout_no_wrap(
-        label.to_string(),
+        if labelled { label } else { "" }.to_string(),
         theme::font(Weight::SemiBold, 18.0),
         Color32::WHITE,
     );
     let icon_g = ui
         .painter()
         .layout_no_wrap(icon.to_string(), theme::icon(22.0), Color32::WHITE);
-    let content = icon_g.size().x + 8.0 + text.size().x;
+    let gap = if labelled { 8.0 } else { 0.0 };
+    let content = icon_g.size().x + gap + text.size().x;
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(content + 28.0, 52.0), Sense::click());
+    let resp = if labelled { resp } else { resp.tip(label) };
     if ui.is_rect_visible(rect) {
         let t = anim(ui, resp.id, resp.hovered());
         let s = anim(ui, resp.id.with("sel"), selected);

@@ -14,7 +14,7 @@
 use crate::cache::{CacheOptions, CacheStats, CachedSource, RangeFetch};
 use crate::config::Credentials;
 use crate::error::{Error, Result};
-use crate::urlutil::{basic_auth_value, redact, split_credentials};
+use crate::urlutil::{basic_auth_value, redact, same_origin, split_credentials};
 use fp_core::ByteSource;
 use fp_core::sync::lock;
 use std::io::{self, Read};
@@ -140,6 +140,9 @@ type Response = http::Response<ureq::Body>;
 pub struct HttpClient {
     agent: ureq::Agent,
     auth: Option<String>,
+    /// The server `auth` is for: other origins a server links to (a CDN,
+    /// another host's media or scripts) get no credentials.
+    scope: Option<String>,
     opts: HttpOptions,
 }
 
@@ -173,14 +176,27 @@ impl HttpClient {
         HttpClient {
             agent: ureq::Agent::new_with_config(config),
             auth: credentials.map(basic_auth_value),
+            scope: None,
             opts,
         }
     }
 
+    /// Sends the configured credentials only to `url`'s origin (scheme,
+    /// host and port).
+    pub fn scoped_to(mut self, url: &str) -> HttpClient {
+        self.scope = Some(url.to_string());
+        self
+    }
+
     /// Creates a client with a custom `Authorization` header value sent with
-    /// every request. Used by sources that need a non-Basic auth scheme
-    /// (e.g. the MediaBrowser `Authorization: MediaBrowser ...` header).
-    pub fn new_with_header(opts: HttpOptions, auth_header: impl Into<String>) -> HttpClient {
+    /// every request to `scope`'s origin. Used by sources that need a
+    /// non-Basic auth scheme (e.g. the MediaBrowser `Authorization:
+    /// MediaBrowser ...` header).
+    pub fn new_with_header(
+        opts: HttpOptions,
+        auth_header: impl Into<String>,
+        scope: &str,
+    ) -> HttpClient {
         let tls = ureq::tls::TlsConfig::builder()
             .disable_verification(opts.insecure_tls)
             .build();
@@ -197,6 +213,7 @@ impl HttpClient {
         HttpClient {
             agent: ureq::Agent::new_with_config(config),
             auth: Some(auth_header.into()),
+            scope: Some(scope.to_string()),
             opts,
         }
     }
@@ -247,6 +264,11 @@ impl HttpClient {
         let auth = self
             .auth
             .clone()
+            .filter(|_| {
+                self.scope
+                    .as_deref()
+                    .is_none_or(|s| same_origin(s, &clean_url))
+            })
             .or_else(|| url_creds.as_ref().map(basic_auth_value));
         let mut builder = http::Request::builder().method(method).uri(&clean_url);
         for (k, v) in headers {

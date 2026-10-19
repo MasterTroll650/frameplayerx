@@ -282,22 +282,36 @@ impl App {
         self.panels[ADJUST].visible = self.panels[BAR].visible && self.ui.adjust_open;
     }
 
-    /// Where each panel goes. During 180°/360° video the control bar turns
-    /// with the picture's yaw and pitch, so it stays below what you watch.
-    /// (A flat screen doesn't turn, and the adjust panel stays put so its
-    /// yaw/pitch sliders don't move away from the pointer.)
+    /// Where each panel goes. During 180°/360° video the control bar, and
+    /// the adjust panel beside it, turn with the picture's yaw and pitch, so
+    /// they stay below what you watch. (A flat screen doesn't turn.)
     fn place_panels(&mut self, anchor: Mat4, kb_target: Option<usize>) {
         let bar_anchor = self.picture_anchor(anchor);
+        // The adjust panel holds still while the trigger is held on it: its
+        // yaw and pitch sliders turn the picture, and would carry the panel
+        // away from the pointer. It catches up when let go.
+        let held = self.pointer.pressed() == Some(ADJUST);
+        let adjust_anchor = match self.adjust_hold.filter(|_| held) {
+            Some(hold) => hold,
+            None => {
+                self.adjust_hold = held.then_some(bar_anchor);
+                bar_anchor
+            }
+        };
+        // To the right, clear of the control bar's end as it grows with the
+        // interface size.
+        let half_angle = |w: f32| (w / 2.0 / 1.05).atan().to_degrees();
+        let bar = &self.panels[BAR];
+        let beside = -48.0 - (half_angle(bar.size.x) - half_angle(bar.base_size().x));
         let [my, mp] = self.offsets.main;
         let [ay, ap] = self.offsets.adjust;
         self.panels[MAIN].pose = place_around(anchor, my, mp, 1.5, -0.08);
         self.panels[BAR].pose = place(bar_anchor, 0.0, 1.05, -0.42, 28.0);
-        // To the right, clear of the control bar's end.
-        self.panels[ADJUST].pose = place_around(bar_anchor, -48.0 + ay, ap, 1.15, -0.08);
+        self.panels[ADJUST].pose = place_around(adjust_anchor, beside + ay, ap, 1.15, -0.08);
         // The keyboard sits below the panel it types into, turned with it, so
         // it is where that panel was moved to.
         let (kb_from, [ky, kp]) = match kb_target {
-            Some(ADJUST) => (bar_anchor, [-48.0 + ay, ap]),
+            Some(ADJUST) => (adjust_anchor, [beside + ay, ap]),
             Some(_) => (anchor, [my, mp]),
             None => (anchor, [0.0, 0.0]),
         };

@@ -471,7 +471,10 @@ impl FrameConverter {
             ff::AV_PIX_FMT_P010LE => Some(PixelLayout::P010),
             PIX_FMT_Q10C => Some(PixelLayout::Q10c),
             _ => None,
-        };
+        }
+        // Rows stored bottom up (negative strides) go through swscale, which
+        // turns them the right way up.
+        .filter(|_| f.linesize[..3].iter().all(|&l| l >= 0));
         let color = color_info(f);
         let (width, height) = (f.width.max(0) as u32, f.height.max(0) as u32);
         if let Some(layout) = layout {
@@ -491,13 +494,14 @@ impl FrameConverter {
         // SAFETY: pixdesc lookups and swscale on valid frames; the new frame is
         // allocated with av_frame_get_buffer before scaling into it.
         unsafe {
-            let desc = ff::av_pix_fmt_desc_get(f.format);
+            // Read before any error path frees the frame `f` points into.
+            let format = f.format;
+            let desc = ff::av_pix_fmt_desc_get(format);
             if desc.is_null() || ((*desc).flags & ff::AV_PIX_FMT_FLAG_HWACCEL as u64 != 0) {
                 let mut s = src;
                 ff::av_frame_free(&mut s);
                 return Err(Error::Unsupported(format!(
-                    "unsupported pixel format {}",
-                    f.format
+                    "unsupported pixel format {format}"
                 )));
             }
             let deep = (*desc).comp[0].depth > 8;
@@ -527,10 +531,15 @@ impl FrameConverter {
                 if self.sws.is_null() {
                     let mut s = src;
                     ff::av_frame_free(&mut s);
-                    return Err(Error::Unsupported(format!("pixel format {}", f.format)));
+                    return Err(Error::Unsupported(format!("pixel format {format}")));
                 }
             }
             let mut dst = ff::av_frame_alloc();
+            if dst.is_null() {
+                let mut s = src;
+                ff::av_frame_free(&mut s);
+                return Err(Error::Unsupported("frame allocation failed".into()));
+            }
             (*dst).format = dst_fmt;
             (*dst).width = f.width;
             (*dst).height = f.height;
@@ -601,5 +610,58 @@ mod tests {
             r[1][0],
             r[2][0]
         );
+    }
+
+    /// A planar frame `w`×`h` whose luma rows hold their row number.
+    fn numbered_rows(w: i32, h: i32, format: ff::AVPixelFormat) -> *mut ff::AVFrame {
+        // SAFETY: a fresh frame, checked, given its own buffers.
+        unsafe {
+            let f = ff::av_frame_alloc();
+            assert!(!f.is_null());
+            (*f).format = format;
+            (*f).width = w;
+            (*f).height = h;
+            assert!(ff::av_frame_get_buffer(f, 0) >= 0);
+            for y in 0..h {
+                let row = (*f).data[0].offset((y * (*f).linesize[0]) as isize);
+                std::ptr::write_bytes(row, y as u8, w as usize);
+            }
+            for i in 1..3 {
+                std::ptr::write_bytes((*f).data[i], 128, ((*f).linesize[i] * h / 2) as usize);
+            }
+            f
+        }
+    }
+
+    #[test]
+    fn bottom_up_rows_come_out_the_right_way_up() {
+        let (w, h) = (16, 16);
+        let f = numbered_rows(w, h, ff::AV_PIX_FMT_YUV420P);
+        // SAFETY: each plane's pointer moves to its last row, inside its own
+        // buffer; the buffers (not these pointers) are what gets freed.
+        unsafe {
+            for i in 0..3 {
+                let rows = if i == 0 { h } else { h / 2 };
+                (*f).data[i] = (*f).data[i].offset(((rows - 1) * (*f).linesize[i]) as isize);
+                (*f).linesize[i] = -(*f).linesize[i];
+            }
+        }
+        let frame = FrameConverter::default().convert(f, 0.0, 0.0, 0).unwrap();
+        let p = frame.packed_planes();
+        let firsts: Vec<u8> = (0..h as usize).map(|y| p[0][y * w as usize]).collect();
+        let want: Vec<u8> = (0..h as u8).rev().collect();
+        assert_eq!(firsts, want);
+    }
+
+    #[test]
+    fn an_unsupported_format_reports_itself() {
+        let f = numbered_rows(16, 16, ff::AV_PIX_FMT_YUV420P);
+        // A format FFmpeg has no description for.
+        // SAFETY: only the format number changes.
+        unsafe { (*f).format = 12345 };
+        let Err(e) = FrameConverter::default().convert(f, 0.0, 0.0, 0) else {
+            panic!("converted an unknown format");
+        };
+        assert!(e.to_string().contains("12345"), "{e}");
     }
 }

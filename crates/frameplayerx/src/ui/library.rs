@@ -199,14 +199,30 @@ fn nav(ui: &mut egui::Ui, v: &mut View) {
         ui.add_space(4.0);
         wordmark(ui, 22.0);
         ui.add_space(28.0);
-        for (s, icon, label) in [
+        let tabs = [
             (Screen::Home, icons::HOUSE, "Home"),
             (Screen::History, icons::CLOCK, "Watch history"),
             (Screen::Sources, icons::HARD_DRIVES, "Sources"),
             (Screen::Settings, icons::GEAR_SIX, "Settings"),
-        ] {
+        ];
+        // At a large interface size the labels would run into the buttons
+        // on the right: the tabs then show their icons alone.
+        let labels: f32 = tabs
+            .iter()
+            .map(|(_, _, label)| {
+                let font = theme::font(Weight::SemiBold, 18.0);
+                ui.painter()
+                    .layout_no_wrap(label.to_string(), font, Color32::WHITE)
+                    .size()
+                    .x
+                    + 64.0
+            })
+            .sum();
+        let right = if v.playback.is_some() { 330.0 } else { 180.0 };
+        let labelled = ui.available_width() >= labels + right;
+        for (s, icon, label) in tabs {
             let selected = v.state.screen == s && v.state.details.is_none();
-            if widgets::nav_tab(ui, icon, label, selected).clicked() {
+            if widgets::nav_tab(ui, icon, label, selected, labelled).clicked() {
                 v.state.screen = s;
                 v.state.details = None;
                 match s {

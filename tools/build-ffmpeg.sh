@@ -15,12 +15,22 @@ DAV1D_VER=1.5.3
 src="$root/third_party/src"
 mkdir -p "$src"
 
-fetch() { # url dest
-  [ -f "$2" ] || curl -fsSL --retry 4 "$1" -o "$2.part" && mv -f "$2.part" "$2" 2>/dev/null || true
-  [ -f "$2" ] || { echo "download failed: $1" >&2; exit 1; }
+# The upstream release tarballs (ffmpeg.org, VideoLAN), which Ubuntu's
+# archive serves unchanged. Nothing is extracted, cached or downloaded,
+# unless it matches.
+FFMPEG_SHA256=733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
+DAV1D_SHA256=732010aa5ef461fa93355ed2c6c5fedb48ddc4b74e697eaabe8907eaeb943011
+
+fetch() { # url dest sha256
+  if [ -f "$2" ] && echo "$3  $2" | sha256sum -c --status; then return; fi
+  rm -f "$2"
+  curl -fsSL --retry 4 "$1" -o "$2.part" || { echo "download failed: $1" >&2; exit 1; }
+  echo "$3  $2.part" | sha256sum -c --status || {
+    rm -f "$2.part"; echo "checksum mismatch: $1" >&2; exit 1; }
+  mv -f "$2.part" "$2"
 }
-fetch "http://archive.ubuntu.com/ubuntu/pool/universe/f/ffmpeg/ffmpeg_${FFMPEG_VER}.orig.tar.xz" "$src/ffmpeg-$FFMPEG_VER.tar.xz"
-fetch "http://archive.ubuntu.com/ubuntu/pool/main/d/dav1d/dav1d_${DAV1D_VER}.orig.tar.xz" "$src/dav1d-$DAV1D_VER.tar.xz"
+fetch "https://archive.ubuntu.com/ubuntu/pool/universe/f/ffmpeg/ffmpeg_${FFMPEG_VER}.orig.tar.xz" "$src/ffmpeg-$FFMPEG_VER.tar.xz" "$FFMPEG_SHA256"
+fetch "https://archive.ubuntu.com/ubuntu/pool/main/d/dav1d/dav1d_${DAV1D_VER}.orig.tar.xz" "$src/dav1d-$DAV1D_VER.tar.xz" "$DAV1D_SHA256"
 
 # zig from PATH, else the pip package (`pip install ziglang`).
 if command -v zig >/dev/null; then zig="$(command -v zig)"; else zig="python3 -m ziglang"; fi
