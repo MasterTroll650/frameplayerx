@@ -334,7 +334,7 @@ impl App {
         // interface size.
         let half_angle = |w: f32| (w / 2.0 / 1.05).atan().to_degrees();
         let bar = &self.panels[BAR];
-        let beside = -48.0 - (half_angle(bar.size.x) - half_angle(bar.base_size().x));
+        let beside = -52.0 - (half_angle(bar.size.x) - half_angle(bar.base_size().x));
         let [my, mp] = self.offsets.main;
         let [ay, ap] = self.offsets.adjust;
         self.panels[MAIN].pose = place_around(anchor, my, mp, 1.5, -0.08);
