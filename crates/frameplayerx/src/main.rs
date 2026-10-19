@@ -338,7 +338,7 @@ fn ray_picture(active: bool) -> Vec<u8> {
     px
 }
 
-/// How long shutdown may take once the session has ended.
+/// How long shutdown may take once the frame loop has ended.
 const EXIT_WITHIN: Duration = Duration::from_secs(5);
 
 /// Ends the process if shutdown has not finished within `limit`. Progress
@@ -428,7 +428,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     }
     let start = Instant::now();
     let mut last = Instant::now();
-    let mut quitting = false;
+    let mut quit = false;
     let (mut frames, mut video_frames) = (0u64, 0u64);
     // Render-thread time per frame (after xrWaitFrame), logged every 10 s:
     // over ~9 ms the compositor starts synthesising frames.
@@ -456,6 +456,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
             }
             SessionEvent::Running => {}
         }
+        session.close_dashboard_at_launch();
         let frame = session.begin_frame()?;
         let recentred = session.recentred_by(frame.state.predicted_display_time);
         let work = Instant::now();
@@ -567,15 +568,23 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         let timed_out = args
             .exit_after
             .is_some_and(|t| start.elapsed().as_secs_f64() > t);
-        if (out.quit || timed_out) && !quitting {
-            quitting = true;
-            session.request_exit();
+        if out.quit || timed_out {
+            quit = true;
+            break;
         }
     }
     log::info!("{frames} frames, {video_frames} with video");
     exit_watchdog(EXIT_WITHIN);
     renderer.wait_idle();
     app.shutdown();
+    if quit {
+        // Leave with the session running, as a game Steam closes does: after
+        // xrEndSession SteamVR takes the app for one that ran a moment and
+        // holds its dashboard back for 10 s.
+        log::info!("bye");
+        // SAFETY: progress and settings are saved; the system frees the rest.
+        unsafe { libc::_exit(0) };
+    }
     drop(renderer);
     drop(session);
     drop(gpu);

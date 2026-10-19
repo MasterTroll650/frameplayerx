@@ -8,6 +8,7 @@ use fp_render::{EyeTarget, EyeView, Gpu};
 use glam::{Mat4, Quat, Vec3};
 use openxr as xr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// What happened while polling events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +74,10 @@ pub struct XrSession {
     /// When the system's recenter (holding the Steam button) moves the
     /// LOCAL space; see [`XrSession::recentred_by`].
     recenter_at: Option<xr::Time>,
+    /// Dashboard closes left before the first focus, and when the last was;
+    /// see [`XrSession::close_dashboard_at_launch`].
+    launch_closes: u32,
+    launch_closed_at: Option<Instant>,
     /// Offset of our play space within the runtime's LOCAL space.
     space_origin: (Vec3, Quat),
     quads: std::collections::HashMap<u64, QuadLayer>,
@@ -183,6 +188,8 @@ impl XrSession {
             blend_mode,
             event_buf: xr::EventDataBuffer::new(),
             recenter_at: None,
+            launch_closes: 3,
+            launch_closed_at: None,
             space_origin: (Vec3::ZERO, Quat::IDENTITY),
             quads: std::collections::HashMap::new(),
         })
@@ -211,13 +218,24 @@ impl XrSession {
         };
     }
 
-    /// Asks the runtime to end the session; [`XrSession::poll`] reports
-    /// [`SessionEvent::Exit`] once it has.
-    pub fn request_exit(&self) {
-        if self.running
-            && let Err(e) = self.session.request_exit()
-        {
-            log::warn!("xrRequestExitSession: {e}");
+    /// Closes SteamVR's dashboard while it covers the app before the app's
+    /// first focus, 3 times at most, 2 s apart: Steam leaves it, with its
+    /// game menu, in front of a non-Steam shortcut it starts, where SteamVR
+    /// closes it for a store game. Call once per loop iteration.
+    pub fn close_dashboard_at_launch(&mut self) {
+        match self.state {
+            xr::SessionState::FOCUSED => self.launch_closes = 0,
+            xr::SessionState::VISIBLE
+                if self.launch_closes > 0
+                    && self
+                        .launch_closed_at
+                        .is_none_or(|t| t.elapsed() >= Duration::from_secs(2)) =>
+            {
+                self.ctx.hide_steamvr_dashboard();
+                self.launch_closes -= 1;
+                self.launch_closed_at = Some(Instant::now());
+            }
+            _ => {}
         }
     }
 

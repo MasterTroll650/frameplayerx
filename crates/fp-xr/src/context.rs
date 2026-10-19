@@ -102,6 +102,38 @@ impl XrContext {
         })
     }
 
+    /// Closes SteamVR's dashboard with the `vrcmd` tool beside the runtime
+    /// library, without waiting for it. Does nothing on other runtimes.
+    pub fn hide_steamvr_dashboard(&self) {
+        if !self.manifest.is_steamvr {
+            return;
+        }
+        let Some(dir) = std::path::Path::new(&self.manifest.resolved_library_path).parent() else {
+            return;
+        };
+        let vrcmd = dir.join("vrcmd");
+        // With Steam's variables SteamVR would file vrcmd under this app, and
+        // the library path is the launcher's, for our own libraries.
+        let child = std::process::Command::new(&vrcmd)
+            .arg("--hidedashboard")
+            .env_remove("SteamAppId")
+            .env_remove("SteamGameId")
+            .env_remove("SteamOverlayGameId")
+            .env_remove("LD_LIBRARY_PATH")
+            .env_remove("LD_PRELOAD")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        match child {
+            Ok(mut c) => {
+                log::info!("closing the SteamVR dashboard");
+                std::thread::spawn(move || c.wait());
+            }
+            Err(e) => log::warn!("{}: {e}", vrcmd.display()),
+        }
+    }
+
     /// Recommended per-eye render size.
     pub fn eye_size(&self) -> Result<(u32, u32)> {
         let views = self
