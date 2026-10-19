@@ -117,6 +117,8 @@ pub struct App {
     perf_video: Option<(Instant, u64, u64)>,
     sub_key: String,
     sub_textures: Vec<egui::TextureHandle>,
+    /// The subtitle panel holds a 3D video's pictures, an eye's on each half.
+    subs_split: bool,
     /// Sets subtitle text in any script, once its fonts have loaded.
     sub_shaper: Option<ui::subtitle_text::SubtitleText>,
     sub_fonts: Jobs<ui::subtitle_text::SubtitleText>,
@@ -241,6 +243,7 @@ impl App {
             perf_video: None,
             sub_key: String::new(),
             sub_textures: Vec::new(),
+            subs_split: false,
             sub_shaper: None,
             sub_fonts,
             pointer: Pointer::default(),

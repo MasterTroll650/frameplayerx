@@ -497,8 +497,24 @@ impl App {
         // Subtitles fade in like the panels (a panel that never fades in is
         // never drawn).
         self.subs.update_fade(input.dt);
-        if self.subs.visible {
-            quads.extend(self.subs.quad());
+        if self.subs.visible
+            && let Some(q) = self.subs.quad()
+        {
+            if self.subs_split {
+                // Each eye sees its half of the panel, as with a 3D video.
+                quads.push(QuadDraw {
+                    uv: [Vec2::ZERO, Vec2::new(0.5, 1.0)],
+                    eye: Some(0),
+                    ..q
+                });
+                quads.push(QuadDraw {
+                    uv: [Vec2::new(0.5, 0.0), Vec2::ONE],
+                    eye: Some(1),
+                    ..q
+                });
+            } else {
+                quads.push(q);
+            }
         }
         for p in self.panels.iter_mut() {
             p.update_fade(input.dt);
@@ -562,9 +578,22 @@ impl App {
         }
         let Some(p) = &self.playback else { return };
         let cues = p.player.subtitles();
+        let pictures = cues.iter().any(|c| !c.bitmaps.is_empty());
+        let stereo = p
+            .player
+            .info()
+            .video_stream()
+            .filter(|_| pictures && p.format.stereo.is_stereo())
+            .map(|v| crate::subtitles::StereoSubs {
+                layout: p.format.stereo,
+                canvas: (v.width, v.height),
+                swap_eyes: p.format.eyes_swapped ^ s.swap_eyes,
+            });
+        self.subs_split = stereo.is_some();
         let key: String = cues
             .iter()
             .map(|c| format!("{}|{}|{};", c.start, c.text, c.bitmaps.len()))
+            .chain(stereo.map(|s| format!("{s:?}")))
             .collect();
         self.subs.visible = !cues.is_empty();
         let d = s.subtitle_distance.clamp(0.5, 20.0);
@@ -576,7 +605,7 @@ impl App {
             let textures = &mut self.sub_textures;
             let shaper = &mut self.sub_shaper;
             if let Err(e) = self.subs.paint(renderer, time, |ctx| {
-                ui::player::subtitles(ctx, &cues, textures, shaper.as_mut());
+                ui::player::subtitles(ctx, &cues, textures, shaper.as_mut(), stereo.as_ref());
             }) {
                 log::error!("subtitles: {e}");
             }

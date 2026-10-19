@@ -1410,13 +1410,19 @@ fn haptics_tab(
 
 /// Subtitle cues, drawn large on a dark plate on a transparent panel. Text
 /// is set by `shaper` once the fonts have loaded, by egui (Latin, Greek and
-/// Cyrillic only) before.
+/// Cyrillic only) before. With `stereo`, the cues are a 3D video's pictures
+/// (see [`stereo_pictures`]).
 pub fn subtitles(
     ctx: &egui::Context,
     cues: &[fp_media::subtitle::Cue],
     textures: &mut Vec<egui::TextureHandle>,
     shaper: Option<&mut super::subtitle_text::SubtitleText>,
+    stereo: Option<&crate::subtitles::StereoSubs>,
 ) {
+    if let Some(s) = stereo {
+        stereo_pictures(ctx, cues, textures, s);
+        return;
+    }
     let frame = egui::Frame::new().fill(Color32::TRANSPARENT);
     egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
         let text: Vec<&str> = cues
@@ -1481,5 +1487,61 @@ pub fn subtitles(
                 .rect_filled(rect, 12.0, Color32::from_black_alpha(150));
             ui.painter().galley(rect.min + pad, galley, Color32::WHITE);
         });
+    });
+}
+
+/// A 3D video's picture subtitles: each eye's parts on its half of the
+/// panel, squeezed to half width as in a side-by-side frame, since each eye
+/// is shown its half stretched across the panel. They keep their places in
+/// the frame, so the two copies keep the depth they were made with.
+fn stereo_pictures(
+    ctx: &egui::Context,
+    cues: &[fp_media::subtitle::Cue],
+    textures: &mut Vec<egui::TextureHandle>,
+    s: &crate::subtitles::StereoSubs,
+) {
+    let frame = egui::Frame::new().fill(Color32::TRANSPARENT);
+    egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
+        textures.clear();
+        let panel = ui.max_rect();
+        let ((half_width, _), (sx, sy)) = s.half();
+        // A point per pixel of the eye's picture as shown, as 2D pictures
+        // get, with the frame centred on the panel.
+        let g = 1.0;
+        let left = (panel.width() - half_width as f32 * sx * g) / 2.0;
+        let parts: Vec<_> = (0..2)
+            .flat_map(|eye| {
+                cues.iter()
+                    .flat_map(|c| &c.bitmaps)
+                    .filter_map(move |b| s.part(b, eye).map(|p| (eye, p)))
+            })
+            .collect();
+        // The lowest picture rests on the panel's bottom edge.
+        let Some(lowest) = parts
+            .iter()
+            .map(|(_, p)| (p.y + p.height as i32) as f32 * sy * g)
+            .reduce(f32::max)
+        else {
+            return;
+        };
+        for (i, (eye, p)) in parts.iter().enumerate() {
+            let img = egui::ColorImage::from_rgba_unmultiplied(
+                [p.width as usize, p.height as usize],
+                &p.rgba,
+            );
+            let tex = ctx.load_texture(format!("sub{i}"), img, egui::TextureOptions::LINEAR);
+            let min = egui::pos2(
+                panel.left() + (*eye as f32 * panel.width() + left + p.x as f32 * sx * g) / 2.0,
+                panel.bottom() - lowest + p.y as f32 * sy * g,
+            );
+            let size = Vec2::new(p.width as f32 * sx * g / 2.0, p.height as f32 * sy * g);
+            ui.painter().image(
+                tex.id(),
+                egui::Rect::from_min_size(min, size),
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+            textures.push(tex);
+        }
     });
 }
