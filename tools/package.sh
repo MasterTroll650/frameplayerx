@@ -50,9 +50,11 @@ cp packaging/frameplayerx.sh packaging/README.txt LICENSE NOTICE "$stage/"
 cp packaging/licenses/* "$stage/licenses/"
 cp assets/steam/*.png "$stage/assets/steam/"
 echo "$version" > "$stage/VERSION"
-# Licences of the Rust crates compiled into the binary.
+# The Rust crates compiled into the binary, then the licence, copyright and
+# notice files each crate ships, which their licences ask to go with the
+# binary. A text several crates share is printed once.
 cargo metadata --format-version 1 --filter-platform "$target" | python3 -c '
-import json, sys
+import json, os, re, sys
 m = json.load(sys.stdin)
 pkgs = {p["id"]: p for p in m["packages"]}
 nodes = {n["id"]: n for n in m["resolve"]["nodes"]}
@@ -64,8 +66,36 @@ while todo:
     seen.add(i)
     todo += [d["pkg"] for d in nodes[i]["deps"] if any(k["kind"] in (None, "normal") for k in d["dep_kinds"])]
 ours = set(m["workspace_members"])  # vendored crates (vendor/) are listed too
-for p in sorted((pkgs[i] for i in seen if i not in ours), key=lambda p: p["name"]):
-    print("%s %s: %s" % (p["name"], p["version"], p.get("license") or "see crate"))
+crates = sorted((pkgs[i] for i in seen if i not in ours), key=lambda p: (p["name"], p["version"]))
+named = re.compile(r"(licen[cs]e|copying|copyright|notice|unlicense)", re.I)
+texts, bare = {}, []
+for p in crates:
+    label = "%s %s" % (p["name"], p["version"])
+    print("%s: %s" % (label, p.get("license") or "see crate"))
+    d = os.path.dirname(p["manifest_path"])
+    files = []
+    for n in sorted(os.listdir(d)):
+        f = os.path.join(d, n)
+        if not named.match(n): continue
+        if os.path.isfile(f): files.append(f)
+        elif os.path.isdir(f):  # LICENSES/, as REUSE lays them out
+            files += [os.path.join(f, x) for x in sorted(os.listdir(f)) if os.path.isfile(os.path.join(f, x))]
+    if p.get("license_file"):
+        lf = os.path.normpath(os.path.join(d, p["license_file"]))
+        if lf not in files and os.path.isfile(lf): files.append(lf)
+    if not files: bare.append(label)
+    for f in files:
+        text = open(f, encoding="utf-8", errors="replace").read().strip()
+        if label not in texts.setdefault(text, []): texts[text].append(label)
+extra = open("packaging/licenses/rust-crates-extra.txt", encoding="utf-8").read()
+covered = {c.strip() for l in extra.splitlines() if l.startswith("Crates: ") for c in l[8:].split(",")}
+missing = [b for b in bare if b.rsplit(" ", 1)[0] not in covered]
+if missing:
+    sys.exit("no licence file in %s: add their licences to packaging/licenses/rust-crates-extra.txt" % ", ".join(missing))
+if bare:
+    print("\nNo licence file of their own, see rust-crates-extra.txt: %s" % ", ".join(bare))
+for text, who in sorted(texts.items(), key=lambda t: t[1][0]):
+    print("\n%s\n%s\n%s\n\n%s" % ("=" * 78, "Used by: " + ", ".join(who), "=" * 78, text))
 ' > "$stage/licenses/rust-crates.txt"
 
 # Sanity: right architecture, glibc <= 2.28, libraries resolvable.
