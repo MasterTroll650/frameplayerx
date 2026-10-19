@@ -177,6 +177,10 @@ impl App {
                 }
             }
             Action::Quit => self.quit = true,
+            Action::Restart => {
+                self.quit = true;
+                self.restart = true;
+            }
             Action::HideControls => {
                 self.ui_visible = false;
                 self.show_browser = false;

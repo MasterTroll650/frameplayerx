@@ -91,8 +91,8 @@ and add `~/frameplayerx/frameplayerx.sh` to Steam as a non-Steam game.
 FramePlayerX checks for a new version each time it starts, but doesn't
 install it by itself. To update, open **Settings › Updates**: when a new
 version is out it's listed there with what changed. Press **Download and
-install**, then **Quit now** and start FramePlayerX again. **Check now**
-looks again without restarting.
+install**, then **Restart now**. **Check now** looks again without
+restarting.
 
 The **Stable** channel gets finished releases only; **Beta** also gets
 test versions before they are released. Switch off **Check for updates at

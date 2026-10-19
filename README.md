@@ -70,7 +70,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 
 2. **Start it** from the Steam library on the headset. FramePlayerX finds the videos on the headset and its cards and drives by itself. Add a media server under **Sources › Add source**.
 
-To update later, open **Settings › Updates** and press **Download and install** when a new version is listed, then restart FramePlayerX. To remove it again, see [Uninstall](docs/USER-GUIDE.md#uninstall) in the user guide.
+To update later, open **Settings › Updates** and press **Download and install** when a new version is listed, then **Restart now**. To remove it again, see [Uninstall](docs/USER-GUIDE.md#uninstall) in the user guide.
 
 ---
 

@@ -137,6 +137,7 @@ impl App {
             passthrough,
             buzz,
             quit: self.quit,
+            restart: self.restart,
         }
     }
 

@@ -192,6 +192,8 @@ pub enum Action {
     /// back).
     HideControls,
     Quit,
+    /// Quit and start again, to run an installed update.
+    Restart,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

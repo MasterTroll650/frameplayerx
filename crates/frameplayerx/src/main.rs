@@ -31,6 +31,7 @@ use app::{App, FrameInput, LayerDraw};
 use fp_render::{Gpu, Renderer};
 use fp_xr::{QuadSubmit, SessionEvent, XrContext, XrSession};
 use settings::Settings;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -338,7 +339,7 @@ fn ray_picture(active: bool) -> Vec<u8> {
     px
 }
 
-/// How long shutdown may take once the frame loop has ended.
+/// How long shutdown may take once the session has ended.
 const EXIT_WITHIN: Duration = Duration::from_secs(5);
 
 /// Ends the process if shutdown has not finished within `limit`. Progress
@@ -355,14 +356,22 @@ fn exit_watchdog(limit: Duration) {
         });
 }
 
+/// Set for the copy [`run_xr`] starts when it restarts.
+const RESTARTED: &str = "FRAMEPLAYERX_RESTARTED";
+
 fn run_xr(args: &Args) -> Result<(), Error> {
-    // Coming back from a WebXR browser, SteamVR may still be closing its
-    // session: keep trying for a while instead of quitting.
-    let attempts = if std::env::var_os("FRAMEPLAYERX_RESUMED").is_some() {
+    // After a restart SteamVR may still be closing the previous session:
+    // keep trying for a while instead of quitting.
+    let attempts = if std::env::var_os(RESTARTED).is_some() {
         20
     } else {
         1
     };
+    // Found now: installing an update moves the running copy's folder aside.
+    let launcher = fp_updater::current_install_dir()
+        .map(|d| d.join("frameplayerx.sh"))
+        .ok()
+        .filter(|l| l.is_file());
     let mut tries = 0;
     let ctx = loop {
         tries += 1;
@@ -428,7 +437,7 @@ fn run_xr(args: &Args) -> Result<(), Error> {
     }
     let start = Instant::now();
     let mut last = Instant::now();
-    let mut quit = false;
+    let (mut quitting, mut restarting) = (false, false);
     let (mut frames, mut video_frames) = (0u64, 0u64);
     // Render-thread time per frame (after xrWaitFrame), logged every 10 s:
     // over ~9 ms the compositor starts synthesising frames.
@@ -568,27 +577,31 @@ fn run_xr(args: &Args) -> Result<(), Error> {
         let timed_out = args
             .exit_after
             .is_some_and(|t| start.elapsed().as_secs_f64() > t);
-        if out.quit || timed_out {
-            quit = true;
-            break;
+        if (out.quit || timed_out) && !quitting {
+            quitting = true;
+            restarting = out.restart;
+            session.request_exit();
         }
     }
     log::info!("{frames} frames, {video_frames} with video");
     exit_watchdog(EXIT_WITHIN);
+    let restart = launcher.filter(|_| restarting);
+    if quitting && restart.is_none() {
+        // SteamVR leaves its dashboard closed after an app quits itself.
+        ctx.show_steamvr_dashboard();
+    }
     renderer.wait_idle();
     app.shutdown();
-    if quit {
-        // Leave with the session running, as a game Steam closes does: after
-        // xrEndSession SteamVR takes the app for one that ran a moment and
-        // holds its dashboard back for 10 s.
-        log::info!("bye");
-        // SAFETY: progress and settings are saved; the system frees the rest.
-        unsafe { libc::_exit(0) };
-    }
     drop(renderer);
     drop(session);
     drop(gpu);
     drop(ctx);
+    if let Some(l) = restart {
+        log::info!("restarting");
+        // The same process goes on, so Steam keeps it as the running game.
+        let e = std::process::Command::new(&l).env(RESTARTED, "1").exec();
+        log::warn!("{}: {e}", l.display());
+    }
     log::info!("bye");
     Ok(())
 }

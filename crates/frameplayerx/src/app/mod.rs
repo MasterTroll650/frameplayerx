@@ -83,6 +83,8 @@ pub struct FrameOutput {
     /// (hand, amplitude, milliseconds)
     pub buzz: Vec<(usize, f32, i64)>,
     pub quit: bool,
+    /// With `quit`: start again.
+    pub restart: bool,
 }
 
 const MAIN: usize = 0;
@@ -163,6 +165,7 @@ pub struct App {
     feed_queue: std::collections::VecDeque<(String, String)>,
     feed_busy: usize,
     quit: bool,
+    restart: bool,
 }
 
 /// A panel held by a grip: which panel and hand, and the hand's aim angles
@@ -273,6 +276,7 @@ impl App {
             feed_queue: Default::default(),
             feed_busy: 0,
             quit: false,
+            restart: false,
         };
         app.offsets = app.settings.panel_offsets;
         app.apply_ui_scale();

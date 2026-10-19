@@ -218,6 +218,16 @@ impl XrSession {
         };
     }
 
+    /// Asks the runtime to end the session; [`XrSession::poll`] reports
+    /// [`SessionEvent::Exit`] once it has.
+    pub fn request_exit(&self) {
+        if self.running
+            && let Err(e) = self.session.request_exit()
+        {
+            log::warn!("xrRequestExitSession: {e}");
+        }
+    }
+
     /// Closes SteamVR's dashboard while it covers the app before the app's
     /// first focus, 3 times at most, 2 s apart: Steam leaves it, with its
     /// game menu, in front of a non-Steam shortcut it starts, where SteamVR

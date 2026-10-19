@@ -879,8 +879,8 @@ fn updates(ui: &mut egui::Ui, v: &mut View) {
                 &format!("Version {version} is installed"),
                 Some("Restart FramePlayerX to use it."),
                 |ui| {
-                    if widgets::button(ui, None, "Quit now", Kind::Primary).clicked() {
-                        v.actions.push(Action::Quit);
+                    if widgets::button(ui, None, "Restart now", Kind::Primary).clicked() {
+                        v.actions.push(Action::Restart);
                     }
                 },
             );
