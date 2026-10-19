@@ -615,12 +615,7 @@ impl App {
         let opener = self.services.opener.clone();
         let settings = self.settings.clone();
         let reports = self.services.watch.clone();
-        self.ui.opening = Some(
-            req.entry
-                .as_ref()
-                .map(|e| e.name.clone())
-                .unwrap_or_else(|| req.location.rsplit('/').next().unwrap_or("").to_string()),
-        );
+        self.ui.opening = Some(req.shown_title());
         self.ui.open_error = None;
         self.services.set_worker_busy(true);
         self.jobs.spawn("open", move || {

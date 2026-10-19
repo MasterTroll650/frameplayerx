@@ -578,6 +578,7 @@ fn request(source: &str, item: &MbItem, from_start: bool) -> OpenRequest {
         location: item.location.clone(),
         source_id: Some(source.to_string()),
         entry: Some(item.to_entry()),
+        title: None,
         start_at: if from_start {
             Some(0.0)
         } else {

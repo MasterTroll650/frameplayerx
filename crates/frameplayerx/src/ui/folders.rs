@@ -75,6 +75,7 @@ pub fn page(ui: &mut egui::Ui, v: &mut View, title: &str, root: &str, b: &mut Br
                 location: x.location.clone(),
                 source_id: Some(b.source.clone()),
                 entry: Some((*x).clone()),
+                title: None,
                 start_at: None,
             })
             .collect()

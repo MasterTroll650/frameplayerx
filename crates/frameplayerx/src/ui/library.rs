@@ -341,6 +341,7 @@ fn request(r: &MediaRecord) -> OpenRequest {
             && !r.location.starts_with('/'))
         .then(|| r.source_id.clone()),
         entry: None,
+        title: Some(r.title.clone()),
         start_at: None,
     }
 }

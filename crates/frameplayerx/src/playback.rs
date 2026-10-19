@@ -25,8 +25,23 @@ pub struct OpenRequest {
     pub source_id: Option<String>,
     /// The browse entry, when opened from a source (carries feed metadata).
     pub entry: Option<Entry>,
+    /// The library record's title, when opened from the library.
+    pub title: Option<String>,
     /// Start here instead of the saved resume position.
     pub start_at: Option<f64>,
+}
+
+impl OpenRequest {
+    /// What to call the video while it opens: the entry's or the record's
+    /// title, else its file name.
+    pub fn shown_title(&self) -> String {
+        self.entry
+            .as_ref()
+            .map(|e| e.name.clone())
+            .or_else(|| self.title.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| title_from_name(&last_segment(&self.location)))
+    }
 }
 
 pub struct Playback {
@@ -795,6 +810,31 @@ mod tests {
     #[test]
     fn titles_from_names() {
         assert_eq!(title_from_name("My.Video_2024.mkv"), "My Video 2024");
+    }
+
+    #[test]
+    fn an_opening_video_shows_its_title_not_its_address() {
+        let from_library = OpenRequest {
+            location: "https://server/heresphere/4127".into(),
+            title: Some("Beach Day".into()),
+            ..Default::default()
+        };
+        assert_eq!(from_library.shown_title(), "Beach Day");
+        let from_a_feed = OpenRequest {
+            location: "https://server/deovr/4127".into(),
+            entry: Some(Entry::new(
+                "Beach Day",
+                "https://server/deovr/4127",
+                EntryKind::Video,
+            )),
+            ..Default::default()
+        };
+        assert_eq!(from_a_feed.shown_title(), "Beach Day");
+        let by_address = OpenRequest {
+            location: "https://nas/videos/Beach_Day.mp4?token=abc".into(),
+            ..Default::default()
+        };
+        assert_eq!(by_address.shown_title(), "Beach Day");
     }
 
     #[test]
