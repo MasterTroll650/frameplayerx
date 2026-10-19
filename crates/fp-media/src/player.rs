@@ -746,14 +746,7 @@ fn demux_thread(
                     if let Some((_, dec)) = subs.0.iter_mut().find(|(i, _)| *i == idx)
                         && let Some(cue) = subtitle::decode_packet(dec, &pkt)
                     {
-                        let mut cues = lock(&sh.cues);
-                        if !cues
-                            .iter()
-                            .any(|c| (c.start - cue.start).abs() < 1e-3 && c.text == cue.text)
-                        {
-                            let pos = cues.partition_point(|c| c.start <= cue.start);
-                            cues.insert(pos, cue);
-                        }
+                        subtitle::add(&mut lock(&sh.cues), cue);
                     }
                     pkt.unref();
                 } else {

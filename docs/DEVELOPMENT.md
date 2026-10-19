@@ -20,7 +20,7 @@ needs with apt, then builds FFmpeg, in one go.
 ## Build and test
 
 ```bash
-tools/build-ffmpeg.sh x86_64 aarch64      # once: FFmpeg 7.1 and dav1d into third_party/
+tools/build-ffmpeg.sh x86_64 aarch64      # FFmpeg 7.1 with dav1d and zlib into third_party/
 export LD_LIBRARY_PATH=$PWD/third_party/ffmpeg/x86_64/lib
 cargo test --workspace                    # GPU tests use any Vulkan device (lavapipe is fine)
 cargo clippy --workspace --all-targets   # lints are in [workspace.lints]

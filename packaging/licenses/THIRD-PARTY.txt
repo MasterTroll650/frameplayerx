@@ -15,6 +15,10 @@ dav1d 1.5.3 (statically linked into libavcodec)
   Licence: BSD 2-Clause, text in dav1d-COPYING.txt.
   Source: https://code.videolan.org/videolan/dav1d
 
+zlib 1.3.1 (statically linked into libavformat and libavcodec)
+  Licence: zlib licence, text in zlib-LICENSE.txt.
+  Source: https://zlib.net/fossils/zlib-1.3.1.tar.gz
+
 Rust crates compiled into the frameplayerx binary are under MIT, Apache-2.0,
 BSD, ISC, Zlib, Unicode-3.0 or MPL-2.0 licences; see rust-crates.txt.
 
