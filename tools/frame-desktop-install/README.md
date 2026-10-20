@@ -17,10 +17,13 @@ What the installer does:
 1. Finds the highest-versioned release on GitHub (stable only, unless
    `--beta`), downloads its zip and checks it against the SHA-256 GitHub
    recorded for it.
-2. Removes other copies of FramePlayerX: their library entries and the
+2. Unpacks the release next to `~/frameplayerx` and checks it, then swaps
+   it in; if that fails, the installed version is put back. Nothing else
+   changes before this, so a bad download or a full disk leaves what was
+   installed.
+3. Removes other copies of FramePlayerX: their library entries and the
    folders they start from. Settings and the watch history live elsewhere
    and stay.
-3. Unpacks the release into `~/frameplayerx`.
 4. Adds the Steam library entry with its artwork. The Frame's desktop Steam
    has no "Add a Non-Steam Game" menu, so the installer adds it one of two
    ways (`--steam`):

@@ -235,6 +235,61 @@ class Unzip(unittest.TestCase):
                 with open(os.path.join(path, 'frameplayerx.sh')) as f:
                     self.assertEqual(f.read(), want)
             self.assertFalse(os.path.exists(dest + '.new'))
+            self.assertFalse(os.path.exists(dest + '.staged'))
+
+    def test_a_download_without_the_app_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            zp = os.path.join(d, 'a.zip')
+            self.make_zip(zp, [('frameplayerx/README.txt', 0o100644, b'hi')])
+            dest = os.path.join(d, 'frameplayerx')
+            os.makedirs(dest)
+            with open(os.path.join(dest, 'frameplayerx.sh'), 'w') as f:
+                f.write('v1')
+            with self.assertRaises(fai.Fail):
+                fai.install_files(fai.APPS['frameplayerx'], zp, dest)
+            with open(os.path.join(dest, 'frameplayerx.sh')) as f:
+                self.assertEqual(f.read(), 'v1')
+            self.assertEqual(sorted(os.listdir(d)), ['a.zip', 'frameplayerx'])
+
+    def test_a_failed_swap_puts_the_installed_version_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            zp = os.path.join(d, 'a.zip')
+            self.make_zip(zp, [('frameplayerx/frameplayerx.sh', 0o100755, b'v2')])
+            dest = os.path.join(d, 'frameplayerx')
+            os.makedirs(dest)
+            with open(os.path.join(dest, 'frameplayerx.sh'), 'w') as f:
+                f.write('v1')
+            rename = os.rename
+
+            def failing(src, dst):
+                if src.endswith('.staged'):
+                    raise OSError('disk full')
+                rename(src, dst)
+
+            fai.os.rename = failing
+            try:
+                with self.assertRaises(fai.Fail):
+                    fai.install_files(fai.APPS['frameplayerx'], zp, dest)
+            finally:
+                fai.os.rename = rename
+            with open(os.path.join(dest, 'frameplayerx.sh')) as f:
+                self.assertEqual(f.read(), 'v1')
+            self.assertEqual(sorted(os.listdir(d)), ['a.zip', 'frameplayerx'])
+
+    def test_an_interrupted_swap_is_put_right(self):
+        with tempfile.TemporaryDirectory() as d:
+            dest = os.path.join(d, 'frameplayerx')
+            os.makedirs(dest + '.old')
+            with open(os.path.join(dest + '.old', 'frameplayerx.sh'), 'w') as f:
+                f.write('v1')
+            fai.recover(fai.APPS['frameplayerx'], dest)
+            with open(os.path.join(dest, 'frameplayerx.sh')) as f:
+                self.assertEqual(f.read(), 'v1')
+            self.assertFalse(os.path.exists(dest + '.old'))
+            # An installed copy is left as it is.
+            os.makedirs(dest + '.old')
+            fai.recover(fai.APPS['frameplayerx'], dest)
+            self.assertTrue(os.path.isdir(dest + '.old'))
 
 
 def release(tag, zip_file=True, draft=False):
