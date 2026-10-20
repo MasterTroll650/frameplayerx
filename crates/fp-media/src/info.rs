@@ -47,8 +47,13 @@ pub struct StreamInfo {
     /// Coded as fields (1080i Blu-ray and TV), as far as FFmpeg can tell.
     pub interlaced: bool,
     pub transfer: Transfer,
-    /// Display rotation in degrees (from a display matrix), 0 when none.
-    pub rotation: f64,
+    /// Clockwise turn that shows the picture upright, from its display
+    /// matrix: 0, 90, 180 or 270 degrees. Phones store portrait clips
+    /// sideways with a 90° turn.
+    pub rotation: u32,
+    /// Width of a stored pixel relative to its height. Anamorphic video
+    /// (DVDs, some cameras) is stored squeezed and shown wider.
+    pub pixel_aspect: f64,
     // audio
     pub sample_rate: u32,
     pub channels: u32,
@@ -66,6 +71,16 @@ pub(crate) fn interlaced(par: &ff::AVCodecParameters) -> bool {
 }
 
 impl StreamInfo {
+    /// The picture's size as shown: unsqueezed, then turned upright.
+    pub fn display_size(&self) -> (u32, u32) {
+        let w = (self.width as f64 * self.pixel_aspect).round() as u32;
+        if self.rotation % 180 == 90 {
+            (self.height, w)
+        } else {
+            (w, self.height)
+        }
+    }
+
     /// Chroma subsampling of a video stream, from its pixel format:
     /// `"4:2:0"` (also when unknown), `"4:2:2"` or `"4:4:4"`.
     pub fn chroma(&self) -> &'static str {
@@ -168,39 +183,69 @@ fn spherical(par: &ff::AVCodecParameters) -> Option<Projection> {
     }
 }
 
-fn stereo3d(par: &ff::AVCodecParameters, metadata: *mut ff::AVDictionary) -> Option<StereoLayout> {
+/// The stereo layout, and whether the right eye comes first.
+fn stereo3d(
+    par: &ff::AVCodecParameters,
+    metadata: *mut ff::AVDictionary,
+) -> Option<(StereoLayout, bool)> {
     if let Some(bytes) = side_data(par, ff::AV_PKT_DATA_STEREO3D)
         && bytes.len() >= size_of::<ff::AVStereo3D>()
     {
         // SAFETY: size checked; FFmpeg stores an AVStereo3D here.
         let s = unsafe { &*(bytes.as_ptr() as *const ff::AVStereo3D) };
+        let swapped = s.flags & ff::AV_STEREO3D_FLAG_INVERT as i32 != 0;
         match s.type_ {
             ff::AV_STEREO3D_SIDEBYSIDE | ff::AV_STEREO3D_SIDEBYSIDE_QUINCUNX => {
-                return Some(StereoLayout::SideBySide);
+                return Some((StereoLayout::SideBySide, swapped));
             }
-            ff::AV_STEREO3D_TOPBOTTOM => return Some(StereoLayout::TopBottom),
-            ff::AV_STEREO3D_2D => return Some(StereoLayout::Mono),
+            ff::AV_STEREO3D_TOPBOTTOM => return Some((StereoLayout::TopBottom, swapped)),
+            ff::AV_STEREO3D_2D => return Some((StereoLayout::Mono, false)),
             _ => {}
         }
     }
     // Matroska StereoMode as exported in stream metadata.
     match dict_get(metadata, "stereo_mode")?.as_str() {
-        "left_right" | "right_left" => Some(StereoLayout::SideBySide),
-        "top_bottom" | "bottom_top" => Some(StereoLayout::TopBottom),
-        "mono" => Some(StereoLayout::Mono),
+        "left_right" => Some((StereoLayout::SideBySide, false)),
+        "right_left" => Some((StereoLayout::SideBySide, true)),
+        "top_bottom" => Some((StereoLayout::TopBottom, false)),
+        "bottom_top" => Some((StereoLayout::TopBottom, true)),
+        "mono" => Some((StereoLayout::Mono, false)),
         _ => None,
     }
 }
 
-fn rotation(par: &ff::AVCodecParameters) -> f64 {
+fn rotation(par: &ff::AVCodecParameters) -> u32 {
     match side_data(par, ff::AV_PKT_DATA_DISPLAYMATRIX) {
         Some(b) if b.len() >= 36 => {
             // SAFETY: a display matrix is 9 int32 values.
             let r = unsafe { ff::av_display_rotation_get(b.as_ptr() as *const i32) };
-            if r.is_nan() { 0.0 } else { -r }
+            if r.is_nan() {
+                0
+            } else {
+                // FFmpeg gives the turn anticlockwise.
+                (-r / 90.0).round().rem_euclid(4.0) as u32 * 90
+            }
         }
-        _ => 0.0,
+        _ => 0,
     }
+}
+
+/// The stream's pixel aspect, from the container (MP4 `pasp`, Matroska's
+/// display size) or else the codec; 1 when unknown or implausible.
+fn pixel_aspect(fmt: *mut ff::AVFormatContext, st: *mut ff::AVStream) -> f64 {
+    // SAFETY: both are valid while the input is open; a null frame is allowed.
+    let sar = unsafe { ff::av_guess_sample_aspect_ratio(fmt, st, std::ptr::null_mut()) };
+    let a = q2d(sar);
+    if (0.25..=4.0).contains(&a) { a } else { 1.0 }
+}
+
+/// How the video stream at `index` is shown: its clockwise turn in degrees
+/// and its pixel aspect.
+pub(crate) fn picture_shape(input: &Input, index: usize) -> (u32, f64) {
+    let st = input.streams()[index];
+    // SAFETY: the stream and its parameters are valid while the input is open.
+    let par = unsafe { &*(*st).codecpar };
+    (rotation(par), pixel_aspect(input.fmt, st))
 }
 
 pub fn read_info(input: &Input) -> MediaInfo {
@@ -259,7 +304,8 @@ pub fn read_info(input: &Input) -> MediaInfo {
             pixel_format: String::new(),
             interlaced: false,
             transfer: Transfer::Sdr,
-            rotation: 0.0,
+            rotation: 0,
+            pixel_aspect: 1.0,
             sample_rate: 0,
             channels: 0,
             ambisonic: false,
@@ -285,12 +331,15 @@ pub fn read_info(input: &Input) -> MediaInfo {
                     ff::AVCOL_TRC_ARIB_STD_B67 => Transfer::Hlg,
                     _ => Transfer::Sdr,
                 };
-                s.rotation = rotation(par);
+                (s.rotation, s.pixel_aspect) = picture_shape(input, index);
                 if hints.projection.is_none() {
                     hints.projection = spherical(par);
                 }
-                if hints.stereo.is_none() {
-                    hints.stereo = stereo3d(par, st.metadata);
+                if hints.stereo.is_none()
+                    && let Some((stereo, swapped)) = stereo3d(par, st.metadata)
+                {
+                    hints.stereo = Some(stereo);
+                    hints.eyes_swapped = swapped;
                 }
             }
             StreamKind::Audio => {
@@ -341,18 +390,98 @@ pub fn read_info(input: &Input) -> MediaInfo {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use fp_core::source::FileSource;
+    use fp_core::source::{FileSource, MemorySource};
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
-    pub(crate) fn open(name: &str) -> Input {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    fn fixture(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/data")
-            .join(name);
-        let src = Arc::new(FileSource::open(&path).expect("fixture"));
+            .join(name)
+    }
+
+    pub(crate) fn open(name: &str) -> Input {
+        let src = Arc::new(FileSource::open(&fixture(name)).expect("fixture"));
         Input::open(src, name, Arc::new(AtomicBool::new(false))).expect("open")
+    }
+
+    /// Fixture `name` with `bytes` written `skip` bytes after the first
+    /// `marker` (a box type or element id).
+    pub(crate) fn patched(
+        name: &str,
+        marker: &[u8],
+        skip: usize,
+        bytes: &[u8],
+    ) -> Arc<MemorySource> {
+        let mut b = std::fs::read(fixture(name)).expect("fixture");
+        let at = b
+            .windows(marker.len())
+            .position(|w| w == marker)
+            .expect("marker")
+            + skip;
+        b[at..at + bytes.len()].copy_from_slice(bytes);
+        Arc::new(MemorySource(b))
+    }
+
+    /// h264_aac_180_LR.mp4 (640x320) as a phone stores a portrait clip: a
+    /// track matrix turning it 90° clockwise.
+    pub(crate) fn portrait_clip() -> Arc<MemorySource> {
+        // A version 0 tkhd has 40 bytes between its type and the matrix.
+        let matrix: Vec<u8> = [0, 0x10000, 0, -0x10000, 0, 0, 320 << 16, 0, 1 << 30]
+            .iter()
+            .flat_map(|v: &i32| v.to_be_bytes())
+            .collect();
+        patched("h264_aac_180_LR.mp4", b"tkhd", 4 + 40, &matrix)
+    }
+
+    /// h264_aac_180_LR.mp4 with 4:3 pixels (its `pasp` box).
+    pub(crate) fn anamorphic_clip() -> Arc<MemorySource> {
+        let pasp: Vec<u8> = [4u32, 3].iter().flat_map(|v| v.to_be_bytes()).collect();
+        patched("h264_aac_180_LR.mp4", b"pasp", 4, &pasp)
+    }
+
+    fn info_of(src: Arc<MemorySource>, name: &str) -> MediaInfo {
+        read_info(&Input::open(src, name, Arc::new(AtomicBool::new(false))).expect("open"))
+    }
+
+    #[test]
+    fn portrait_clip_turns_upright() {
+        let info = info_of(portrait_clip(), "portrait.mp4");
+        let v = info.video_stream().unwrap();
+        assert_eq!((v.width, v.height, v.rotation), (640, 320, 90));
+        assert_eq!(v.display_size(), (320, 640));
+        let plain = read_info(&open("h264_aac_180_LR.mp4"));
+        let v = plain.video_stream().unwrap();
+        assert_eq!(
+            (v.rotation, v.pixel_aspect, v.display_size()),
+            (0, 1.0, (640, 320))
+        );
+    }
+
+    #[test]
+    fn anamorphic_clip_unsqueezes() {
+        let info = info_of(anamorphic_clip(), "wide.mp4");
+        let v = info.video_stream().unwrap();
+        assert!(
+            (v.pixel_aspect - 4.0 / 3.0).abs() < 1e-6,
+            "{}",
+            v.pixel_aspect
+        );
+        assert_eq!(v.display_size(), (853, 320));
+    }
+
+    #[test]
+    fn right_eye_first_in_matroska() {
+        assert!(!read_info(&open("hevc10_tb.mkv")).hints.eyes_swapped);
+        // StereoMode 2: top/bottom with the right eye on top.
+        let info = info_of(
+            patched("hevc10_tb.mkv", &[0x53, 0xb8, 0x81], 3, &[2]),
+            "x.mkv",
+        );
+        assert_eq!(info.hints.stereo, Some(StereoLayout::TopBottom));
+        assert!(info.hints.eyes_swapped);
     }
 
     #[test]
@@ -407,7 +536,7 @@ mod tests {
 
     #[test]
     fn garbage_fails_cleanly() {
-        let src = Arc::new(fp_core::source::MemorySource(vec![0u8; 4096]));
+        let src = Arc::new(MemorySource(vec![0u8; 4096]));
         assert!(Input::open(src, "junk.bin", Arc::new(AtomicBool::new(false))).is_err());
     }
 }

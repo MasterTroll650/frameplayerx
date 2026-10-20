@@ -319,7 +319,7 @@ fn detect_format(
 ) -> (DetectedFormat, DetectedFormat) {
     let (w, h) = info
         .video_stream()
-        .map(|v| (v.width, v.height))
+        .map(StreamInfo::display_size)
         .unwrap_or((0, 0));
     let user = record.and_then(|r| r.user_format);
     let hints = if info.hints.projection.is_some() || info.hints.stereo.is_some() {
@@ -328,6 +328,7 @@ fn detect_format(
         ContainerHints {
             projection: Some(f.projection),
             stereo: Some(f.stereo),
+            eyes_swapped: f.eyes_swapped,
         }
     } else {
         info.hints
@@ -854,6 +855,7 @@ mod tests {
             let hints = declared.map_or_else(ContainerHints::default, |f| ContainerHints {
                 projection: Some(f.projection),
                 stereo: Some(f.stereo),
+                eyes_swapped: f.eyes_swapped,
             });
             format::resolve(None, hints, &last_segment(loc), 2160, 1080).format
         };
@@ -923,7 +925,8 @@ mod tests {
             },
             interlaced: false,
             transfer: Default::default(),
-            rotation: 0.0,
+            rotation: 0,
+            pixel_aspect: 1.0,
             sample_rate: 0,
             channels: 0,
             ambisonic: false,

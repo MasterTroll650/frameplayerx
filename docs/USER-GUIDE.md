@@ -283,10 +283,16 @@ shape. File-name tags understood include `_180`, `_360`, `_LR`/`_SBS`,
 `_TB`/`_OU`, `_RL`, `_FISHEYE190`, `_MKX200`, `_MKX220`, `_VRCA220`,
 `_EAC`, `_2D`, `_3D`.
 
-Movie shapes (16:9, 4:3, 1.85, scope) play on a flat screen, and full
-side-by-side or over/under 3D movies (3840x1080, 1920x2160) as flat 3D. A
-video nothing identifies starts as 180° side by side; Settings › Playback ›
-**Default format** picks another.
+Movie shapes (16:9, 4:3, 1.85, scope) and portrait phone clips play on a
+flat screen, and full side-by-side or over/under 3D movies (3840x1080,
+1920x2160) as flat 3D. A video nothing identifies starts as 180° side by
+side; Settings › Playback › **Default format** picks another.
+
+Videos are shown as their file says: a phone clip stored sideways stands
+upright, and anamorphic video (DVDs, anamorphic lenses) is widened to its
+real shape. A portrait video's screen is as tall as **Screen width**.
+When a 3D file's metadata says the right eye comes first, the eyes are
+swapped to match.
 
 To change it: open the video, press **⚙** on the control bar, **Format**.
 Overrides are remembered per video. The same panel has position, zoom,

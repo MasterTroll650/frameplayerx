@@ -479,6 +479,10 @@ impl App {
             video.screen_pose = place(player, 0.0, s.screen_distance, 0.0, 0.0);
             video.anchor = anchor_rot;
             video.settings = s;
+            if let Some(v) = p.player.info().video_stream() {
+                video.rotation = v.rotation;
+                video.pixel_aspect = v.pixel_aspect as f32;
+            }
             if let Some((_, rot)) = input.head {
                 let rel = anchor_rot.inverse() * rot;
                 p.player.set_head_orientation(rel.to_array());
@@ -579,10 +583,9 @@ impl App {
         let Some(p) = &self.playback else { return };
         let cues = p.player.subtitles();
         let pictures = cues.iter().any(|c| !c.bitmaps.is_empty());
-        let stereo = p
-            .player
-            .info()
-            .video_stream()
+        let video = p.player.info().video_stream();
+        let pixel_aspect = video.map_or(1.0, |v| v.pixel_aspect as f32);
+        let stereo = video
             .filter(|_| pictures && p.format.stereo.is_stereo())
             .map(|v| crate::subtitles::StereoSubs {
                 layout: p.format.stereo,
@@ -605,7 +608,14 @@ impl App {
             let textures = &mut self.sub_textures;
             let shaper = &mut self.sub_shaper;
             if let Err(e) = self.subs.paint(renderer, time, |ctx| {
-                ui::player::subtitles(ctx, &cues, textures, shaper.as_mut(), stereo.as_ref());
+                ui::player::subtitles(
+                    ctx,
+                    &cues,
+                    textures,
+                    shaper.as_mut(),
+                    stereo.as_ref(),
+                    pixel_aspect,
+                );
             }) {
                 log::error!("subtitles: {e}");
             }

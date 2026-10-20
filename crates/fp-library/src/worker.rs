@@ -26,9 +26,10 @@ use crate::record::{MediaId, MediaRecord, PreviewStrip};
 pub struct ProbeInfo {
     /// Seconds; `None` for live streams or when unknown.
     pub duration: Option<f64>,
-    /// Coded frame width in pixels (whole frame, both eyes).
+    /// Frame width in pixels as shown (whole frame, both eyes): turned
+    /// upright and unsqueezed.
     pub width: u32,
-    /// Coded frame height in pixels.
+    /// Frame height in pixels as shown.
     pub height: u32,
     /// Codec name (`"hevc"`, `"av1"`, `"h264"`...).
     pub video_codec: Option<String>,
@@ -691,6 +692,7 @@ mod tests {
                 ContainerHints {
                     projection: Some(Projection::EQUIRECT_360),
                     stereo: Some(StereoLayout::Mono),
+                    ..Default::default()
                 },
             )
             .with("/v/c.mp4", 5760, 2880, 30.0, ContainerHints::default());
