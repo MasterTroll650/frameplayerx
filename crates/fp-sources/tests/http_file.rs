@@ -356,3 +356,75 @@ fn a_slow_stream_that_keeps_coming_plays_on() {
     });
     assert!(got == data);
 }
+
+/// `serve_bytes` from a server that never sends more than `cap` bytes of a
+/// range, saying so in Content-Range as such servers do.
+fn capped(req: &Req, data: &[u8], cap: u64) -> common::Resp {
+    let mut req = req.clone();
+    for (k, v) in req.headers.iter_mut() {
+        if k.eq_ignore_ascii_case("range")
+            && let Some((a, b)) = v.trim_start_matches("bytes=").split_once('-')
+        {
+            let start: u64 = a.parse().unwrap();
+            let end = b.parse::<u64>().unwrap_or(u64::MAX).min(start + cap - 1);
+            *v = format!("bytes={start}-{end}");
+        }
+    }
+    serve_bytes(&req, data, true)
+}
+
+#[test]
+fn servers_that_cap_their_ranges_are_read_in_full() {
+    let data = Arc::new(pattern(20_000));
+    let d = data.clone();
+    let server = TestServer::start(move |req| capped(req, &d, 1024));
+    let client = HttpClient::new(
+        HttpOptions {
+            cache: CacheOptions {
+                block_size: 4096,
+                ..CacheOptions::default()
+            },
+            ..HttpOptions::default()
+        },
+        None,
+    );
+    let f = client.open(&server.url("/x.mp4")).unwrap();
+    assert_eq!(f.size(), Some(20_000));
+    assert!(read_all(&f, 3000) == *data);
+}
+
+#[test]
+fn a_short_first_range_is_no_end_of_file() {
+    // The opening request gets only the first 1024 bytes of its block.
+    let data = Arc::new(pattern(8192));
+    let d = data.clone();
+    let first = Arc::new(AtomicUsize::new(0));
+    let server = TestServer::start(move |req| {
+        if first.fetch_add(1, Ordering::SeqCst) == 0 {
+            return resp(
+                206,
+                d[..1024].to_vec(),
+                &[("Content-Range", "bytes 0-1023/8192")],
+            );
+        }
+        serve_bytes(req, &d, true)
+    });
+    let client = HttpClient::new(
+        HttpOptions {
+            cache: CacheOptions {
+                block_size: 4096,
+                ..CacheOptions::default()
+            },
+            ..HttpOptions::default()
+        },
+        None,
+    );
+    let f = client.open(&server.url("/x.mp4")).unwrap();
+    let mut buf = [0u8; 100];
+    assert_eq!(
+        f.read_at(1024, &mut buf).unwrap(),
+        100,
+        "end of file at 1024"
+    );
+    assert!(read_all(&f, 3000) == *data);
+}

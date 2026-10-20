@@ -578,11 +578,28 @@ impl HttpFetcher {
         redact(&self.url)
     }
 
+    /// `len` bytes from `offset`, fewer only at the end of the file. A server
+    /// that serves smaller ranges than asked is asked again for the rest.
     fn fetch_range(&self, offset: u64, len: usize) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        while out.len() < len {
+            let (part, capped) =
+                self.fetch_range_once(offset + out.len() as u64, len - out.len())?;
+            out.extend_from_slice(&part);
+            if !capped || part.is_empty() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// One range request: the bytes, and whether the server sent a smaller
+    /// range than asked for (and has more).
+    fn fetch_range_once(&self, offset: u64, len: usize) -> Result<(Vec<u8>, bool)> {
         let mut end = offset + len as u64 - 1;
         if let Some(size) = self.size {
             if offset >= size {
-                return Ok(Vec::new());
+                return Ok((Vec::new(), false));
             }
             end = end.min(size - 1);
         }
@@ -614,10 +631,8 @@ impl HttpFetcher {
             };
             match status {
                 206 => {
-                    if let Some(ContentRange {
-                        range: Some((start, _)),
-                        ..
-                    }) = cr
+                    let served = cr.and_then(|c| c.range);
+                    if let Some((start, _)) = served
                         && start != offset
                     {
                         return Err(Failure::Fatal(Error::Http {
@@ -625,31 +640,38 @@ impl HttpFetcher {
                             message: format!("asked for {range}, server sent bytes from {start}"),
                         }));
                     }
-                    let data =
-                        read_body(resp.into_body().into_reader(), want as u64).map_err(io_retry)?;
+                    // Some servers cap the size of a range.
+                    let capped = served
+                        .filter(|&(_, last)| last < end)
+                        .map(|(_, last)| (last + 1 - offset) as usize);
+                    let expect = capped.unwrap_or(want);
+                    let data = read_body(resp.into_body().into_reader(), expect as u64)
+                        .map_err(io_retry)?;
                     let at_eof = self.size.is_some_and(|s| offset + data.len() as u64 >= s);
-                    if data.len() < want && !at_eof && self.size.is_some() {
+                    if data.len() < expect && !at_eof && (self.size.is_some() || capped.is_some()) {
                         return Err(Failure::Retry(
                             Error::Http {
                                 url: self.display(),
                                 message: format!(
-                                    "short range response: {} of {want} bytes",
+                                    "short range response: {} of {expect} bytes",
                                     data.len()
                                 ),
                             },
                             None,
                         ));
                     }
-                    Ok(data)
+                    Ok((data, capped.is_some()))
                 }
                 416 => {
                     let _ = read_body(resp.into_body().into_reader(), 64 << 10);
-                    Ok(Vec::new())
+                    Ok((Vec::new(), false))
                 }
                 200 if offset == 0 => {
                     // Range ignored for this request; the start of the
                     // body is still the data we asked for.
-                    read_body(resp.into_body().into_reader(), want as u64).map_err(io_retry)
+                    read_body(resp.into_body().into_reader(), want as u64)
+                        .map(|d| (d, false))
+                        .map_err(io_retry)
                 }
                 200 => Err(Failure::Fatal(Error::Unsupported(format!(
                     "{} stopped honouring range requests",
@@ -866,7 +888,11 @@ impl HttpFile {
                     },
                     &opts,
                 );
-                if !first.is_empty() {
+                // Only a whole first block (or the whole file): the cache
+                // takes a short block for the file's last, and a server that
+                // caps its ranges or broke off sent less.
+                let whole = size.map_or(bs, |s| s.min(bs));
+                if first.len() as u64 == whole {
                     src.seed(0, first);
                 }
                 HttpFile { src }
