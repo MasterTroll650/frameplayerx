@@ -586,23 +586,23 @@ impl Playback {
         )
     }
 
-    pub fn save_settings(&mut self, library: &Library) {
-        if let Some(id) = self.record_id {
-            let r = library
-                .set_view_settings(id, Some(&self.settings))
-                .and_then(|_| library.set_keyframes(id, &self.keyframes));
-            match r {
-                Ok(()) => {
-                    self.settings_dirty = false;
-                    self.saved_settings = self.settings;
-                }
-                Err(e) => log::warn!("saving adjustments: {e}"),
-            }
-        } else {
+    /// Saves the adjustments with the video: true when saved, false when the
+    /// video isn't in the library (its notice says so). A failure keeps them
+    /// unsaved, to save again.
+    pub fn save_settings(&mut self, library: &Library) -> fp_library::Result<bool> {
+        let Some(id) = self.record_id else {
             self.notice = Some(
                 "Adjustments apply until you close this video (it is not in the library).".into(),
             );
-        }
+            return Ok(false);
+        };
+        library
+            .set_view_settings(id, Some(&self.settings))
+            .and_then(|_| library.set_keyframes(id, &self.keyframes))
+            .inspect_err(|e| log::warn!("saving adjustments: {e}"))?;
+        self.settings_dirty = false;
+        self.saved_settings = self.settings;
+        Ok(true)
     }
 
     /// Saves this video's chroma key (the Passthrough tab) without the

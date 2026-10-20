@@ -101,9 +101,17 @@ const PERF_OFFSET: Vec3 = Vec3::new(-0.3, -0.12, -0.85);
 /// would otherwise leave "Opening …" up for good.
 const OPEN_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// How often settings that couldn't be saved are tried again.
+const SETTINGS_RETRY: Duration = Duration::from_secs(10);
+
 pub struct App {
     pub settings: Settings,
+    /// The settings last applied.
     saved: Settings,
+    /// When saving the settings last failed; it is tried again.
+    unsaved_since: Option<Instant>,
+    /// The latest Quick Connect pairing code request.
+    quick_connect_request: u64,
     services: Services,
     pub ui: UiState,
     thumbs: ui::thumbs::Thumbs,
@@ -231,6 +239,8 @@ impl App {
         sub_fonts.spawn("fp-fonts", ui::subtitle_text::SubtitleText::load);
         let mut app = App {
             saved: settings.clone(),
+            unsaved_since: None,
+            quick_connect_request: 0,
             settings,
             services,
             ui: UiState::default(),
@@ -376,6 +386,12 @@ impl App {
     /// Saves and applies settings edited through the UI.
     fn sync_settings(&mut self) {
         if self.settings == self.saved {
+            if self
+                .unsaved_since
+                .is_some_and(|t| t.elapsed() > SETTINGS_RETRY)
+            {
+                self.save_settings();
+            }
             return;
         }
         if self.settings.remote != self.saved.remote {
@@ -392,10 +408,23 @@ impl App {
         if self.settings.ui_scale != self.saved.ui_scale {
             self.apply_ui_scale();
         }
-        if let Err(e) = self.settings.save(&Settings::path()) {
-            log::warn!("saving settings: {e}");
-        }
         self.saved = self.settings.clone();
+        self.save_settings();
+    }
+
+    /// Writes the settings. A failure is shown once and tried again every
+    /// [`SETTINGS_RETRY`] until it works.
+    fn save_settings(&mut self) {
+        match self.settings.save(&Settings::path()) {
+            Ok(()) => self.unsaved_since = None,
+            Err(e) => {
+                if self.unsaved_since.is_none() {
+                    log::warn!("saving settings: {e}");
+                    self.ui.toast(format!("Settings couldn't be saved: {e}"));
+                }
+                self.unsaved_since = Some(Instant::now());
+            }
+        }
     }
 
     fn remote_events(&mut self) {

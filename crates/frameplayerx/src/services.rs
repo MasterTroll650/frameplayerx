@@ -15,6 +15,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+/// What changing the source list did.
+pub struct SourcesChange {
+    /// Sources that couldn't be set up.
+    pub errors: Vec<SourceError>,
+    /// Why the list couldn't be saved, when it couldn't.
+    pub save_error: Option<String>,
+}
+
 /// A configured source that could not be built.
 #[derive(Debug)]
 pub struct SourceError {
@@ -222,6 +230,9 @@ pub struct Services {
     haptics: Option<HapticsEngine>,
     /// The configured devices that were tried, in the order they answered.
     haptic_devices: Vec<HapticDeviceSlot>,
+    /// Counts the times haptics were turned off, so a connection that was
+    /// started before is not taken.
+    haptics_generation: u64,
     pub remote: Option<RemoteHub>,
     pub remote_error: Option<String>,
     /// Sends watch sync reports to servers.
@@ -329,6 +340,7 @@ impl Services {
             worker_busy: Default::default(),
             haptics: None,
             haptic_devices: Vec::new(),
+            haptics_generation: 0,
             remote: None,
             remote_error: None,
             watch: crate::watch::Reports::start(),
@@ -378,14 +390,16 @@ impl Services {
         self.source_configs.iter().find(|c| c.id() == id)
     }
 
-    /// Persists the source list (mode 0600) and rebuilds the sources.
-    pub fn set_sources(&mut self, configs: Vec<SourceConfig>) -> Vec<SourceError> {
-        if let Err(e) = fp_sources::save_configs(&Settings::sources_path(), &configs) {
-            log::error!("saving sources: {e}");
-        }
+    /// Persists the source list (mode 0600) and rebuilds the sources. The
+    /// list is used even when it can't be saved, until FramePlayerX quits.
+    pub fn set_sources(&mut self, configs: Vec<SourceConfig>) -> SourcesChange {
+        let save_error = fp_sources::save_configs(&Settings::sources_path(), &configs)
+            .inspect_err(|e| log::error!("saving sources: {e}"))
+            .err()
+            .map(|e| e.to_string());
         let errors = self.opener.set_sources(&configs);
         self.source_configs = configs;
-        errors
+        SourcesChange { errors, save_error }
     }
 
     /// Connects one haptic device (blocking: call from a job thread).
@@ -425,6 +439,9 @@ impl Services {
     /// with every device, when they are turned off; applies their settings.
     pub fn set_haptics(&mut self, settings: &Settings) {
         if !settings.haptics_enabled {
+            if self.haptics.is_some() {
+                self.haptics_generation += 1;
+            }
             self.remove_devices();
             self.haptics = None;
             return;
@@ -441,6 +458,11 @@ impl Services {
         if let Some(h) = &self.haptics {
             h.set_settings(settings.haptics.clone());
         }
+    }
+
+    /// Changes each time haptics are turned off.
+    pub fn haptics_generation(&self) -> u64 {
+        self.haptics_generation
     }
 
     /// The haptics engine, while haptics are turned on.

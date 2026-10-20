@@ -340,11 +340,14 @@ impl App {
     pub(super) fn add_source(&mut self, cfg: fp_sources::SourceConfig) {
         let mut list = self.services.source_configs.clone();
         list.push(cfg.clone());
-        let errors = self.services.set_sources(list);
-        match errors.into_iter().find(|e| e.id == cfg.id()) {
+        let change = self.services.set_sources(list);
+        match change.errors.into_iter().find(|e| e.id == cfg.id()) {
             Some(e) => self.ui.toast(e.to_string()),
             None => {
-                self.ui.toast(format!("Added {}", cfg.name()));
+                self.ui.toast(match change.save_error {
+                    Some(e) => unsaved(&format!("Added {}", cfg.name()), &e),
+                    None => format!("Added {}", cfg.name()),
+                });
                 self.open_source(cfg.id().to_string(), Screen::Sources);
             }
         }
@@ -364,10 +367,13 @@ impl App {
             .iter()
             .map(|c| if c.id() == id { cfg.clone() } else { c.clone() })
             .collect();
-        let errors = self.services.set_sources(list);
-        match errors.into_iter().find(|e| e.id == id) {
+        let change = self.services.set_sources(list);
+        match change.errors.into_iter().find(|e| e.id == id) {
             Some(e) => self.ui.toast(e.to_string()),
-            None => self.ui.toast(format!("Saved {}", cfg.name())),
+            None => self.ui.toast(match change.save_error {
+                Some(e) => unsaved(&format!("Changed {}", cfg.name()), &e),
+                None => format!("Saved {}", cfg.name()),
+            }),
         }
         // Its browser and saved listing were made with the old details.
         self.close_source_view(&id);
@@ -398,7 +404,9 @@ impl App {
             .filter(|c| c.id() != id)
             .cloned()
             .collect();
-        self.services.set_sources(list);
+        if let Some(e) = self.services.set_sources(list).save_error {
+            self.ui.toast(unsaved("Removed", &e));
+        }
     }
 
     /// Leaves source `id`'s browser if it is open.
@@ -593,9 +601,12 @@ impl App {
     // ---- Quick Connect ----
 
     pub(super) fn quick_connect_initiate(&mut self, address: String, insecure_tls: bool) {
+        let seq = self.ui.next_seq();
+        self.quick_connect_request = seq;
         self.jobs.spawn("quick_connect_initiate", move || {
             let addr = fp_sources::urlutil::with_http_scheme(&address);
             Job::QuickConnectInitiated(
+                seq,
                 fp_sources::quick_connect_initiate_url(&addr, insecure_tls)
                     .map_err(|e| e.to_string()),
             )
@@ -610,10 +621,9 @@ impl App {
     ) {
         self.jobs.spawn("quick_connect_poll", move || {
             let addr = fp_sources::urlutil::with_http_scheme(&address);
-            Job::QuickConnectPolled(
-                fp_sources::quick_connect_poll_url(&addr, &secret, insecure_tls)
-                    .map_err(|e| e.to_string()),
-            )
+            let r = fp_sources::quick_connect_poll_url(&addr, &secret, insecure_tls)
+                .map_err(|e| e.to_string());
+            Job::QuickConnectPolled(secret, r)
         });
     }
 }
@@ -627,4 +637,10 @@ fn scene_details(
 ) -> Result<fp_sources::SceneInfo, String> {
     let feed = src.as_scene_feed().ok_or("not a scene feed")?;
     feed.scene(url, full).map_err(|e| e.to_string())
+}
+
+/// A toast for a source change that holds until FramePlayerX quits but
+/// couldn't be saved.
+fn unsaved(done: &str, error: &str) -> String {
+    format!("{done} until you quit: the sources couldn't be saved ({error})")
 }

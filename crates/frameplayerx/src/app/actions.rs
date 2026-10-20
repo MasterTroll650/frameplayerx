@@ -46,8 +46,11 @@ impl App {
             }
             Action::SaveView => {
                 if let Some(p) = &mut self.playback {
-                    p.save_settings(&self.services.library);
-                    self.ui.toast("Adjustments saved");
+                    match p.save_settings(&self.services.library) {
+                        Ok(true) => self.ui.toast("Adjustments saved"),
+                        Ok(false) => {}
+                        Err(e) => self.ui.toast(format!("Adjustments couldn't be saved: {e}")),
+                    }
                 }
             }
             Action::ResetView => self.edit_view(|p, s| {
