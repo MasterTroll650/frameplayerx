@@ -9,6 +9,8 @@
 //! - Servers without range support fall back to one sequential stream:
 //!   forward seeks skip data, backward seeks outside the cache fail with
 //!   [`std::io::ErrorKind::Unsupported`].
+//! - A server that stops sending fails the read after the read timeout,
+//!   however long a stream has been running.
 //! - TLS is rustls with the ring provider and webpki roots.
 
 use crate::cache::{CacheOptions, CacheStats, CachedSource, RangeFetch};
@@ -21,14 +23,20 @@ use std::io::{self, Read};
 use std::sync::Mutex;
 use std::time::Duration;
 use ureq::http;
+use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::{
+    Buffers, ConnectionDetails, Connector, DefaultConnector, NextTimeout, Transport,
+};
 
 /// Connection, retry and caching settings.
 #[derive(Clone, Debug)]
 pub struct HttpOptions {
     /// Time allowed to open a TCP/TLS connection.
     pub connect_timeout: Duration,
-    /// Time allowed for response headers, and for the body of a bounded
-    /// request (one cache block, a listing, a feed).
+    /// Time allowed for response headers, for the body of a bounded request
+    /// (one cache block, a listing, a feed), and between any two reads of a
+    /// body: a stream with no overall deadline still fails once its server
+    /// stops sending.
     pub read_timeout: Duration,
     /// Extra attempts after a transient failure.
     pub max_retries: u32,
@@ -133,6 +141,91 @@ impl From<Error> for Failure {
 
 type Response = http::Response<ureq::Body>;
 
+/// The agent's connections, each wait for the network capped at the read
+/// timeout: ureq's body deadline covers a whole body, which a video stream
+/// can't have, and without one a stalled server blocks its reader forever.
+fn agent(opts: &HttpOptions) -> ureq::Agent {
+    let tls = ureq::tls::TlsConfig::builder()
+        .disable_verification(opts.insecure_tls)
+        .build();
+    let config = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .allow_non_standard_methods(true)
+        .timeout_connect(Some(opts.connect_timeout))
+        .timeout_recv_response(Some(opts.read_timeout))
+        .timeout_recv_body(Some(opts.read_timeout))
+        .max_idle_connections_per_host(4)
+        .user_agent(opts.user_agent.as_str())
+        .tls_config(tls)
+        .build();
+    let connector = DefaultConnector::new().chain(StallLimit(opts.read_timeout));
+    ureq::Agent::with_parts(config, connector, DefaultResolver::default())
+}
+
+/// Wraps each connection in a [`Stalling`] transport.
+#[derive(Debug)]
+struct StallLimit(Duration);
+
+impl Connector<Box<dyn Transport>> for StallLimit {
+    type Out = Stalling;
+
+    fn connect(
+        &self,
+        _: &ConnectionDetails,
+        chained: Option<Box<dyn Transport>>,
+    ) -> std::result::Result<Option<Stalling>, ureq::Error> {
+        Ok(chained.map(|inner| Stalling {
+            inner,
+            limit: self.0,
+        }))
+    }
+}
+
+/// A connection whose every send and receive gives up after `limit`
+/// without progress.
+#[derive(Debug)]
+struct Stalling {
+    inner: Box<dyn Transport>,
+    limit: Duration,
+}
+
+impl Stalling {
+    fn capped(&self, t: NextTimeout) -> NextTimeout {
+        NextTimeout {
+            after: (*t.after).min(self.limit).into(),
+            reason: t.reason,
+        }
+    }
+}
+
+impl Transport for Stalling {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        self.inner.buffers()
+    }
+
+    fn transmit_output(
+        &mut self,
+        amount: usize,
+        timeout: NextTimeout,
+    ) -> std::result::Result<(), ureq::Error> {
+        let timeout = self.capped(timeout);
+        self.inner.transmit_output(amount, timeout)
+    }
+
+    fn await_input(&mut self, timeout: NextTimeout) -> std::result::Result<bool, ureq::Error> {
+        let timeout = self.capped(timeout);
+        self.inner.await_input(timeout)
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.inner.is_open()
+    }
+
+    fn is_tls(&self) -> bool {
+        self.inner.is_tls()
+    }
+}
+
 /// HTTP client shared by the HTTP, WebDAV, DLNA and feed sources.
 ///
 /// Cloning is cheap and shares the connection pool.
@@ -160,21 +253,8 @@ impl HttpClient {
     /// every request; credentials embedded in a URL are used when none are
     /// given here.
     pub fn new(opts: HttpOptions, credentials: Option<&Credentials>) -> HttpClient {
-        let tls = ureq::tls::TlsConfig::builder()
-            .disable_verification(opts.insecure_tls)
-            .build();
-        let config = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .allow_non_standard_methods(true)
-            .timeout_connect(Some(opts.connect_timeout))
-            .timeout_recv_response(Some(opts.read_timeout))
-            .timeout_recv_body(Some(opts.read_timeout))
-            .max_idle_connections_per_host(4)
-            .user_agent(opts.user_agent.as_str())
-            .tls_config(tls)
-            .build();
         HttpClient {
-            agent: ureq::Agent::new_with_config(config),
+            agent: agent(&opts),
             auth: credentials.map(basic_auth_value),
             scope: None,
             opts,
@@ -197,21 +277,8 @@ impl HttpClient {
         auth_header: impl Into<String>,
         scope: &str,
     ) -> HttpClient {
-        let tls = ureq::tls::TlsConfig::builder()
-            .disable_verification(opts.insecure_tls)
-            .build();
-        let config = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .allow_non_standard_methods(true)
-            .timeout_connect(Some(opts.connect_timeout))
-            .timeout_recv_response(Some(opts.read_timeout))
-            .timeout_recv_body(Some(opts.read_timeout))
-            .max_idle_connections_per_host(4)
-            .user_agent(opts.user_agent.as_str())
-            .tls_config(tls)
-            .build();
         HttpClient {
-            agent: ureq::Agent::new_with_config(config),
+            agent: agent(&opts),
             auth: Some(auth_header.into()),
             scope: Some(scope.to_string()),
             opts,

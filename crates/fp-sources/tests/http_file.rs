@@ -233,3 +233,126 @@ fn servers_without_ranges_stream_sequentially() {
     assert_eq!(f.read_at(data.len() as u64 - 16, &mut buf).unwrap(), 16);
     assert_eq!(buf[..], data[data.len() - 16..]);
 }
+
+/// Runs `f` on a thread of its own and fails the test if it is still
+/// running after `limit`, so a regression can't hang the suite.
+fn within<T: Send + 'static>(limit: Duration, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(limit).expect("still blocked")
+}
+
+/// A server that answers every request with `head` and `body`, sent
+/// `pause` apart in `chunks` pieces, and then holds the connection open
+/// without sending anything more.
+fn raw_server(head: String, body: Vec<u8>, chunks: usize, pause: Duration) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/x.mp4", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let (head, body) = (head.clone(), body.clone());
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(&stream);
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    line.clear();
+                }
+                let mut stream = &stream;
+                let _ = stream.write_all(head.as_bytes());
+                for piece in body.chunks(body.len().div_ceil(chunks).max(1)) {
+                    std::thread::sleep(pause);
+                    let _ = stream.write_all(piece);
+                }
+                std::thread::sleep(Duration::from_secs(30));
+            });
+        }
+    });
+    url
+}
+
+fn stall_client() -> HttpClient {
+    HttpClient::new(
+        HttpOptions {
+            read_timeout: Duration::from_millis(300),
+            max_retries: 0,
+            cache: CacheOptions {
+                block_size: 4096,
+                read_ahead: false,
+                ..CacheOptions::default()
+            },
+            ..HttpOptions::default()
+        },
+        None,
+    )
+}
+
+#[test]
+fn a_server_that_stops_after_its_headers_fails_the_open() {
+    let ranged = raw_server(
+        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-4095/1000000\r\nContent-Length: 4096\r\n\r\n".into(),
+        vec![1],
+        1,
+        Duration::ZERO,
+    );
+    let plain = raw_server(
+        "HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n".into(),
+        vec![1],
+        1,
+        Duration::ZERO,
+    );
+    for url in [ranged, plain] {
+        let t = Instant::now();
+        let r = within(Duration::from_secs(10), move || {
+            stall_client().open(&url).map(|_| ())
+        });
+        assert!(r.is_err(), "opened a stalled stream");
+        assert!(
+            t.elapsed() < Duration::from_secs(3),
+            "took {:?}",
+            t.elapsed()
+        );
+    }
+}
+
+#[test]
+fn a_stream_that_stops_later_fails_the_read() {
+    let url = raw_server(
+        "HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n".into(),
+        pattern(8192),
+        1,
+        Duration::ZERO,
+    );
+    let f = stall_client().open(&url).unwrap();
+    let t = Instant::now();
+    let r = within(Duration::from_secs(10), move || {
+        let mut buf = [0u8; 100];
+        f.read_at(9000, &mut buf)
+    });
+    assert!(r.is_err(), "read past what the server sent");
+    assert!(
+        t.elapsed() < Duration::from_secs(3),
+        "took {:?}",
+        t.elapsed()
+    );
+}
+
+#[test]
+fn a_slow_stream_that_keeps_coming_plays_on() {
+    // A second in all, longer than the read timeout, but never 300 ms
+    // without data.
+    let data = pattern(40_000);
+    let url = raw_server(
+        format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", data.len()),
+        data.clone(),
+        10,
+        Duration::from_millis(100),
+    );
+    let got = within(Duration::from_secs(10), move || {
+        let f = stall_client().open(&url).unwrap();
+        read_all(&f, 4096)
+    });
+    assert!(got == data);
+}
