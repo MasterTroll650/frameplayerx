@@ -8,6 +8,7 @@ use crate::{Error, Result};
 use ash::vk;
 use fp_media::{PixelLayout, VideoFrame};
 use gpu_allocator::MemoryLocation;
+use std::sync::{LazyLock, mpsc};
 
 /// The plane images of one frame slot.
 pub(crate) struct VideoPlanes {
@@ -35,21 +36,88 @@ fn frame_key(f: &VideoFrame) -> u64 {
     f.id
 }
 
-/// `dst.copy_from_slice(src)` across a few threads: an 8K frame is 50 MB,
-/// several milliseconds for one core, and memory bandwidth goes further.
-fn par_copy(dst: &mut [u8], src: &[u8]) {
-    const THREADS: usize = 4;
-    const MIN_CHUNK: usize = 1 << 20;
-    if dst.len() < MIN_CHUNK * 2 {
-        dst.copy_from_slice(src);
-        return;
+/// Copies frames into upload memory on helper threads started once, the
+/// calling thread taking a share: an 8K frame is 50 MB, several
+/// milliseconds for one core, and memory bandwidth goes further.
+struct Copier {
+    helpers: Vec<mpsc::Sender<Part>>,
+}
+
+static COPIER: LazyLock<Copier> = LazyLock::new(|| Copier::new(3));
+
+/// A helper's share of a copy. [`Copier::copy`] waits until every part is
+/// dropped, so the memory it points at outlives it.
+struct Part {
+    dst: *mut u8,
+    src: *const u8,
+    len: usize,
+    _done: mpsc::Sender<()>,
+}
+
+// SAFETY: the pointers are only used while the caller of `Copier::copy`
+// waits for the part to be dropped.
+unsafe impl Send for Part {}
+
+impl Part {
+    fn run(self) {
+        // SAFETY: `dst` and `src` are disjoint, `len` bytes each, and live
+        // until the part is dropped.
+        unsafe { std::ptr::copy_nonoverlapping(self.src, self.dst, self.len) };
     }
-    let chunk = dst.len().div_ceil(THREADS).next_multiple_of(64);
-    std::thread::scope(|scope| {
-        for (d, s) in dst.chunks_mut(chunk).zip(src.chunks(chunk)) {
-            scope.spawn(move || d.copy_from_slice(s));
+}
+
+impl Copier {
+    fn new(helpers: usize) -> Copier {
+        let helpers = (0..helpers)
+            .filter_map(|i| {
+                let (tx, rx) = mpsc::channel::<Part>();
+                std::thread::Builder::new()
+                    .name(format!("frame copy {i}"))
+                    .spawn(move || rx.into_iter().for_each(Part::run))
+                    .ok()
+                    .map(|_| tx)
+            })
+            .collect();
+        Copier { helpers }
+    }
+
+    /// `dst.copy_from_slice(src)`.
+    fn copy(&self, dst: &mut [u8], src: &[u8]) {
+        const MIN_CHUNK: usize = 1 << 20;
+        if dst.len() < MIN_CHUNK * 2 || self.helpers.is_empty() {
+            dst.copy_from_slice(src);
+            return;
         }
-    });
+        assert_eq!(
+            dst.len(),
+            src.len(),
+            "copy between slices of different lengths"
+        );
+        let chunk = dst
+            .len()
+            .div_ceil(self.helpers.len() + 1)
+            .next_multiple_of(64);
+        let (done, finished) = mpsc::channel();
+        let mut parts = dst.chunks_mut(chunk).zip(src.chunks(chunk));
+        let own = parts.next();
+        for (helper, (d, s)) in self.helpers.iter().zip(parts.by_ref()) {
+            let part = Part {
+                dst: d.as_mut_ptr(),
+                src: s.as_ptr(),
+                len: d.len(),
+                _done: done.clone(),
+            };
+            if let Err(mpsc::SendError(part)) = helper.send(part) {
+                part.run();
+            }
+        }
+        drop(done);
+        for (d, s) in parts.chain(own) {
+            d.copy_from_slice(s);
+        }
+        // Ends once every part has been dropped, its copy done.
+        while finished.recv().is_ok() {}
+    }
 }
 
 impl VideoPlanes {
@@ -181,7 +249,7 @@ impl VideoPlanes {
                     continue;
                 }
                 if p.stride >= row_len && p.stride % texel == 0 {
-                    par_copy(&mut dst[offset..offset + len], &p.data[..len]);
+                    COPIER.copy(&mut dst[offset..offset + len], &p.data[..len]);
                     regions.push((offset as u64, (p.stride / texel) as u32, p.width, p.height));
                     offset = (offset + len + 63) & !63;
                 } else {
@@ -346,7 +414,7 @@ impl VideoPlanes {
             return Ok(recreated);
         };
         s.desc.color = frame.color;
-        par_copy(p.bytes(), pic.data);
+        COPIER.copy(p.bytes(), pic.data);
         conv.record(gpu, cmd, p, &s.images);
         s.key = Some(frame_key(frame));
         Ok(recreated)
@@ -375,5 +443,38 @@ impl VideoPlanes {
         if let Some(p) = self.q10c.as_mut() {
             p.destroy(gpu);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copies_like_copy_from_slice() {
+        for copier in [
+            Copier::new(3),
+            Copier {
+                helpers: Vec::new(),
+            },
+        ] {
+            for len in [0, 100, (2 << 20) - 1, (3 << 20) + 17, 8 << 20] {
+                let src: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+                let mut dst = vec![0u8; len];
+                copier.copy(&mut dst, &src);
+                assert!(dst == src, "{len} bytes");
+            }
+        }
+    }
+
+    #[test]
+    fn a_gone_helper_leaves_its_share_to_the_caller() {
+        let (tx, rx) = mpsc::channel();
+        drop(rx);
+        let copier = Copier { helpers: vec![tx] };
+        let src: Vec<u8> = (0..4 << 20).map(|i| (i % 251) as u8).collect();
+        let mut dst = vec![0u8; src.len()];
+        copier.copy(&mut dst, &src);
+        assert!(dst == src);
     }
 }
