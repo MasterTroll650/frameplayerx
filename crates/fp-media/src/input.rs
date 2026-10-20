@@ -13,6 +13,7 @@ pub struct Input {
     _io: IoContext,
     _interrupt: Arc<AtomicBool>,
     pub name: String,
+    origin: f64,
 }
 
 // SAFETY: an Input is owned and used by one thread at a time.
@@ -53,16 +54,18 @@ impl Input {
                 ),
                 "open input",
             )?;
-            let input = Input {
+            let mut input = Input {
                 fmt,
                 _io: io,
                 _interrupt: interrupt,
                 name: name.to_string(),
+                origin: 0.0,
             };
             check(
                 ff::avformat_find_stream_info(fmt, std::ptr::null_mut()),
                 "find stream info",
             )?;
+            input.origin = input.timeline_start();
             Ok(input)
         }
     }
@@ -79,6 +82,34 @@ impl Input {
         }
     }
 
+    /// Where the media's timeline starts, in the container's seconds. Times
+    /// in and out of the player, thumbnails and seeks count from here, so
+    /// a video starts at 0 whatever its first timestamp: MPEG-TS and
+    /// Blu-ray (.m2ts) files often start seconds or hours in.
+    pub(crate) fn origin(&self) -> f64 {
+        self.origin
+    }
+
+    /// The earliest start of an audio or video stream, when it is positive.
+    /// Other streams don't count: a subtitle file's starts at its first
+    /// cue. A start below 0 is an encoder's priming and is kept.
+    fn timeline_start(&self) -> f64 {
+        self.streams()
+            .iter()
+            .filter_map(|&st| {
+                // SAFETY: stream pointers and their parameters are valid
+                // while the input is open.
+                let (st, kind) = unsafe { (&*st, (*(*st).codecpar).codec_type) };
+                let picture = st.disposition & ff::AV_DISPOSITION_ATTACHED_PIC as c_int != 0;
+                let media = matches!(kind, ff::AVMEDIA_TYPE_VIDEO | ff::AVMEDIA_TYPE_AUDIO);
+                (media && !picture && st.start_time != ff::AV_NOPTS_VALUE)
+                    .then(|| st.start_time as f64 * crate::q2d(st.time_base))
+            })
+            .reduce(f64::min)
+            .filter(|t| *t > 0.0)
+            .unwrap_or(0.0)
+    }
+
     /// Best stream of a media type, as FFmpeg chooses it.
     pub fn best_stream(&self, kind: ff::AVMediaType) -> Option<usize> {
         // SAFETY: fmt is open.
@@ -86,9 +117,10 @@ impl Input {
         (i >= 0).then_some(i as usize)
     }
 
-    /// Seeks so the next packets start at or before `seconds`.
+    /// Seeks so the next packets start at or before `seconds` on the media's
+    /// timeline (see [`Input::origin`]).
     pub fn seek(&mut self, seconds: f64) -> Result<()> {
-        let ts = (seconds.max(0.0) * ff::AV_TIME_BASE as f64) as i64;
+        let ts = ((seconds.max(0.0) + self.origin) * ff::AV_TIME_BASE as f64) as i64;
         // SAFETY: fmt is open.
         unsafe {
             check(

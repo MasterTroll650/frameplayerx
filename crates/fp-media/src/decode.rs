@@ -1,5 +1,6 @@
 //! Thin RAII wrappers over FFmpeg packets, frames and decoders.
 
+use crate::input::Input;
 use crate::{Error, Result, check};
 use fp_ffmpeg_sys as ff;
 use std::ffi::{CStr, CString};
@@ -288,6 +289,8 @@ pub struct Decoder {
     /// open failed, or it failed once running.
     pub hardware_error: Option<String>,
     pub time_base: ff::AVRational,
+    /// The input's [`Input::origin`], taken off every time.
+    pub(crate) origin: f64,
 }
 
 // SAFETY: one thread drives a decoder at a time.
@@ -304,12 +307,16 @@ impl Drop for Decoder {
 }
 
 impl Decoder {
-    /// Opens a decoder for `stream`. Video tries the hardware decoders first
-    /// when `hw` allows, and AV1 uses dav1d in software.
-    pub(crate) fn open(stream: *mut ff::AVStream, hw: HwDecode) -> Result<Decoder> {
+    /// Opens a decoder for stream `index` of `input`. Video tries the
+    /// hardware decoders first when `hw` allows, and AV1 uses dav1d in
+    /// software.
+    pub(crate) fn open(input: &Input, index: usize, hw: HwDecode) -> Result<Decoder> {
+        let stream = input.streams()[index];
         // SAFETY: stream belongs to an open input.
         let (par, time_base) = unsafe { ((*stream).codecpar, (*stream).time_base) };
-        Self::open_with(par, time_base, hw, crate::v4l2::enabled())
+        let mut dec = Self::open_with(par, time_base, hw, crate::v4l2::enabled())?;
+        dec.origin = input.origin();
+        Ok(dec)
     }
 
     fn open_with(
@@ -396,6 +403,7 @@ impl Decoder {
             hardware: true,
             hardware_error: None,
             time_base,
+            origin: 0.0,
         })
     }
 
@@ -430,6 +438,7 @@ impl Decoder {
                 hardware,
                 hardware_error: None,
                 time_base,
+                origin: 0.0,
             };
             if hardware {
                 HW_SESSIONS.fetch_add(1, Ordering::Relaxed); // until Drop
@@ -635,11 +644,12 @@ impl Decoder {
         }
     }
 
-    /// Best-effort presentation time of a decoded frame in seconds.
+    /// Best-effort presentation time of a decoded frame in seconds on the
+    /// media's timeline.
     pub fn frame_time(&self, frame: &Frame) -> Option<f64> {
         // SAFETY: valid frame.
         let ts = unsafe { (*frame.0).best_effort_timestamp };
-        (ts != ff::AV_NOPTS_VALUE).then(|| ts as f64 * crate::q2d(self.time_base))
+        (ts != ff::AV_NOPTS_VALUE).then(|| ts as f64 * crate::q2d(self.time_base) - self.origin)
     }
 
     pub fn frame_duration(&self, frame: &Frame) -> f64 {
@@ -673,7 +683,7 @@ mod tests {
         )
         .unwrap();
         let vi = input.best_stream(ff::AVMEDIA_TYPE_VIDEO).unwrap();
-        let mut dec = Decoder::open(input.streams()[vi], HwDecode::Auto).unwrap();
+        let mut dec = Decoder::open(&input, vi, HwDecode::Auto).unwrap();
         let mut conv = FrameConverter::default();
         let mut pkt = Packet::new();
         let mut frame = Frame::new();
@@ -816,7 +826,7 @@ mod tests {
         )
         .unwrap();
         let vi = input.best_stream(ff::AVMEDIA_TYPE_VIDEO).unwrap();
-        let mut dec = Decoder::open(input.streams()[vi], HwDecode::Off).unwrap();
+        let mut dec = Decoder::open(&input, vi, HwDecode::Off).unwrap();
         let mut pkt = Packet::new();
         let mut frame = Frame::new();
         while dec.receive(&mut frame).unwrap() != Some(true) {

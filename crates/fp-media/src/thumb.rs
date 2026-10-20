@@ -37,7 +37,7 @@ pub fn decode_first_frame(src: Arc<dyn ByteSource>, name: &str) -> Result<crate:
     let vi = input
         .best_stream(ff::AVMEDIA_TYPE_VIDEO)
         .ok_or(Error::NoStream("video"))?;
-    let mut dec = Decoder::open(input.streams()[vi], HwDecode::Off)?;
+    let mut dec = Decoder::open(&input, vi, HwDecode::Off)?;
     let mut pkt = Packet::new();
     let mut frame = Frame::new();
     let mut conv = crate::frame::FrameConverter::default();
@@ -96,7 +96,7 @@ pub fn grab(
         .ok_or(Error::NoStream("video"))?;
     let shape = crate::info::picture_shape(&input, vi);
     // Software decoding: the hardware decoder is busy with playback.
-    let mut dec = Decoder::open(input.streams()[vi], HwDecode::Off)?;
+    let mut dec = Decoder::open(&input, vi, HwDecode::Off)?;
     if at > 0.0 {
         input.seek(at)?;
     }

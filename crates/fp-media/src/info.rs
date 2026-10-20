@@ -364,9 +364,10 @@ pub fn read_info(input: &Input) -> MediaInfo {
                 // SAFETY: chapter pointers are valid while open.
                 let c = unsafe { &*c };
                 let tb = q2d(c.time_base);
+                let at = |t: i64| (t as f64 * tb - input.origin()).max(0.0);
                 Chapter {
-                    start: c.start as f64 * tb,
-                    end: c.end as f64 * tb,
+                    start: at(c.start),
+                    end: at(c.end),
                     title: dict_get(c.metadata, "title").unwrap_or_default(),
                 }
             })
@@ -470,6 +471,39 @@ pub(crate) mod tests {
             v.pixel_aspect
         );
         assert_eq!(v.display_size(), (853, 320));
+    }
+
+    #[test]
+    fn a_late_start_is_the_timeline_origin() {
+        let mut ts = Input::open(
+            crate::ts_fixture::h264_aac_ts(10.0),
+            "x.ts",
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("open");
+        assert!((ts.origin() - 10.0).abs() < 0.1, "origin {}", ts.origin());
+        let info = read_info(&ts);
+        assert_eq!(info.container, "mpegts");
+        assert!((info.duration - 2.0).abs() < 0.2, "{}", info.duration);
+        // A seek counts from the start too: the next video is from just
+        // before 1.25 s, not from the file's beginning.
+        let vi = info.video.unwrap();
+        // SAFETY: the stream lives while the input is open.
+        let tb = q2d(unsafe { (*ts.streams()[vi]).time_base });
+        ts.seek(1.25).unwrap();
+        let mut pkt = crate::decode::Packet::new();
+        let t = loop {
+            assert!(ts.read(pkt.as_ptr()).unwrap(), "no video after the seek");
+            if pkt.stream_index() == vi {
+                // SAFETY: a packet just read.
+                break unsafe { (*pkt.as_ptr()).dts } as f64 * tb - ts.origin();
+            }
+            pkt.unref();
+        };
+        assert!((0.75..=1.25).contains(&t), "seeked to {t}");
+        assert_eq!(open("h264_aac_180_LR.mp4").origin(), 0.0);
+        // A subtitle file starts at its first cue, which stays where it is.
+        assert_eq!(open("subs.srt").origin(), 0.0);
     }
 
     #[test]

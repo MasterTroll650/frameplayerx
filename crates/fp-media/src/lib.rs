@@ -23,6 +23,8 @@ pub(crate) mod io;
 pub mod player;
 pub mod subtitle;
 pub mod thumb;
+#[cfg(test)]
+pub(crate) mod ts_fixture;
 pub(crate) mod v4l2;
 
 pub use decode::{HwDecode, hardware_sessions, hevc_10bit_hardware, set_hevc_10bit_hardware};
