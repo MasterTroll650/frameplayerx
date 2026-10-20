@@ -891,22 +891,98 @@ fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
     }
 }
 
+/// The audio thread's output: head-tracked ambisonics, volume and speed,
+/// kept in step with the video clock, into the sink.
+struct AudioOut {
+    sink: Box<dyn output::Sink>,
+    stretch: Stretch,
+}
+
+impl AudioOut {
+    /// Plays `samples` (interleaved, `channels` per frame) starting at
+    /// media time `pts`.
+    fn play(&mut self, sh: &Shared, samples: Vec<f32>, channels: u32, pts: f64) {
+        let mut out = if channels == 4 {
+            ambisonic::render_stereo(&samples, *lock(&sh.head))
+        } else {
+            samples
+        };
+        let volume = *lock(&sh.volume);
+        if (volume - 1.0).abs() > 1e-3 {
+            out.iter_mut().for_each(|s| *s *= volume);
+        }
+        let speed = *lock(&sh.speed);
+        if (self.stretch.speed() - speed).abs() > 1e-6 {
+            self.stretch.set_speed(speed);
+        }
+        let out = self.stretch.process(&out);
+        if out.is_empty() {
+            return;
+        }
+        // Sync against the video clock: when will this chunk be heard,
+        // and what media time will the clock show then?
+        let heard_at = sh.clock.now() + self.sink.delay() * speed;
+        let diff = pts - heard_at;
+        let samples: &[f32] = if diff < -0.06 {
+            let skip = ((-diff / speed) * audio::RATE as f64) as usize * 2;
+            if skip >= out.len() {
+                return;
+            }
+            &out[skip..]
+        } else {
+            if diff > 0.06 {
+                let pad = ((diff / speed).min(0.5) * audio::RATE as f64) as usize * 2;
+                let _ = self.sink.write(&vec![0.0; pad]);
+            }
+            &out
+        };
+        self.write(samples);
+    }
+
+    fn write(&mut self, samples: &[f32]) {
+        if let Err(e) = self.sink.write(samples) {
+            log::warn!("{e}");
+            self.sink = output::open(&output::Backend::Null, 2);
+        }
+    }
+
+    /// Plays what the stretcher still holds and waits until the sink has
+    /// played everything, unless the player quits, seeks or pauses.
+    fn finish(&mut self, sh: &Shared, serial: u64) {
+        let tail = self.stretch.finish();
+        if !tail.is_empty() {
+            self.write(&tail);
+        }
+        while self.sink.delay() > 0.0
+            && !sh.quit.load(Ordering::Acquire)
+            && sh.serial() == serial
+            && !sh.ctl().paused
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
 fn audio_thread(
     sh: Arc<Shared>,
     mut decoders: Vec<(usize, Decoder)>,
     ambisonic_streams: Vec<usize>,
     backend: output::Backend,
 ) {
-    let mut sink = output::open(&backend, 2);
-    sh.stats().audio_sink = sink.name();
+    let mut out = AudioOut {
+        sink: output::open(&backend, 2),
+        stretch: Stretch::new(2, audio::RATE),
+    };
+    sh.stats().audio_sink = out.sink.name();
     let mut serial = 0u64;
     let mut current = sh.ctl().audio_stream;
     let mut resampler =
         Resampler::new(current.filter(|i| ambisonic_streams.contains(i)).map(|_| 4));
-    let mut stretch = Stretch::new(2, audio::RATE);
     let mut frame = Frame::new();
     let mut buf: Vec<f32> = Vec::new();
     let mut was_paused = false;
+    // Where the audio decoded so far ends, for what the resampler holds back.
+    let mut decoded_end = 0.0;
     if let Some((_, d)) = decoders.iter().find(|(i, _)| Some(*i) == current) {
         sh.stats().audio_decoder = d.name.clone();
     }
@@ -927,12 +1003,9 @@ fn audio_thread(
         let paused = sh.ctl().paused;
         if paused || sh.buffering.load(Ordering::Acquire) {
             if paused && !was_paused {
-                sink.flush();
+                out.sink.flush();
             }
             was_paused = paused;
-            if sh.apkts.len() > 0 && sh.serial() != serial {
-                // Drain stale packets while waiting.
-            }
             let c = sh.ctl();
             let _ = sh.ctl_cv.wait_timeout(c, Duration::from_millis(10));
             if !paused {
@@ -964,70 +1037,61 @@ fn audio_thread(
             serial = pkt_serial;
             dec.flush();
             resampler.reset();
-            stretch.reset();
-            sink.flush();
+            out.stretch.reset();
+            out.sink.flush();
         }
-        let Some(pkt) = pkt else {
-            sh.audio_done.store(true, Ordering::Release);
-            continue;
-        };
-        if let Err(e) = dec.send(pkt.as_ptr()) {
-            log::debug!("audio decode: {e}");
-            continue;
-        }
-        while let Ok(Some(true)) = dec.receive(&mut frame) {
-            let Some(pts) = dec.frame_time(&frame) else {
-                continue;
+        // No packet is the end: the decoder gives up what it holds back.
+        let end = pkt.is_none();
+        let pkt_ptr = pkt
+            .as_ref()
+            .map(|p| p.as_ptr() as *const ff::AVPacket)
+            .unwrap_or(std::ptr::null());
+        loop {
+            let accepted = match dec.send(pkt_ptr) {
+                Ok(a) => a,
+                Err(e) => {
+                    log::debug!("audio decode: {e}");
+                    true
+                }
             };
-            buf.clear();
-            if let Err(e) = resampler.convert(&frame, &mut buf) {
-                log::warn!("{e}");
-                continue;
-            }
-            // SAFETY: valid frame.
-            unsafe { ff::av_frame_unref(frame.as_ptr()) };
-            let mut out = if resampler.out_channels == 4 {
-                let head = *lock(&sh.head);
-                ambisonic::render_stereo(&buf, head)
-            } else {
-                std::mem::take(&mut buf)
-            };
-            let volume = *lock(&sh.volume);
-            if (volume - 1.0).abs() > 1e-3 {
-                out.iter_mut().for_each(|s| *s *= volume);
-            }
-            let speed = *lock(&sh.speed);
-            if (stretch.speed() - speed).abs() > 1e-6 {
-                stretch.set_speed(speed);
-            }
-            let out = stretch.process(&out);
-            if out.is_empty() {
-                continue;
-            }
-            // Sync against the video clock: when will this chunk be heard,
-            // and what media time will the clock show then?
-            let heard_at = sh.clock.now() + sink.delay() * speed;
-            let diff = pts - heard_at;
-            let samples: &[f32] = if diff < -0.06 {
-                let skip = ((-diff / speed) * audio::RATE as f64) as usize * 2;
-                if skip >= out.len() {
+            while let Ok(Some(true)) = dec.receive(&mut frame) {
+                let pts = dec.frame_time(&frame);
+                let duration = dec.frame_duration(&frame);
+                buf.clear();
+                let converted = resampler.convert(&frame, &mut buf);
+                // SAFETY: valid frame.
+                unsafe { ff::av_frame_unref(frame.as_ptr()) };
+                let Some(pts) = pts else {
                     continue;
-                } else {
-                    &out[skip..]
+                };
+                decoded_end = pts + duration;
+                if let Err(e) = converted {
+                    log::warn!("{e}");
+                    continue;
                 }
-            } else {
-                if diff > 0.06 {
-                    let pad = ((diff / speed).min(0.5) * audio::RATE as f64) as usize * 2;
-                    let _ = sink.write(&vec![0.0; pad]);
+                out.play(&sh, std::mem::take(&mut buf), resampler.out_channels, pts);
+                if sh.quit.load(Ordering::Acquire) || sh.serial() != serial || sh.ctl().paused {
+                    break;
                 }
-                &out
-            };
-            if let Err(e) = sink.write(samples) {
-                log::warn!("{e}");
-                sink = output::open(&output::Backend::Null, 2);
             }
-            if sh.quit.load(Ordering::Acquire) || sh.serial() != serial || sh.ctl().paused {
+            let stop = sh.quit.load(Ordering::Acquire) || sh.serial() != serial || sh.ctl().paused;
+            if accepted || stop {
                 break;
+            }
+        }
+        if end && sh.serial() == serial {
+            buf.clear();
+            if resampler.flush(&mut buf).is_ok() && !buf.is_empty() {
+                out.play(
+                    &sh,
+                    std::mem::take(&mut buf),
+                    resampler.out_channels,
+                    decoded_end,
+                );
+            }
+            out.finish(&sh, serial);
+            if sh.serial() == serial {
+                sh.audio_done.store(true, Ordering::Release);
             }
         }
     }

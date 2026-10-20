@@ -102,6 +102,32 @@ impl Resampler {
         Ok(())
     }
 
+    /// Appends the samples it still holds once the input has ended.
+    pub fn flush(&mut self, out: &mut Vec<f32>) -> Result<()> {
+        if self.swr.is_null() {
+            return Ok(());
+        }
+        // SAFETY: swr is initialised; null input asks it for what it holds.
+        unsafe {
+            let max_out = ff::swr_get_out_samples(self.swr, 0).max(0) as usize + 32;
+            let ch = self.out_channels as usize;
+            let start = out.len();
+            out.resize(start + max_out * ch, 0.0);
+            let dst = out[start..].as_mut_ptr() as *mut u8;
+            let n = ff::swr_convert(self.swr, &dst, max_out as i32, std::ptr::null(), 0);
+            if n < 0 {
+                out.truncate(start);
+                return Err(Error::Ffmpeg {
+                    context: "resample",
+                    code: n,
+                    message: ff::err_to_string(n),
+                });
+            }
+            out.truncate(start + n as usize * ch);
+        }
+        Ok(())
+    }
+
     pub fn reset(&mut self) {
         // SAFETY: frees our context; recreated lazily.
         unsafe { ff::swr_free(&mut self.swr) };
@@ -115,5 +141,38 @@ impl Drop for Resampler {
             ff::swr_free(&mut self.swr);
             ff::av_channel_layout_uninit(&mut self.out_layout);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nothing_is_held_back_at_the_end() {
+        // 0.1 s of silence at 44.1 kHz; converting to 48 kHz keeps a few
+        // samples in the filter until flushed.
+        let frame = Frame::new();
+        // SAFETY: a fresh frame, given a layout and its own buffer.
+        unsafe {
+            let f = frame.as_ptr();
+            (*f).format = ff::AV_SAMPLE_FMT_FLT;
+            (*f).sample_rate = 44_100;
+            (*f).nb_samples = 4_410;
+            ff::av_channel_layout_default(&mut (*f).ch_layout, 2);
+            assert!(ff::av_frame_get_buffer(f, 0) >= 0);
+            std::ptr::write_bytes((*f).data[0], 0, 4_410 * 2 * 4);
+        }
+        let mut r = Resampler::new(None);
+        let mut out = Vec::new();
+        r.convert(&frame, &mut out).unwrap();
+        let converted = out.len();
+        r.flush(&mut out).unwrap();
+        assert!(out.len() > converted, "nothing was held back");
+        let frames = out.len() / 2;
+        assert!(
+            (4_790..=4_810).contains(&frames),
+            "{frames} frames for 0.1 s"
+        );
     }
 }

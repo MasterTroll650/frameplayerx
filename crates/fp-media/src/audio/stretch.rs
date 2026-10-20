@@ -55,6 +55,16 @@ impl Stretch {
         self.prev_tail = None;
     }
 
+    /// What it still holds once the input has ended, as it is: the rest of
+    /// the audio after the last segment it played.
+    pub fn finish(&mut self) -> Vec<f32> {
+        let from = self.prev_tail.unwrap_or(self.base).max(self.base);
+        let at = ((from - self.base) as usize * self.channels).min(self.input.len());
+        let rest = self.input[at..].to_vec();
+        self.reset();
+        rest
+    }
+
     fn frames(&self) -> u64 {
         (self.input.len() / self.channels) as u64
     }
@@ -181,5 +191,27 @@ mod tests {
         let mut s = Stretch::new(2, 48000);
         let input = tone(440.0, 0.1);
         assert_eq!(s.process(&input), input);
+        assert!(s.finish().is_empty());
+    }
+
+    #[test]
+    fn the_end_is_not_held_back() {
+        let mut s = Stretch::new(2, 48000);
+        s.set_speed(2.0);
+        let input = tone(440.0, 1.0);
+        let mut out = s.process(&input);
+        let held = s.finish();
+        // Under 90 ms of it was waiting for input that never comes.
+        assert!(
+            (1..=2 * (4 * 960 + 384)).contains(&held.len()),
+            "{}",
+            held.len()
+        );
+        // It continues the last segment: the tone goes on without a jump.
+        let joint = out.len();
+        out.extend(held);
+        let step = (out[joint] - out[joint - 2]).abs();
+        assert!(step < 0.1, "jump of {step} at the joint");
+        assert!(s.finish().is_empty());
     }
 }
