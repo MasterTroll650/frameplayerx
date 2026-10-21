@@ -68,7 +68,7 @@ fn entries(conn: &Connection, id: PlaylistId, hidden: &Hidden) -> Result<Vec<Pla
         .enumerate()
         .filter_map(|(position, m)| {
             let record = by_id.get(m)?;
-            (!hidden.hides(&record.source_id, &record.location)).then(|| PlaylistEntry {
+            (!hidden.hides(&record.source_id)).then(|| PlaylistEntry {
                 position,
                 record: record.clone(),
             })
@@ -229,7 +229,7 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::{HiddenRoot, MediaUpsert};
+    use crate::library::MediaUpsert;
 
     fn setup() -> (Library, Vec<MediaId>) {
         let lib = Library::open_in_memory().unwrap();
@@ -306,7 +306,6 @@ mod tests {
         lib.add_to_playlist(p, &[m[0], nas, m[1]]).unwrap();
         lib.set_hidden(Hidden {
             sources: vec!["nas".into()],
-            ..Default::default()
         });
         let shown = lib.playlist_items(p).unwrap();
         let at: Vec<(usize, MediaId)> = shown.iter().map(|e| (e.position, e.record.id)).collect();
@@ -316,14 +315,5 @@ mod tests {
         lib.remove_from_playlist(p, shown[1].position).unwrap();
         lib.set_hidden(Hidden::default());
         assert_eq!(items(&lib, p), vec![m[0], nas]);
-
-        // Hidden by where it is, too.
-        lib.set_hidden(Hidden {
-            locations: vec![HiddenRoot::new("smb://nas/v")],
-            ..Default::default()
-        });
-        assert_eq!(items(&lib, p), vec![m[0]]);
-        let first = lib.playlists().unwrap()[0].first.clone().map(|r| r.id);
-        assert_eq!(first, Some(m[0]));
     }
 }

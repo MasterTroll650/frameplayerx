@@ -37,83 +37,28 @@ impl App {
         });
     }
 
-    /// The locked source whose folder or address `location` is under, when
-    /// reached through source `via` (whose own PIN may have let the user
-    /// past it, see [`crate::pin::exempt_from`]).
-    pub(super) fn locked_by(&self, location: &str, via: Option<&str>) -> Option<String> {
-        self.services
-            .source_configs
-            .iter()
-            .filter(|c| self.source_locked(c.id()))
-            .filter(|c| crate::pin::source_contains(c, location))
-            .find(|c| !via.is_some_and(|v| self.exempt_from(c).iter().any(|e| e == v)))
-            .map(|c| c.id().to_string())
-    }
-
-    /// The sources whose own PIN lets them past `locked`'s lock.
-    fn exempt_from(&self, locked: &fp_sources::SourceConfig) -> Vec<String> {
-        crate::pin::exempt_from(
-            locked,
-            &self.services.source_configs,
-            &self.settings.source_pins,
-            &self.ui.unlocked_sources,
-        )
-    }
-
-    /// The locked source keeping `source` shut: itself, or a locked source
-    /// its folder or address is inside (the share a locked folder is in
-    /// stays open, a folder inside a locked share does not, unless it was
-    /// unlocked with a PIN of its own).
-    pub(super) fn lock_on(&self, source: &str) -> Option<String> {
-        if self.source_locked(source) {
-            return Some(source.to_string());
-        }
-        let root = self
-            .services
-            .source_config(source)
-            .map(crate::pin::source_root)?;
-        self.locked_by(&root, Some(source))
-    }
-
     /// The locked source a video belongs to, if any: the one it was opened
-    /// from, the one its library entry came from, or one whose folder or
-    /// address it is under, whichever source it was opened from.
+    /// from, else the one its library entry came from.
     pub(super) fn locked_source_of(&self, req: &OpenRequest) -> Option<String> {
         if self.settings.source_pins.is_empty() {
             return None;
         }
-        let from_library = self
-            .services
-            .library
-            .get_by_location(&req.location)
-            .ok()
-            .flatten()
-            .map(|r| r.source_id);
-        let via = req.source_id.clone().or_else(|| from_library.clone());
-        [req.source_id.clone(), from_library]
-            .into_iter()
-            .flatten()
-            .find(|id| self.source_locked(id))
-            .or_else(|| self.locked_by(&req.location, via.as_deref()))
+        let source = req.source_id.clone().or_else(|| {
+            self.services
+                .library
+                .get_by_location(&req.location)
+                .ok()
+                .flatten()
+                .map(|r| r.source_id)
+        })?;
+        self.source_locked(&source).then_some(source)
     }
 
-    /// What locked sources hide: their videos, and everything under their
-    /// folders or addresses whichever source lists or added it, except
-    /// sources their own PIN let the user into.
+    /// What locked sources hide: their videos.
     pub(super) fn locked_hidden(&self) -> fp_library::Hidden {
-        let sources = crate::pin::locked_ids(&self.settings.source_pins, &self.ui.unlocked_sources);
-        let locations = self
-            .services
-            .source_configs
-            .iter()
-            .filter(|c| sources.iter().any(|s| s == c.id()))
-            .map(|c| fp_library::HiddenRoot {
-                root: crate::pin::source_root(c),
-                except: self.exempt_from(c),
-            })
-            .filter(|h| !h.root.is_empty())
-            .collect();
-        fp_library::Hidden { sources, locations }
+        fp_library::Hidden {
+            sources: crate::pin::locked_ids(&self.settings.source_pins, &self.ui.unlocked_sources),
+        }
     }
 
     /// Leaves locked sources' videos out of the library's listings (and the
@@ -134,17 +79,12 @@ impl App {
             {
                 self.close_playback();
             }
-            // A folder being browsed may hold what is hidden now.
-            if let Some(b) = self.ui.folder_mut() {
-                let (source, location) = (b.source.clone(), b.location.clone());
-                self.browse(source, location);
-            }
         }
     }
 
     pub fn browse(&mut self, source: String, location: Option<String>) {
-        if let Some(lock) = self.lock_on(&source) {
-            self.ask_pin(&lock);
+        if self.source_locked(&source) {
+            self.ask_pin(&source);
             return;
         }
         let Some(src) = self.services.opener.source(&source) else {
@@ -218,8 +158,8 @@ impl App {
             });
             return;
         }
-        if let Some(lock) = self.lock_on(&source) {
-            self.ask_pin(&lock);
+        if self.source_locked(&source) {
+            self.ask_pin(&source);
             return;
         }
         let Some(kind) = self

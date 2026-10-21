@@ -236,17 +236,16 @@ the PIN or remove it, edit the source (the pencil under **Sources**).
 Removing the source also removes its PIN. This keeps guests out, it doesn't
 encrypt anything: the files themselves stay as they are.
 
+A PIN locks that one source only. Another source on the same server, or
+with the same folder, stays open: lock it too, with the same PIN or its
+own, if it shows the same videos.
+
 ### Editing a source
 
 The pencil next to a source under **Sources** opens its details: rename it,
 change its address, user name and password, or its PIN. Its type stays; a
 Jellyfin or Emby server signed in with Quick Connect keeps that sign-in
 unless you clear it.
-
-To lock one folder of a NAS, add that folder as its own source
-(`smb://nas/videos/private`) and lock it. Everything in it is then hidden
-everywhere, also when browsing a source for the whole share, and from the
-watch history even if it was played through that source.
 
 ### Watch sync with Jellyfin, Emby and HereSphere
 

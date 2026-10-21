@@ -45,73 +45,25 @@ pub struct Library {
     hidden: Arc<RwLock<Hidden>>,
 }
 
-/// Videos left out of listings: those of some sources, and those under
-/// some folders or addresses whichever source added them (the app hides
-/// sources locked with a PIN, and everything under their addresses).
+/// Videos left out of listings: those of some sources (the app hides
+/// sources locked with a PIN).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Hidden {
     /// Source ids.
     pub sources: Vec<String>,
-    pub locations: Vec<HiddenRoot>,
-}
-
-/// A folder or address whose videos are hidden whichever source added them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct HiddenRoot {
-    /// `/media/x/Private`, `smb://nas/share/dir`: the location itself and
-    /// everything under it, ignoring ASCII case.
-    pub root: String,
-    /// Sources whose videos stay listed although they are under `root`.
-    pub except: Vec<String>,
-}
-
-impl HiddenRoot {
-    /// Hides everything under `root`.
-    pub fn new(root: impl Into<String>) -> HiddenRoot {
-        HiddenRoot {
-            root: root.into(),
-            except: Vec::new(),
-        }
-    }
 }
 
 impl Hidden {
     /// Nothing hidden.
     pub fn is_empty(&self) -> bool {
-        self.sources.is_empty() && self.locations.is_empty()
+        self.sources.is_empty()
     }
 
-    /// Whether a video from `source_id` at `location` is hidden; the same
-    /// test as the SQL from `hidden_sql`.
-    pub fn hides(&self, source_id: &str, location: &str) -> bool {
+    /// Whether the videos of `source_id` are hidden; the same test as the
+    /// SQL from `hidden_sql`.
+    pub fn hides(&self, source_id: &str) -> bool {
         self.sources.iter().any(|s| s == source_id)
-            || self
-                .locations
-                .iter()
-                .any(|h| under(&h.root, location) && !h.except.iter().any(|s| s == source_id))
     }
-}
-
-/// Whether `location` is `root` or under it (ignoring ASCII case).
-fn under(root: &str, location: &str) -> bool {
-    let root = root.trim_end_matches('/');
-    !root.is_empty()
-        && location
-            .get(..root.len())
-            .is_some_and(|p| p.eq_ignore_ascii_case(root))
-        && matches!(location.as_bytes().get(root.len()), None | Some(b'/'))
-}
-
-/// `root` as a LIKE pattern matching only itself.
-fn like_literal(root: &str) -> String {
-    let mut out = String::with_capacity(root.len());
-    for c in root.chars() {
-        if matches!(c, '%' | '_' | '\\') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
 }
 
 /// The condition keeping only what `hidden` does not hide, for a media
@@ -121,38 +73,14 @@ pub(crate) fn hidden_sql(prefix: &str, hidden: &Hidden) -> Option<(String, Vec<V
     if hidden.is_empty() {
         return None;
     }
-    let mut clauses = Vec::new();
-    let mut args = Vec::new();
-    if !hidden.sources.is_empty() {
-        clauses.push(format!(
-            "{prefix}source_id NOT IN ({})",
-            vec!["?"; hidden.sources.len()].join(",")
-        ));
-        args.extend(hidden.sources.iter().cloned().map(Value::Text));
-    }
-    for h in &hidden.locations {
-        let root = like_literal(h.root.trim_end_matches('/'));
-        if root.is_empty() {
-            continue;
-        }
-        // LIKE ignores ASCII case, as SMB and DLNA hosts and SMB paths do.
-        let mut clause =
-            format!("({prefix}location LIKE ? ESCAPE '\\' OR {prefix}location LIKE ? ESCAPE '\\')");
-        args.push(Value::Text(root.clone()));
-        args.push(Value::Text(format!("{root}/%")));
-        if !h.except.is_empty() {
-            clause += &format!(
-                " AND {prefix}source_id NOT IN ({})",
-                vec!["?"; h.except.len()].join(",")
-            );
-            args.extend(h.except.iter().cloned().map(Value::Text));
-        }
-        clauses.push(format!("NOT ({clause})"));
-    }
-    if clauses.is_empty() {
-        return None;
-    }
-    Some((clauses.join(" AND "), args))
+    let sql = format!(
+        "{prefix}source_id NOT IN ({})",
+        vec!["?"; hidden.sources.len()].join(",")
+    );
+    Some((
+        sql,
+        hidden.sources.iter().cloned().map(Value::Text).collect(),
+    ))
 }
 
 impl std::fmt::Debug for Library {
@@ -1963,7 +1891,6 @@ mod tests {
         );
         lib.set_hidden(Hidden {
             sources: vec!["feed".into()],
-            ..Default::default()
         });
         assert_eq!(counts(&lib), [("Outdoor".to_string(), 1)]);
     }
@@ -1997,7 +1924,6 @@ mod tests {
 
         lib.set_hidden(Hidden {
             sources: vec!["nas".into()],
-            ..Default::default()
         });
         assert_eq!(ids(lib.search(&all).unwrap()), vec![mine]);
         assert_eq!(lib.count(&all).unwrap(), 1);
@@ -2021,77 +1947,6 @@ mod tests {
         assert_eq!(lib.count(&all).unwrap(), 2);
         assert_eq!(lib.history(10).unwrap().len(), 2);
         assert_eq!(lib.continue_watching(10).unwrap().len(), 2);
-    }
-
-    #[test]
-    fn hidden_folders_are_left_out_whichever_source_added_them() {
-        let lib = lib();
-        let up = |loc: &str, source: &str| lib.upsert(&MediaUpsert::new(loc, source)).unwrap().id;
-        // The whole share is a source, and so is its private folder.
-        let public = up("smb://nas/Videos/Public/a.mp4", "share");
-        let private = up("smb://nas/Videos/Private/b.mp4", "share");
-        let deeper = up("smb://NAS/videos/private/trip/c.mp4", "share");
-        let own = up("smb://nas/Videos/Private/d.mp4", "private");
-        let lookalike = up("smb://nas/Videos/PrivateParty/e.mp4", "share");
-        let wild = up("/media/x_y%/f.mp4", "local");
-        let wild_miss = up("/media/xAyB/g.mp4", "local");
-        for id in [public, private, deeper, own, lookalike, wild, wild_miss] {
-            let s = lib.start_playback(id).unwrap();
-            lib.update_playback(s, 5.0, false).unwrap();
-        }
-        lib.set_hidden(Hidden {
-            sources: vec!["private".into()],
-            locations: vec![
-                HiddenRoot::new("smb://nas/Videos/Private/"),
-                HiddenRoot::new("/media/x_y%"),
-            ],
-        });
-        let mut ids: Vec<MediaId> = lib
-            .search(&crate::Query::default())
-            .unwrap()
-            .iter()
-            .map(|r| r.id)
-            .collect();
-        ids.sort();
-        assert_eq!(ids, vec![public, lookalike, wild_miss]);
-        assert_eq!(lib.count(&crate::Query::text("trip")).unwrap(), 0);
-        assert_eq!(lib.continue_watching(10).unwrap().len(), 3);
-        assert_eq!(lib.recently_added(10).unwrap().len(), 3);
-        assert_eq!(lib.history(10).unwrap().len(), 3);
-        let h = lib.hidden();
-        assert!(h.hides("share", "smb://nas/Videos/Private/b.mp4"));
-        assert!(h.hides("share", "smb://NAS/videos/private"));
-        assert!(!h.hides("share", "smb://nas/Videos/PrivateParty/e.mp4"));
-        assert!(h.hides("private", "anything"));
-    }
-
-    #[test]
-    fn hidden_folders_spare_the_sources_excepted() {
-        let lib = lib();
-        let up = |loc: &str, source: &str| lib.upsert(&MediaUpsert::new(loc, source)).unwrap().id;
-        // A DeoVR feed and a HereSphere API of one server: the same address.
-        let feed = up("http://vr:9999/deovr/1", "deovr");
-        let api = up("http://vr:9999/heresphere/2", "heresphere");
-        let scanned = up("http://vr:9999/files/3.mp4", "local");
-        lib.set_hidden(Hidden {
-            sources: vec!["heresphere".into()],
-            locations: vec![HiddenRoot {
-                root: "http://vr:9999".into(),
-                except: vec!["deovr".into()],
-            }],
-        });
-        let ids: Vec<MediaId> = lib
-            .search(&crate::Query::default())
-            .unwrap()
-            .iter()
-            .map(|r| r.id)
-            .collect();
-        assert_eq!(ids, vec![feed]);
-        let h = lib.hidden();
-        assert!(!h.hides("deovr", "http://vr:9999/deovr/1"));
-        assert!(h.hides("heresphere", "http://vr:9999/heresphere/2"));
-        assert!(h.hides("local", "http://vr:9999/files/3.mp4"));
-        assert!(lib.get(api).unwrap().is_some() && lib.get(scanned).unwrap().is_some());
     }
 
     #[test]

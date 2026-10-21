@@ -522,9 +522,6 @@ impl App {
         b.loading = false;
         match result {
             Ok(mut e) => {
-                // Folders of locked sources inside this one.
-                let hidden = self.services.library.hidden();
-                e.retain(|entry| !hidden.hides(source, &entry.location));
                 fp_sources::sort_entries_by(&mut e, self.settings.browse_sort);
                 b.entries = e;
                 b.error = None;

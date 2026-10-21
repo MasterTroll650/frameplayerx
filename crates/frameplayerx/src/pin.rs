@@ -4,8 +4,9 @@
 //! library, history, search and both remotes (see
 //! [`fp_library::Library::set_hidden`]); a video of it can't be
 //! opened. Entering the PIN unlocks it until FramePlayerX restarts or it is
-//! locked again. This keeps guests out, not someone with the headset's files:
-//! the videos themselves are not encrypted.
+//! locked again. A lock is the source's own: another source with the same
+//! files or server stays open. This keeps guests out, not someone with the
+//! headset's files: the videos themselves are not encrypted.
 //!
 //! Settings keep a salted PBKDF2 hash, never the PIN.
 
@@ -23,61 +24,6 @@ pub fn locked_ids(pins: &BTreeMap<String, String>, unlocked: &HashSet<String>) -
         .filter(|id| !unlocked.contains(*id))
         .cloned()
         .collect()
-}
-
-/// Whether `location` is a video of source `cfg` (see [`source_root`]).
-pub fn source_contains(cfg: &fp_sources::SourceConfig, location: &str) -> bool {
-    fp_library::Hidden {
-        locations: vec![fp_library::HiddenRoot::new(source_root(cfg))],
-        ..Default::default()
-    }
-    .hides("", location)
-}
-
-/// The sources the lock of `locked` does not cover although their folder
-/// or address is at or inside its own: those unlocked with a PIN of their
-/// own. (Two sources of one server, say its DeoVR feed and its HereSphere
-/// API, have the same address; each PIN opens its own source.)
-pub fn exempt_from(
-    locked: &fp_sources::SourceConfig,
-    configs: &[fp_sources::SourceConfig],
-    pins: &BTreeMap<String, String>,
-    unlocked: &HashSet<String>,
-) -> Vec<String> {
-    configs
-        .iter()
-        .filter(|c| c.id() != locked.id())
-        .filter(|c| pins.contains_key(c.id()) && unlocked.contains(c.id()))
-        .filter(|c| source_contains(locked, &source_root(c)))
-        .map(|c| c.id().to_string())
-        .collect()
-}
-
-/// The folder or address a source's videos are under: its folder or
-/// address, or for servers (DLNA, DeoVR, HereSphere) the server.
-pub fn source_root(cfg: &fp_sources::SourceConfig) -> String {
-    use fp_sources::SourceConfig as C;
-    match cfg {
-        C::Local(c) => c.root.to_string_lossy().into_owned(),
-        C::Library(c) => c.root(),
-        C::Http(c) | C::WebDav(c) => c.url.clone(),
-        C::Smb(c) => fp_sources::smb::smb_url(&c.host, c.port, &c.share, &c.path),
-        C::Dlna(c) => origin(&c.location).to_string(),
-        C::DeoVr(c) | C::HereSphere(c) => origin(&c.url).to_string(),
-        C::MediaBrowser(c) => format!("mb:{}", c.url.trim_end_matches('/')),
-    }
-}
-
-/// `scheme://host[:port]` of a URL.
-fn origin(url: &str) -> &str {
-    match url.find("://") {
-        Some(i) => {
-            let rest = &url[i + 3..];
-            let end = rest.find('/').map_or(url.len(), |j| i + 3 + j);
-            &url[..end]
-        }
-        None => "",
-    }
 }
 
 /// Digits a PIN may have.
@@ -160,88 +106,6 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn locations_belong_to_their_source() {
-        use fp_sources::{FeedConfig, LocalConfig, SmbConfig, SourceConfig};
-        let smb = SourceConfig::Smb(SmbConfig {
-            id: "nas".into(),
-            name: "NAS".into(),
-            host: "nas".into(),
-            port: None,
-            share: "Videos".into(),
-            path: "Private".into(),
-            credentials: None,
-        });
-        assert!(source_contains(&smb, "smb://nas/Videos/Private/a.mp4"));
-        assert!(source_contains(&smb, "smb://NAS/Videos/Private/sub/b.mp4"));
-        assert!(!source_contains(&smb, "smb://nas/Videos/PrivateX/a.mp4"));
-        assert!(!source_contains(&smb, "smb://nas/Videos/a.mp4"));
-        let local = SourceConfig::Local(LocalConfig {
-            id: "l".into(),
-            name: "L".into(),
-            root: "/media/x/".into(),
-        });
-        assert!(source_contains(&local, "/media/x/v.mp4"));
-        assert!(!source_contains(&local, "/media/xy/v.mp4"));
-        let feed = SourceConfig::DeoVr(FeedConfig {
-            id: "f".into(),
-            name: "F".into(),
-            url: "http://10.0.0.2:9999/deovr".into(),
-            credentials: None,
-            insecure_tls: false,
-            max_height: None,
-        });
-        assert!(source_contains(
-            &feed,
-            "http://10.0.0.2:9999/api/dms/file/1"
-        ));
-        assert!(!source_contains(&feed, "http://10.0.0.2:99990/x"));
-        assert!(!source_contains(&feed, "http://10.0.0.3:9999/x"));
-    }
-
-    #[test]
-    fn own_pins_open_their_own_sources() {
-        use fp_sources::{FeedConfig, LocalConfig, SourceConfig};
-        let feed = |id: &str, path: &str| {
-            SourceConfig::DeoVr(FeedConfig {
-                id: id.into(),
-                name: id.into(),
-                url: format!("http://vr:9999/{path}"),
-                credentials: None,
-                insecure_tls: false,
-                max_height: None,
-            })
-        };
-        let local = |id: &str, root: &str| {
-            SourceConfig::Local(LocalConfig {
-                id: id.into(),
-                name: id.into(),
-                root: root.into(),
-            })
-        };
-        // Two feeds of one server, a share and a folder inside it.
-        let configs = [
-            feed("deovr", "deovr"),
-            feed("heresphere", "heresphere"),
-            feed("open", "other"),
-            local("share", "/media/share"),
-            local("inner", "/media/share/private"),
-        ];
-        let pins: BTreeMap<String, String> = ["deovr", "heresphere", "share", "inner"]
-            .map(|id| (id.to_string(), "hash".to_string()))
-            .into();
-        let unlocked: HashSet<String> = ["deovr".to_string(), "share".to_string()].into();
-        let exempt = |id: &str| {
-            let locked = configs.iter().find(|c| c.id() == id).unwrap();
-            exempt_from(locked, &configs, &pins, &unlocked)
-        };
-        // The unlocked feed is not kept shut by the other one, still locked;
-        // the feed without a PIN of its own is.
-        assert_eq!(exempt("heresphere"), ["deovr"]);
-        // A locked folder inside an unlocked share stays hidden from it.
-        assert!(exempt("inner").is_empty());
-    }
 
     #[test]
     fn pins_hash_and_verify() {
