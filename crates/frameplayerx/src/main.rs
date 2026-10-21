@@ -13,6 +13,7 @@ mod controls;
 mod crash;
 mod drives;
 mod jobs;
+mod libraries;
 mod logger;
 mod perf;
 mod pin;

@@ -3,50 +3,23 @@
 
 use std::path::PathBuf;
 
-/// Where SteamOS (udisks) mounts microSD cards and USB drives:
-/// `/run/media/deck/<label>` (older images: `/run/media/<device>`).
-pub const REMOVABLE_ROOT: &str = "/run/media";
+pub use fp_core::volume::REMOVABLE_ROOT;
 
-/// Mount points of removable drives, from a `/proc/mounts` listing.
-pub fn parse_removable_mounts(mounts: &str) -> Vec<PathBuf> {
-    let prefix = format!("{REMOVABLE_ROOT}/");
-    let mut out: Vec<PathBuf> = mounts
-        .lines()
-        .filter_map(|l| l.split_whitespace().nth(1))
-        .map(unescape_mount)
-        .filter(|p| p.starts_with(&prefix))
-        .map(PathBuf::from)
-        .collect();
-    out.sort();
-    out.dedup();
-    out
-}
-
-/// `/proc/mounts` writes spaces and a few other bytes as `\ooo` octal.
-fn unescape_mount(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        let octal = b[i] == b'\\'
-            && i + 3 < b.len()
-            && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c));
-        if octal {
-            out.push((b[i + 1] - b'0') * 64 + (b[i + 2] - b'0') * 8 + (b[i + 3] - b'0'));
-            i += 4;
-        } else {
-            out.push(b[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Currently mounted microSD cards and USB drives.
+/// Mounted microSD cards and USB drives, as last looked
+/// ([`refresh_mounts`]).
 pub fn removable_mounts() -> Vec<PathBuf> {
-    std::fs::read_to_string("/proc/mounts")
-        .map(|m| parse_removable_mounts(&m))
-        .unwrap_or_default()
+    fp_core::volume::mounted()
+        .into_iter()
+        .map(|v| v.mount)
+        .collect()
+}
+
+/// Looks again which microSD cards and USB drives are mounted.
+pub fn refresh_mounts() -> Vec<PathBuf> {
+    fp_core::volume::refresh()
+        .into_iter()
+        .map(|v| v.mount)
+        .collect()
 }
 
 /// A drive partition SteamOS left unmounted that FramePlayerX mounts itself.
@@ -151,23 +124,6 @@ pub fn mount_drive(drive: &UnmountedDrive) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn removable_mounts_from_proc() {
-        let m = "/dev/nvme0n1p8 /home ext4 rw 0 0\n\
-                 /dev/mmcblk0p1 /run/media/deck/SD\\040Card ext4 rw,nosuid 0 0\n\
-                 /dev/sda1 /run/media/deck/USB exfat rw 0 0\n\
-                 /dev/mmcblk0p1 /run/media/mmcblk0p1 ext4 rw 0 0\n\
-                 tmpfs /run/user/1000 tmpfs rw 0 0\n";
-        assert_eq!(
-            parse_removable_mounts(m),
-            vec![
-                PathBuf::from("/run/media/deck/SD Card"),
-                PathBuf::from("/run/media/deck/USB"),
-                PathBuf::from("/run/media/mmcblk0p1")
-            ]
-        );
-    }
 
     #[test]
     fn mounts_what_steamos_leaves_alone() {

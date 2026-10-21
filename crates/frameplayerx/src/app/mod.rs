@@ -294,7 +294,7 @@ impl App {
         app.offsets = app.settings.panel_offsets;
         app.apply_ui_scale();
         app.check_last_run();
-        app.rescan(false);
+        app.scan_libraries(|_| true, false, false);
         app.connect_devices();
         if app.settings.check_updates && fp_updater::RELEASE_PUBLIC_KEY.is_some() {
             app.check_updates();

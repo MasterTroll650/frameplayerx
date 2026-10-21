@@ -89,24 +89,17 @@ impl App {
                 let r = self.services.library.remove_from_history(id);
                 self.library_changed("the change", r);
             }
-            Action::Rescan { force } => self.rescan(force),
-            Action::RetryFailed => {
-                let n = self.services.library.retry_failed_probes().unwrap_or(0);
+            Action::Rescan { source, force } => self.rescan(&source, force),
+            Action::RetryFailed(source) => {
+                let n = self
+                    .services
+                    .library
+                    .retry_failed_probes(Some(&source))
+                    .unwrap_or(0);
                 self.services.wake_worker();
                 self.ui.toast(format!("Retrying {n} videos"));
             }
             Action::ClearHistory => self.clear_history(),
-            Action::AddFolder(p) => {
-                if !self.settings.library_folders.contains(&p) {
-                    self.settings.library_folders.push(p);
-                    self.rescan(false);
-                }
-            }
-            Action::RemoveFolder(i) => {
-                if i < self.settings.library_folders.len() {
-                    self.settings.library_folders.remove(i);
-                }
-            }
             Action::AddSource(cfg) => self.add_source(cfg),
             Action::UpdateSource(cfg) => self.update_source(cfg),
             Action::RemoveSource(id) => self.remove_source(&id),

@@ -179,10 +179,14 @@ impl App {
             });
             let result = result.map_err(|e| {
                 let removable = source == crate::services::REMOVABLE_SOURCE;
-                if removable && crate::drives::removable_mounts().is_empty() {
-                    "No microSD card or USB drive is inserted.".to_string()
-                } else {
-                    e.to_string()
+                match e {
+                    fp_sources::Error::NotInserted => {
+                        "The microSD card or USB drive this is on is not inserted.".to_string()
+                    }
+                    _ if removable && crate::drives::removable_mounts().is_empty() => {
+                        "No microSD card or USB drive is inserted.".to_string()
+                    }
+                    e => e.to_string(),
                 }
             });
             Job::Listed {
@@ -244,6 +248,12 @@ impl App {
                 let f = ui::feeds::FeedView::new(kind);
                 self.ui.source = Some(view(SourcePage::Feed(f)));
                 self.apply(Action::FeedLoad { source });
+            }
+            fp_sources::SourceKind::Library => {
+                let l = ui::local::LibraryView::new(&source);
+                self.ui.source = Some(view(SourcePage::Library(l)));
+                // New files show up without a restart.
+                self.scan_libraries(|l| l.id == source, false, false);
             }
             _ => {
                 self.ui.source = Some(view(SourcePage::Folders(Browse {
@@ -335,6 +345,24 @@ impl App {
         });
     }
 
+    /// Scans library `source` now, saying how it went; `force` makes its
+    /// thumbnails again.
+    pub(super) fn rescan(&mut self, source: &str, force: bool) {
+        let Some(fp_sources::SourceConfig::Library(l)) = self.source_config(source) else {
+            return;
+        };
+        if !crate::libraries::present(l) {
+            let card = l.card.as_ref().map_or("", |c| c.label.as_str());
+            self.ui.toast(format!("Insert {card} to scan {}", l.name));
+            return;
+        }
+        if self.ui.scans.contains_key(source) {
+            self.ui.toast(format!("{} is being scanned", l.name));
+            return;
+        }
+        self.scan_libraries(|l| l.id == source, force, true);
+    }
+
     // ---- editing sources ----
 
     pub(super) fn add_source(&mut self, cfg: fp_sources::SourceConfig) {
@@ -361,6 +389,13 @@ impl App {
             self.ask_pin(&id);
             return;
         }
+        let moved = match (self.source_config(&id), &cfg) {
+            (
+                Some(fp_sources::SourceConfig::Library(old)),
+                fp_sources::SourceConfig::Library(new),
+            ) => old.root() != new.root(),
+            _ => false,
+        };
         let list = self
             .services
             .source_configs
@@ -368,6 +403,17 @@ impl App {
             .map(|c| if c.id() == id { cfg.clone() } else { c.clone() })
             .collect();
         let change = self.services.set_sources(list);
+        if moved {
+            // Its next scan takes back the videos still in the new folder.
+            let lib = &self.services.library;
+            if let Err(e) = lib
+                .forget_unwatched(&id)
+                .and_then(|_| lib.detach_source(&id))
+            {
+                log::warn!("letting go of the videos of {id}: {e}");
+            }
+            self.scan_libraries(|l| l.id == id, false, false);
+        }
         match change.errors.into_iter().find(|e| e.id == id) {
             Some(e) => self.ui.toast(e.to_string()),
             None => self.ui.toast(match change.save_error {

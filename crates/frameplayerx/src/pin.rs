@@ -59,6 +59,7 @@ pub fn source_root(cfg: &fp_sources::SourceConfig) -> String {
     use fp_sources::SourceConfig as C;
     match cfg {
         C::Local(c) => c.root.to_string_lossy().into_owned(),
+        C::Library(c) => c.root(),
         C::Http(c) | C::WebDav(c) => c.url.clone(),
         C::Smb(c) => fp_sources::smb::smb_url(&c.host, c.port, &c.share, &c.path),
         C::Dlna(c) => origin(&c.location).to_string(),

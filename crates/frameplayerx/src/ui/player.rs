@@ -209,7 +209,7 @@ fn seek_row(
     });
 }
 
-/// Library, speed and sound.
+/// Browse, speed and sound.
 fn browse_and_sound(
     ui: &mut egui::Ui,
     pb: &crate::playback::Playback,
@@ -217,7 +217,7 @@ fn browse_and_sound(
     actions: &mut Vec<Action>,
 ) {
     if widgets::key(ui, icons::SQUARES_FOUR, 52.0, false)
-        .tip("Library")
+        .tip("Browse")
         .clicked()
     {
         actions.push(Action::ShowBrowser(true));

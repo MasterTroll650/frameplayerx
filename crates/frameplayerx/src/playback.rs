@@ -384,9 +384,11 @@ fn sidecars(
     }
     if !with_scripts {
         scripts.clear();
-    } else if scripts.is_empty() && location.starts_with('/') {
+    } else if scripts.is_empty()
+        && let Some(path) = fp_core::volume::resolve(location).filter(|p| p.starts_with('/'))
+    {
         let dirs = vec![fp_core::dirs::interactive_dir()];
-        scripts = fp_haptics::funscript::find_scripts(std::path::Path::new(location), &dirs)
+        scripts = fp_haptics::funscript::find_scripts(std::path::Path::new(path.as_ref()), &dirs)
             .into_iter()
             .map(|(_, p)| p.display().to_string())
             .collect();
@@ -876,11 +878,8 @@ mod tests {
 
         // A format guessed from the name or shape is not a declaration.
         let local = "/v/Clip_LR.mp4";
-        lib.upsert(&fp_library::MediaUpsert::new(
-            local,
-            crate::services::LIBRARY_SOURCE,
-        ))
-        .unwrap();
+        lib.upsert(&fp_library::MediaUpsert::new(local, "movies"))
+            .unwrap();
         let r = lib.get_by_location(local).unwrap();
         assert_eq!(declared_format(None, r.as_ref()), None);
     }

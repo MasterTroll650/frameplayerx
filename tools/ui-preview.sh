@@ -12,7 +12,7 @@ data=crates/fp-media/tests/data
 
 home="$(mktemp -d)"
 trap 'rm -rf "$home"' EXIT
-mkdir -p "$home/Videos"
+mkdir -p "$home/Videos" "$home/Downloads"
 cp "$data/h264_aac_180_LR.mp4" "$home/Videos/Sunset Beach Walk_180_LR.mp4"
 cp "$data/camera_clip.mp4" "$home/Videos/Garden Party.mp4"
 cp "$data/vp9.webm" "$home/Videos/Mountain Lake_360.webm"
@@ -25,11 +25,12 @@ touch -d 2026-09-02 "$home/Videos/Garden Party.mp4"
 touch -d 2025-11-20 "$home/Videos/Mountain Lake_360.webm"
 touch -d 2026-06-30 "$home/Videos/City Lights_180_SBS.webm"
 touch -d 2026-01-08 "$home/Videos/Aurora Timelapse_360_TB.mkv"
-# A source to lock with a PIN.
+# The Videos library, and one to lock with a PIN.
 mkdir -p "$home/Private" "$home/.config/frameplayerx"
 cp "$data/camera_clip.mp4" "$home/Private/Rooftop.mp4"
 (umask 077 && cat >"$home/.config/frameplayerx/sources.json" <<EOF
-[{"type": "local", "id": "private", "name": "Private videos", "root": "$home/Private"}]
+[{"type": "library", "id": "videos", "name": "Videos", "folder": "$home/Videos"},
+ {"type": "library", "id": "private", "name": "Private videos", "folder": "$home/Private"}]
 EOF
 )
 # A video with Arabic (joined letters, right to left) and English subtitles.
@@ -54,14 +55,22 @@ wait 4
 panel main home
 screen history
 panel main history-empty
-# The headset's own page: its videos, then its folders.
-open-source on-device
+# A library: its videos, then its folders. The headset's own folders.
+open-source videos
 wait 1
+panel main library
+library-folders
+wait 1
+panel main library-folders
+open-source on-device
 panel main local
-local-folders
-panel main local-folders
 screen sources
 panel main sources
+# Adding a library (a suggestion for Downloads), and editing one.
+add-source library
+panel main source-add-library
+edit-source videos
+panel main source-edit-library
 # Browsing a folder of the home source, by name and then newest first.
 browse device-home $home/Videos
 wait 1
@@ -97,8 +106,6 @@ screen settings controller-open
 panel main settings-controller-open
 screen settings controller-stick
 panel main settings-controller-stick
-screen settings device
-panel main settings-device
 haptics on
 screen settings haptics
 panel main settings-haptics
@@ -108,8 +115,8 @@ screen settings updates
 panel main settings-updates
 screen settings about
 panel main settings-about
-# Hover state on the first card of the headset's videos.
-open-source on-device
+# Hover state on the first card of a library's videos.
+open-source videos
 point main 0.12 0.45
 frames 8
 panel main local-hover

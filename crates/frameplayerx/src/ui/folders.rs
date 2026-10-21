@@ -242,7 +242,8 @@ fn row(ui: &mut egui::Ui, v: &mut View, e: &Entry) -> bool {
 }
 
 fn short_location(l: &str) -> String {
-    let l = l.split('#').next().unwrap_or(l);
+    let l = crate::libraries::display_location(l);
+    let l = l.split('#').next().unwrap_or(&l);
     if l.chars().count() > 60 {
         let tail: String = l
             .chars()

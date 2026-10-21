@@ -51,6 +51,10 @@ pub struct ScanOptions {
     /// Rows written per transaction; the library lock is released between
     /// batches so the UI stays responsive.
     pub batch_size: usize,
+    /// What the folder's videos and side files are located under instead
+    /// of its path: a card's location ([`fp_core::volume`]), so they keep
+    /// it whatever the card is mounted as.
+    pub location_root: Option<String>,
 }
 
 impl Default for ScanOptions {
@@ -60,6 +64,7 @@ impl Default for ScanOptions {
             follow_links: true,
             force: false,
             batch_size: 256,
+            location_root: None,
         }
     }
 }
@@ -274,6 +279,16 @@ impl Library {
         }
         std::fs::read_dir(&root).map_err(|e| Error::io(&root, e))?;
 
+        // Where a file under the folder is located.
+        let locate = |path: &Path| -> Option<String> {
+            match &options.location_root {
+                Some(base) => match path.strip_prefix(&root).ok()?.to_str()? {
+                    "" => Some(base.clone()),
+                    rest => Some(format!("{}/{rest}", base.trim_end_matches('/'))),
+                },
+                None => path.to_str().map(str::to_string),
+            }
+        };
         let mut report = ScanReport {
             root: root.clone(),
             ..ScanReport::default()
@@ -298,7 +313,7 @@ impl Library {
                 Ok(e) => e,
                 Err(err) => {
                     let path = err.path().map(Path::to_path_buf).unwrap_or(root.clone());
-                    unreadable.push(path_string(&path));
+                    unreadable.push(locate(&path).unwrap_or_else(|| path_string(&path)));
                     report.errors.push(ScanError {
                         path,
                         message: err.to_string(),
@@ -323,7 +338,9 @@ impl Library {
                 let meta = match entry.metadata() {
                     Ok(m) => m,
                     Err(err) => {
-                        unreadable.push(path_string(entry.path()));
+                        unreadable.push(
+                            locate(entry.path()).unwrap_or_else(|| path_string(entry.path())),
+                        );
                         report.errors.push(ScanError {
                             path: entry.path().to_path_buf(),
                             message: err.to_string(),
@@ -331,7 +348,7 @@ impl Library {
                         continue;
                     }
                 };
-                let Some(location) = entry.path().to_str().map(str::to_string) else {
+                let Some(location) = locate(entry.path()) else {
                     report.errors.push(ScanError {
                         path: entry.path().to_path_buf(),
                         message: "path is not valid UTF-8".into(),
@@ -369,25 +386,27 @@ impl Library {
                 None => Vec::new(),
             };
             for (i, ((scripts, subs), video)) in matched.into_iter().zip(files.videos).enumerate() {
-                let mut scripts: Vec<String> = scripts
-                    .into_iter()
-                    .map(|s| path_string(&dir.join(s)))
-                    .collect();
+                let side = |s: String| {
+                    let p = dir.join(s);
+                    locate(&p).unwrap_or_else(|| path_string(&p))
+                };
+                let mut scripts: Vec<String> = scripts.into_iter().map(side).collect();
                 if scripts.is_empty()
                     && let (Some((idir, _)), Some((fs, _))) = (&interactive, fallback.get(i))
                 {
                     scripts = fs.iter().map(|s| path_string(&idir.join(s))).collect();
                 }
-                let subs = subs
-                    .into_iter()
-                    .map(|s| path_string(&dir.join(s)))
-                    .collect();
+                let subs = subs.into_iter().map(side).collect();
                 found.push((video, scripts, subs));
             }
         }
 
         // 3. Compare with the database and write changes.
-        let prefix = format!("{}/", path_string(&root).trim_end_matches('/'));
+        let base = options
+            .location_root
+            .clone()
+            .unwrap_or_else(|| path_string(&root));
+        let prefix = format!("{}/", base.trim_end_matches('/'));
         let known: HashMap<String, Known> = self.with(|c| {
             let mut stmt = c.prepare(
                 "SELECT location, source_id, size, mtime, missing, scripts, subtitles FROM media
@@ -734,6 +753,53 @@ mod tests {
             )
             .unwrap();
         assert_eq!(r7.updated, 4);
+    }
+
+    #[test]
+    fn cards_with_the_same_folders_are_indexed_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Two cards with one label, in the same mount folder in turn.
+        let mount = tmp.path().join("SDCARD");
+        let lib = Library::open_in_memory().unwrap();
+        let card = |id: &str| ScanOptions {
+            location_root: Some(format!("volume:{id}/Clips")),
+            ..opts(None)
+        };
+        touch(&mount.join("Clips/a.mp4"), b"from card A");
+        touch(&mount.join("Clips/a.srt"), b"1");
+        let ra = lib
+            .scan_folder(mount.join("Clips"), "lib-a", &card("AAAA"), |_| {})
+            .unwrap();
+        assert_eq!(ra.added, 1);
+        let a = lib
+            .get_by_location("volume:AAAA/Clips/a.mp4")
+            .unwrap()
+            .unwrap();
+        assert_eq!(a.subtitles, vec!["volume:AAAA/Clips/a.srt"]);
+        lib.set_rating(a.id, 5).unwrap();
+
+        fs::write(mount.join("Clips/a.mp4"), b"card B").unwrap();
+        fs::remove_file(mount.join("Clips/a.srt")).unwrap();
+        let rb = lib
+            .scan_folder(mount.join("Clips"), "lib-b", &card("BBBB"), |_| {})
+            .unwrap();
+        assert_eq!((rb.added, rb.missing), (1, 0));
+        let b = lib
+            .get_by_location("volume:BBBB/Clips/a.mp4")
+            .unwrap()
+            .unwrap();
+        assert_ne!(a.id, b.id);
+        assert_eq!((b.rating, b.size), (0, Some(6)));
+        let a = lib.get(a.id).unwrap().unwrap();
+        assert_eq!((a.rating, a.missing, a.size), (5, false, Some(11)));
+
+        // Card A's own scan marks what left it.
+        fs::remove_file(mount.join("Clips/a.mp4")).unwrap();
+        let ra = lib
+            .scan_folder(mount.join("Clips"), "lib-a", &card("AAAA"), |_| {})
+            .unwrap();
+        assert_eq!(ra.missing, 1);
+        assert!(!lib.get(b.id).unwrap().unwrap().missing);
     }
 
     #[test]

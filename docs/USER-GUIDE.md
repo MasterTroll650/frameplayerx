@@ -163,9 +163,7 @@ that pairing, you can also delete `~/.ssh/id_rsa_frame_devkit` and
 
 | Where | How |
 |---|---|
-| `~/Videos`, `~/Downloads` | Found automatically (Home › On this device) |
-| microSD card / USB drive (exFAT from a PC, or ext4) | Found automatically when inserted (Settings › On this device) |
-| Other folders on the headset | Settings › On this device › Add folder |
+| Any folder on the headset, a microSD card or a USB drive | Browse it under Home › On this device, or make it a library: Sources › Add source › Library |
 | Any server with a DeoVR feed or HereSphere API | Sources › Add source › DeoVR feed or HereSphere API |
 | NAS / Windows share | Sources › Add source › SMB share (`smb://nas/videos`) |
 | Nextcloud and other WebDAV | Sources › Add source › WebDAV |
@@ -177,7 +175,8 @@ that pairing, you can also delete `~/.ssh/id_rsa_frame_devkit` and
 
 **Home** opens on what you were watching (a banner to resume, then
 *Continue watching* and *Favorites*) and ends with a row of your sources:
-**On this device** first, then every source you added, then *Add a source*.
+**On this device** first, then your libraries and every other source you
+added, then *Add a source*.
 Each opens in a browser made for that kind of source; Back returns to Home.
 Its title is always the source's name, with where you are in it underneath.
 Sources locked with a PIN stay off Home until unlocked; the padlock on a
@@ -192,7 +191,8 @@ videos, except those you watched or marked.
 
 | Source | What browsing it offers |
 |---|---|
-| On this device | **Videos**: everything found on the headset, its cards and drives, with search, format filters and sorting. **Folders**: the home folder and the drives as folders |
+| On this device | The home folder and the inserted microSD card and USB drives, as folders: play any video, or *Play all* in a folder |
+| Library | **Videos**: every video in its folder, with thumbnails, search, format filters and sorting (newest, title, length, rating, shuffle). **Folders**: its folder as folders. **Scan now** looks for new and removed videos |
 | Jellyfin / Emby | Your libraries, *Continue watching*, *Next up* and the latest additions; a search of the whole server by title, as Jellyfin's own search shows it: a row each of movies, shows, collections and other videos, best matches first (episodes are found through their show); poster grids searched, sorted and filtered by the server (unwatched, in progress, favorites); series by season and episode; details with the story, cast and genres. Watched marks, favorites and resume points are the server's (see [Watch sync](#watch-sync-with-jellyfin-emby-and-heresphere)) |
 | DeoVR feed / HereSphere API | The server's scene groups as chips over a grid of scenes; search the chosen group (or *All*) across titles, studios, performers and tags; order by title, date, rating or length; a *Favorites* filter (and *Scripted*, with haptics on). ⋯ opens a scene's details: description, performers and tags (tap one to see all their scenes), chapters to start from, and ♡ to make it a favourite on a HereSphere API that takes favourites. The page opens with the scenes from last time while the server sends the current list ("updating…" under the title). A HereSphere API can also follow what you watch (see [Watch sync](#watch-sync-with-jellyfin-emby-and-heresphere)) |
 | SMB, WebDAV, HTTP folders, DLNA, local folders | Folders and files: search the folder you are in, order by name, date or size, *Play all* |
@@ -246,12 +246,36 @@ the sign-in expired) is noted in frameplayerx.log and not sent again.
 DeoVR feeds, DLNA, network shares and folders keep no watch state on the
 server: their resume points, favorites and ratings stay on the headset.
 
+### Libraries
+
+A library is a folder of videos, on the headset or on a microSD card or USB
+drive, with a place of its own on Home: add one under **Sources › Add
+source › Library**, picking the folder or one of the folders offered (your
+Videos, Downloads and Movies folders, and each inserted card). Make one for
+each kind of video, say Movies in `~/Videos/Movies` and Gaming clips on the
+card, and each keeps its own videos. Libraries can't overlap: a folder
+inside a library, or holding one, can't be another.
+
+FramePlayerX looks for new and removed videos in a library when you add
+it, when FramePlayerX starts, when its card is inserted, each time you open
+it, and when you press **Scan now** on its page. Its thumbnails are made in
+the background. The pencil next to it under **Sources** renames it or moves
+it to another folder, and offers **Rebuild thumbnails** and **Retry**
+(videos that couldn't be read).
+
+A library on a card knows the card by its own ID, not by its name or where
+it is mounted. Two cards with the same name and the same folders are two
+different cards: each video keeps its own thumbnail, rating and resume
+point, and a library made on one card shows **Not inserted** while the
+other is in. Reformatting a card gives it a new ID: edit the library and
+pick its folder again.
+
 ### microSD cards and USB drives (VR180 and everything else)
 
 FramePlayerX notices when a card or drive is inserted (a "Found drive"
-message appears), adds its videos to **On this device** and makes
-thumbnails. You can also browse it as folders under **On this device ›
-Folders**.
+message appears) and you can browse it under **On this device**. To have
+its videos with thumbnails, filters and sorting, make a library of it, or
+of a folder on it (see [Libraries](#libraries)).
 
 **Copying videos from a Windows PC or Mac:** format the card as **exFAT**
 on the computer (Windows: right-click the card › Format › exFAT), copy the
@@ -267,7 +291,7 @@ videos onto it and put it in the Frame. exFAT has no 4 GB file limit, so
   read. FramePlayerX still finds the videos.
 - An ext4 card formatted by Steam works too (shared with games: Steam game
   folders, `steamapps`, are skipped), but only the Frame can read it.
-- When the card is removed its videos stay listed with your
+- When the card is removed its library's videos stay listed with your
   ratings, resume points and adjustments; they play again once it is back.
 - VR180 videos are recognised from their metadata (VR180 cameras, YouTube
   VR180 downloads) or from names like `Trip_VR180.mp4`,
@@ -417,10 +441,10 @@ picture. Play/pause and seeking are under either thumb.
 | Thumbstick up / down | Volume (or scroll a menu you point at) | Tilt the picture (or scroll a menu you point at) |
 | Thumbstick press | Mute | Reset the picture |
 | A / D-pad down | Play / pause | Play / pause |
-| B / D-pad right | Back: closes the open panel, then shows the library over the video, then returns to the video | Your room on / off: around flat videos and the library, or through a side-by-side passthrough video's mask |
+| B / D-pad right | Back: closes the open panel, then shows the browse panel over the video, then returns to the video | Your room on / off: around flat videos and the panels, or through a side-by-side passthrough video's mask |
 | X / D-pad left | Previous video in the list you opened it from | Adjust panel |
 | Y / D-pad up | Next video | Show or hide the controls |
-| Menu / View | Library | Recenter |
+| Menu / View | Browse | Recenter |
 | Bumper | Forward 1 minute | Back 1 minute |
 | Grip + thumbstick | Up / down raises or lowers you | Left / right turns the picture, up / down zooms in / out |
 | Hold grip + trigger, move | Drag the picture (a flat screen or the dome follows your hand) | The same |
@@ -428,13 +452,13 @@ picture. Play/pause and seeking are under either thumb.
 
 To recenter, hold the Steam button, as in any game (both grips together, or
 the left Menu button, do it too). The picture and the panels come to where
-you are looking, up or down included. The library panel and a flat screen
+you are looking, up or down included. The browse panel and a flat screen
 come back in front of you (a 180° or 360° picture keeps its turn), and the
 adjust panel stays beside the control bar.
 
 The picture, the control bar and the adjust panel beside it move as one
 player: drag the picture, or hold grip on the control bar and move it, and
-they all go together. Point at the library or adjust panel (or the keyboard
+they all go together. Point at the browse or adjust panel (or the keyboard
 under it) and hold grip to move it; it stays where you leave it, the adjust
 panel in its place beside the control bar. The format on the control bar
 (for example 180° SBS) opens the adjust panel's Format tab.
@@ -501,7 +525,7 @@ Until then FramePlayerX shows nothing about them and loads no scripts.
 
 Scripts (`.funscript`, including multi-axis `video.surge.funscript` etc.)
 are found next to the video, in `~/.local/share/frameplayerx/Interactive`
-(Settings › On this device shows it), or supplied by the server.
+(Settings › Haptics shows it), or supplied by the server.
 Add a device in **Settings › Haptics**: Intiface Central, TCode devices
 (OSR2/SR6 over USB serial, TCP or UDP), or The Handy (connection key). The
 seek bar shows the script's intensity.
@@ -509,7 +533,7 @@ seek bar shows the script's intensity.
 ## Remote control
 
 **Settings › Remote control › Phone / browser remote** shows a QR code; scan
-it to control playback, browse the library and type from your phone. The
+it to control playback, find videos and type from your phone. The
 **DeoVR remote API** (port 23554) works with apps that speak DeoVR's
 protocol. Both only answer devices on your local network.
 

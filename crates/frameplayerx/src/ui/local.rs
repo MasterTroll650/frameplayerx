@@ -1,6 +1,6 @@
-//! What the headset holds: the videos indexed from its folders, microSD
-//! cards and USB drives (probed, so every filter and order works), and the
-//! folders themselves.
+//! What the headset holds: On this device, its folders and drives to
+//! browse, and libraries, folders on it or a card whose videos are scanned
+//! (probed, so every filter and order works).
 
 use super::page;
 use super::theme::{self, Weight};
@@ -9,25 +9,14 @@ use super::{Action, Browse, LibraryGrid, View, icons};
 use egui::{Align, Layout, RichText};
 use fp_library::Sort;
 
+/// On this device: its folders and drives.
+#[derive(Default)]
 pub struct LocalView {
-    /// Showing the folders rather than the videos.
-    pub folders: bool,
-    pub grid: LibraryGrid,
-    /// The folder being browsed in the folders tab.
+    /// The folder being browsed, else the list of places.
     pub folder: Option<Browse>,
 }
 
-impl Default for LocalView {
-    fn default() -> Self {
-        LocalView {
-            folders: false,
-            grid: LibraryGrid::local(),
-            folder: None,
-        }
-    }
-}
-
-/// The headset's videos or folders; true when Back was clicked.
+/// The headset's folders; true when Back was clicked.
 pub fn page(ui: &mut egui::Ui, v: &mut View, l: &mut LocalView) -> bool {
     let title = super::sources::LOCAL_NAME;
     if let Some(b) = l.folder.as_mut() {
@@ -38,20 +27,66 @@ pub fn page(ui: &mut egui::Ui, v: &mut View, l: &mut LocalView) -> bool {
             .unwrap_or_default();
         return super::folders::page(ui, v, title, &root, b);
     }
-    // The scan while it runs, else what the page holds.
-    let subtitle = match v.state.scan_status.as_deref() {
-        Some(s) if s.starts_with("Scanning") => s.to_string(),
-        _ if l.folders => "Folders".to_string(),
-        _ => "Videos on the headset, its microSD card and USB drives".to_string(),
-    };
-    let back = page::header(ui, title, Some(&subtitle), |ui| {
-        if widgets::icon_button(ui, icons::GEAR_SIX, 44.0, false)
-            .tip("Folders and drives searched for videos")
-            .clicked()
-        {
-            v.state.screen = super::Screen::Settings;
-            v.state.settings_tab = super::SettingsTab::Device;
+    let back = page::header(
+        ui,
+        title,
+        Some("Folders on the headset, its microSD card and USB drives"),
+        |_| {},
+    );
+    roots(ui, v, l);
+    back
+}
+
+/// A library: its videos, or its folders.
+pub struct LibraryView {
+    /// Showing the folders rather than the videos.
+    pub folders: bool,
+    pub grid: LibraryGrid,
+    /// The folder being browsed in the folders tab.
+    pub folder: Option<Browse>,
+}
+
+impl LibraryView {
+    pub fn new(source: &str) -> LibraryView {
+        LibraryView {
+            folders: false,
+            grid: LibraryGrid::of(source),
+            folder: None,
         }
+    }
+}
+
+/// Library `source`'s page; true when Back was clicked.
+pub fn library_page(
+    ui: &mut egui::Ui,
+    v: &mut View,
+    source: &str,
+    name: &str,
+    l: &mut LibraryView,
+) -> bool {
+    let Some(fp_sources::SourceConfig::Library(cfg)) = v.services.source_config(source).cloned()
+    else {
+        return true;
+    };
+    let present = crate::libraries::present(&cfg);
+    let card = cfg
+        .card
+        .as_ref()
+        .map_or("", |c| c.label.as_str())
+        .to_string();
+    let scanning = v.state.scans.get(source).cloned();
+    if l.folders
+        && let Some(b) = l.folder.as_mut()
+    {
+        let root = crate::libraries::display_location(&cfg.root());
+        return super::folders::page(ui, v, name, &root, b);
+    }
+    let subtitle = match &scanning {
+        Some(s) => s.clone(),
+        None if !present => format!("{card} is not inserted"),
+        None => crate::libraries::display_location(&cfg.root()),
+    };
+    let back = page::header(ui, name, Some(&subtitle), |ui| {
         if widgets::button_sized(
             ui,
             Some(icons::ARROWS_CLOCKWISE),
@@ -59,61 +94,60 @@ pub fn page(ui: &mut egui::Ui, v: &mut View, l: &mut LocalView) -> bool {
             Kind::Secondary,
             44.0,
         )
+        .tip("Look for new and removed videos")
         .clicked()
         {
-            v.actions.push(Action::Rescan { force: false });
+            v.actions.push(Action::Rescan {
+                source: source.to_string(),
+                force: false,
+            });
         }
     });
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        if widgets::chip_icon(ui, Some(icons::FILM_STRIP), "Videos", !l.folders).clicked() {
-            l.folders = false;
-        }
-        if widgets::chip_icon(ui, Some(icons::FOLDERS), "Folders", l.folders).clicked() {
+        widgets::chip_icon(ui, Some(icons::FILM_STRIP), "Videos", true);
+        if widgets::chip_icon(ui, Some(icons::FOLDERS), "Folders", false).clicked() {
             l.folders = true;
+            l.folder = Some(Browse {
+                source: source.to_string(),
+                loading: true,
+                ..Default::default()
+            });
+            v.actions.push(Action::Browse {
+                source: source.to_string(),
+                location: None,
+            });
         }
     });
     ui.add_space(8.0);
-    if l.folders {
-        roots(ui, v, l);
-    } else {
-        super::library::grid_page(
-            ui,
-            v,
-            &mut l.grid,
-            &[
-                (Sort::Added, "Newest"),
-                (Sort::Title, "Title"),
-                (Sort::Duration, "Length"),
-                (Sort::Rating, "Rating"),
-                (Sort::Random, "Shuffle"),
-            ],
-            |ui, v| {
-                let folders: Vec<String> = v
-                    .settings
-                    .library_folders
-                    .iter()
-                    .map(|f| f.display().to_string())
-                    .collect();
-                let body = if folders.is_empty() {
-                    "Copy videos to the Frame with FrameDrop or a USB drive, then scan.".to_string()
-                } else {
-                    format!(
-                        "Videos in {} and on microSD cards and USB drives are added \
-                         automatically. Copy some over with FrameDrop or a USB drive.",
-                        folders.join(", ")
-                    )
-                };
-                page::empty_state(ui, icons::FILM_STRIP, "No videos here yet", &body, |ui| {
-                    if widgets::button(ui, Some(icons::ARROWS_CLOCKWISE), "Scan now", Kind::Primary)
-                        .clicked()
-                    {
-                        v.actions.push(Action::Rescan { force: false });
-                    }
-                });
-            },
-        );
-    }
+    super::library::grid_page(
+        ui,
+        v,
+        &mut l.grid,
+        &[
+            (Sort::Added, "Newest"),
+            (Sort::Title, "Title"),
+            (Sort::Duration, "Length"),
+            (Sort::Rating, "Rating"),
+            (Sort::Random, "Shuffle"),
+        ],
+        |ui, _| {
+            let (title, body) = if scanning.is_some() {
+                ("Looking for videos", "They appear here as they are found.")
+            } else if !present {
+                (
+                    "Not inserted",
+                    "Insert the card or drive to see its videos.",
+                )
+            } else {
+                (
+                    "No videos here yet",
+                    "Copy some into this folder with FrameDrop or a USB drive.",
+                )
+            };
+            page::empty_state(ui, icons::FILM_STRIP, title, body, |_| {});
+        },
+    );
     back
 }
 

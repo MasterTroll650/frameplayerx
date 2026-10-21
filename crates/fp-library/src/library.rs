@@ -1218,43 +1218,55 @@ impl Library {
         })
     }
 
+    /// Leaves the videos of `source_id` without a source, for a library
+    /// whose folder changed: its next scan takes back those still in it.
+    /// Returns how many there were.
+    pub fn detach_source(&self, source_id: &str) -> Result<usize> {
+        self.with(|c| {
+            Ok(c.execute(
+                "UPDATE media SET source_id = '' WHERE source_id = ?1",
+                [source_id],
+            )?)
+        })
+    }
+
     // -- metadata worker support ---------------------------------------------
 
     /// Videos the metadata worker still has to process: not missing, not
-    /// failed, and not yet probed or without a thumbnail. Oldest first.
+    /// failed, not on a card that is out, and not yet probed or without a
+    /// thumbnail. Oldest first.
     pub fn pending_metadata(&self, limit: usize) -> Result<Vec<MediaRecord>> {
-        self.with(|c| {
-            query_records(
-                c,
-                "WHERE m.missing = 0 AND m.probe_error IS NULL
-                   AND (m.probed = 0 OR m.thumbnail IS NULL)
-                 ORDER BY m.id LIMIT ?1",
-                [limit_i64(limit)],
-            )
-        })
+        let sql = format!(
+            "WHERE m.missing = 0 AND m.probe_error IS NULL
+               AND (m.probed = 0 OR m.thumbnail IS NULL){}
+             ORDER BY m.id LIMIT ?1",
+            on_inserted_cards()
+        );
+        self.with(|c| query_records(c, &sql, [limit_i64(limit)]))
     }
 
     /// Number of rows [`Library::pending_metadata`] would return without a
     /// limit.
     pub fn pending_metadata_count(&self) -> Result<usize> {
+        let sql = format!(
+            "SELECT COUNT(*) FROM media m WHERE m.missing = 0 AND m.probe_error IS NULL
+               AND (m.probed = 0 OR m.thumbnail IS NULL){}",
+            on_inserted_cards()
+        );
         self.with(|c| {
-            let n: i64 = c.query_row(
-                "SELECT COUNT(*) FROM media m WHERE m.missing = 0 AND m.probe_error IS NULL
-                   AND (m.probed = 0 OR m.thumbnail IS NULL)",
-                [],
-                |r| r.get(0),
-            )?;
+            let n: i64 = c.query_row(&sql, [], |r| r.get(0))?;
             Ok(n.max(0) as usize)
         })
     }
 
-    /// Clears recorded probe failures so the worker tries those videos
-    /// again. Returns how many were reset.
-    pub fn retry_failed_probes(&self) -> Result<usize> {
+    /// Clears recorded probe failures, of `source_id`'s videos when given,
+    /// so the worker tries those videos again. Returns how many were reset.
+    pub fn retry_failed_probes(&self, source_id: Option<&str>) -> Result<usize> {
         self.with(|c| {
             Ok(c.execute(
-                "UPDATE media SET probe_error = NULL WHERE probe_error IS NOT NULL",
-                [],
+                "UPDATE media SET probe_error = NULL
+                 WHERE probe_error IS NOT NULL AND (?1 IS NULL OR source_id = ?1)",
+                [source_id],
             )?)
         })
     }
@@ -1333,6 +1345,18 @@ pub(crate) struct StoredProbe {
 
 pub(crate) fn limit_i64(limit: usize) -> i64 {
     i64::try_from(limit).unwrap_or(i64::MAX)
+}
+
+/// SQL leaving out videos on cards that are not inserted
+/// ([`fp_core::volume`]). Card IDs hold only letters, digits and dashes.
+fn on_inserted_cards() -> String {
+    let scheme = fp_core::volume::SCHEME;
+    let mut sql = format!(" AND (m.location NOT LIKE '{scheme}%'");
+    for id in fp_core::volume::mounted().into_iter().filter_map(|v| v.id) {
+        sql += &format!(" OR m.location = '{scheme}{id}' OR m.location LIKE '{scheme}{id}/%'");
+    }
+    sql.push(')');
+    sql
 }
 
 #[cfg(test)]
@@ -1804,6 +1828,20 @@ mod tests {
         for id in [local, watched, fav, tagged, marked, other] {
             assert!(lib.get(id).unwrap().is_some(), "{id} was deleted");
         }
+        assert_eq!(lib.detach_source("nas").unwrap(), 4);
+        assert_eq!(lib.get(watched).unwrap().unwrap().source_id, "");
+        assert_eq!(lib.get(other).unwrap().unwrap().source_id, "feed");
+    }
+
+    #[test]
+    fn videos_on_cards_that_are_out_wait_for_their_thumbnails() {
+        let lib = lib();
+        // No card has this ID.
+        add(&lib, "volume:0000-0000/Clips/a.mp4");
+        let here = add(&lib, "/v/b.mp4");
+        let pending = lib.pending_metadata(10).unwrap();
+        assert_eq!(pending.iter().map(|r| r.id).collect::<Vec<_>>(), [here]);
+        assert_eq!(lib.pending_metadata_count().unwrap(), 1);
     }
 
     #[test]

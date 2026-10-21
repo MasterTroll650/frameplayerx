@@ -57,7 +57,7 @@ impl ButtonAction {
             ButtonAction::Nothing => "Nothing",
             ButtonAction::PlayPause => "Play / pause",
             ButtonAction::Back => "Back",
-            ButtonAction::Library => "Library",
+            ButtonAction::Library => "Browse",
             ButtonAction::PreviousVideo => "Previous video",
             ButtonAction::NextVideo => "Next video",
             ButtonAction::SeekBack => "Seek back",

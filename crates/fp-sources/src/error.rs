@@ -37,6 +37,9 @@ pub enum Error {
     SignedOut(String),
     #[error("not found: {0}")]
     NotFound(String),
+    /// The microSD card or USB drive a location is on is not mounted.
+    #[error("the microSD card or USB drive it is on is not inserted")]
+    NotInserted,
     /// A URL or location string could not be understood.
     #[error("invalid location {location}: {reason}")]
     InvalidLocation {

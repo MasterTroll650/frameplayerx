@@ -245,7 +245,6 @@ impl Sim {
                             ));
                             SettingsTab::Controller
                         }
-                        "device" => SettingsTab::Device,
                         "haptics" => SettingsTab::Haptics,
                         "remote" => SettingsTab::Remote,
                         "updates" => SettingsTab::Updates,
@@ -518,6 +517,21 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
+            // The form adding a source of a kind: `add-source library`.
+            Some("add-source") => {
+                let kind = parts.get(1).ok_or("add-source needs a kind")?;
+                let kind: fp_sources::SourceKind =
+                    serde_json::from_value(serde_json::Value::String(kind.to_string()))
+                        .map_err(|e| format!("no source kind {kind:?}: {e}"))?;
+                self.app.ui.screen = crate::ui::Screen::Sources;
+                self.app.ui.source = None;
+                self.app.ui.source_form = Some(crate::ui::SourceForm {
+                    kind,
+                    ..Default::default()
+                });
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
             // The form editing a source, as its pencil opens: `edit-source ID`.
             Some("edit-source") => {
                 let id = parts.get(1).ok_or("edit-source needs a source")?;
@@ -531,14 +545,23 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
-            // The Folders tab of the headset's own page: `local-folders`.
-            Some("local-folders") => {
+            // The Folders tab of the library open, as its chip opens it:
+            // `library-folders`.
+            Some("library-folders") => {
                 if let Some(crate::ui::SourceView {
-                    page: crate::ui::SourcePage::Local(l),
+                    source,
+                    page: crate::ui::SourcePage::Library(l),
                     ..
                 }) = self.app.ui.source.as_mut()
                 {
                     l.folders = true;
+                    l.folder = Some(crate::ui::Browse {
+                        source: source.clone(),
+                        loading: true,
+                        ..Default::default()
+                    });
+                    let source = source.clone();
+                    self.app.browse(source, None);
                 }
                 self.app.repaint_all();
                 self.run_frames(3)?;

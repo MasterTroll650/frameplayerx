@@ -336,9 +336,9 @@ fn thumb_key(r: &MediaRecord) -> Option<String> {
 fn request(r: &MediaRecord) -> OpenRequest {
     OpenRequest {
         location: r.location.clone(),
-        source_id: (r.source_id != crate::services::LIBRARY_SOURCE
-            && !r.source_id.is_empty()
-            && !r.location.starts_with('/'))
+        source_id: (!r.source_id.is_empty()
+            && !r.location.starts_with('/')
+            && !r.location.starts_with(fp_core::volume::SCHEME))
         .then(|| r.source_id.clone()),
         entry: None,
         title: Some(r.title.clone()),
@@ -764,7 +764,7 @@ fn details(ui: &mut egui::Ui, v: &mut View, id: fp_library::MediaId) {
             widgets::section_label(ui, "File");
             ui.add_space(2.0);
             ui.label(
-                RichText::new(&r.location)
+                RichText::new(crate::libraries::display_location(&r.location))
                     .font(theme::font(Weight::Regular, 15.0))
                     .color(theme::TEXT_3),
             );
