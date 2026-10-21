@@ -57,6 +57,8 @@ pub struct FeedView {
     pub details: Option<Details>,
     /// Scenes whose details were asked for.
     pub requested: HashSet<String>,
+    /// Scenes whose details came since the listing was last saved.
+    pub unsaved: usize,
 }
 
 /// A scene's details page.
@@ -85,6 +87,7 @@ impl FeedView {
             shown: PAGE,
             details: None,
             requested: HashSet::new(),
+            unsaved: 0,
         }
     }
 
@@ -166,6 +169,7 @@ impl FeedView {
             Ok(info) => {
                 if let Some(s) = self.scenes.get_mut(url) {
                     s.apply(&info);
+                    self.unsaved += 1;
                 }
                 if full && let Some(d) = self.details.as_mut().filter(|d| d.url == url) {
                     d.loading = false;
@@ -243,19 +247,54 @@ impl FeedView {
     }
 
     /// Scenes of the group shown that need their details fetched to be
-    /// searched: those known by their address only (no scan said more),
-    /// not asked for yet.
+    /// searched, not asked for yet: those known by their address only (no
+    /// scan said more), and a DeoVR feed's, whose listing has no tags or
+    /// performers.
     fn unfilled(&self) -> Vec<String> {
+        let deovr = self.kind == SourceKind::DeoVr;
         self.scope()
             .iter()
             .filter(|u| !self.requested.contains(*u))
-            .filter(|u| self.scenes.get(*u).is_some_and(|s| s.bare && !s.detailed))
+            .filter(|u| {
+                self.scenes
+                    .get(*u)
+                    .is_some_and(|s| !s.detailed && (s.bare || deovr))
+            })
             .cloned()
             .collect()
+    }
+
+    /// The groups and scenes as shown, details included, to save as the
+    /// listing shown next time.
+    pub fn library(&self) -> FeedLibrary {
+        FeedLibrary {
+            groups: self.groups.clone(),
+            scenes: self
+                .order
+                .iter()
+                .filter_map(|u| self.scenes.get(u).cloned())
+                .collect(),
+        }
     }
 }
 
 /// Opens `scene`.
+/// Opens a scene whose page has every detail: opening needs no second fetch.
+fn scene_request(
+    source: &str,
+    scene: &FeedScene,
+    info: Option<&SceneInfo>,
+    start_at: Option<f64>,
+) -> OpenRequest {
+    let mut req = request(source, scene, start_at);
+    if let Some(info) = info {
+        let mut e = scene.to_entry();
+        info.apply_to(&mut e);
+        req.entry = Some(e);
+    }
+    req
+}
+
 fn request(source: &str, scene: &FeedScene, start_at: Option<f64>) -> OpenRequest {
     OpenRequest {
         location: scene.url.clone(),
@@ -449,62 +488,61 @@ fn scene_grid(
     haptics: bool,
 ) -> Picked {
     let mut picked = Picked::default();
-    egui::ScrollArea::vertical()
-        .auto_shrink(false)
-        .show(ui, |ui| {
-            if list.is_empty() && !f.loading && f.error.is_none() {
-                let (title, body) = if f.order.is_empty() {
-                    ("No scenes", "The server lists no scenes here.")
-                } else {
-                    (
-                        "Nothing matches",
-                        "Try another search, or clear the filters.",
-                    )
-                };
-                page::empty_state(ui, icons::VIRTUAL_REALITY, title, body, |_| {});
+    page::scroll(ui, |ui| {
+        if list.is_empty() && !f.loading && f.error.is_none() {
+            let (title, body) = if f.order.is_empty() {
+                ("No scenes", "The server lists no scenes here.")
+            } else {
+                (
+                    "Nothing matches",
+                    "Try another search, or clear the filters.",
+                )
+            };
+            page::empty_state(ui, icons::VIRTUAL_REALITY, title, body, |_| {});
+        }
+        page::grid(ui, list.len(), page::LANDSCAPE.x, |ui, i| {
+            let s = &list[i];
+            let title = widgets::display_title(&s.title);
+            let facts = card_facts(s);
+            let badge = s.format.map(|f| widgets::format_short(&f));
+            let c = page::card(
+                ui,
+                thumbs,
+                &Card {
+                    thumb: s.thumbnail_url.as_deref(),
+                    placeholder: icons::VIRTUAL_REALITY,
+                    title: &title,
+                    facts: &facts,
+                    badge: badge.as_deref(),
+                    corner: (haptics && s.scripted).then_some(icons::WAVEFORM),
+                    favorite: s.favorite,
+                    more: true,
+                    ..Card::default()
+                },
+            );
+            if c.visible && !s.detailed {
+                picked.on_screen.push(s.url.clone());
             }
-            page::grid(ui, list.len(), page::LANDSCAPE.x, |ui, i| {
-                let s = &list[i];
-                let title = widgets::display_title(&s.title);
-                let facts = card_facts(s);
-                let badge = s.format.map(|f| widgets::format_short(&f));
-                let c = page::card(
-                    ui,
-                    thumbs,
-                    &Card {
-                        thumb: s.thumbnail_url.as_deref(),
-                        placeholder: icons::VIRTUAL_REALITY,
-                        title: &title,
-                        facts: &facts,
-                        badge: badge.as_deref(),
-                        corner: (haptics && s.scripted).then_some(icons::WAVEFORM),
-                        favorite: s.favorite,
-                        more: true,
-                        ..Card::default()
-                    },
-                );
-                if c.visible && !s.detailed {
-                    picked.on_screen.push(s.url.clone());
-                }
-                if c.open {
-                    picked.play = Some(i);
-                }
-                if c.more {
-                    picked.open = Some(s.url.clone());
-                }
-            });
-            if total > list.len() {
-                ui.vertical_centered(|ui| {
-                    picked.more = widgets::button(ui, None, "Show more", Kind::Secondary).clicked();
-                });
-                ui.add_space(20.0);
+            if c.open {
+                picked.play = Some(i);
+            }
+            if c.more {
+                picked.open = Some(s.url.clone());
             }
         });
+        if total > list.len() {
+            ui.vertical_centered(|ui| {
+                picked.more = widgets::button(ui, None, "Show more", Kind::Secondary).clicked();
+            });
+            ui.add_space(20.0);
+        }
+    });
     picked
 }
 
-/// Asks for the details of scenes listed by address only (HereSphere):
-/// cards on screen first; while searching, the rest of the group after.
+/// Asks for the details of scenes whose listing lacks them: cards on screen
+/// first; while searching, the rest of the group after, so their tags and
+/// performers are searched too.
 fn fill_details(
     actions: &mut Vec<Action>,
     source: &str,
@@ -553,6 +591,7 @@ fn details(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut Fe
     let writable = info.as_ref().is_some_and(|i| i.write_favorite);
     let (mut play_at, mut search) = (None::<f64>, None::<String>);
     let mut favorite = None::<bool>;
+    let queued = scene_request(source, &scene, info.as_deref(), None);
     egui::ScrollArea::vertical()
         .auto_shrink(false)
         .show(ui, |ui| {
@@ -600,6 +639,10 @@ fn details(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut Fe
                     if widgets::button(ui, Some(icons::PLAY), "Play", Kind::Primary).clicked() {
                         play_at = Some(0.0);
                     }
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 12.0;
+                        super::queue::buttons(ui, v, &queued);
+                    });
                     if writable {
                         let label = if scene.favorite {
                             "Favorite"
@@ -676,13 +719,7 @@ fn details(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut Fe
             ui.add_space(24.0);
         });
     if let Some(t) = play_at {
-        let mut req = request(source, &scene, Some(t));
-        if let Some(info) = &info {
-            // The page has every detail; opening needs no second fetch.
-            let mut e = scene.to_entry();
-            info.apply_to(&mut e);
-            req.entry = Some(e);
-        }
+        let req = scene_request(source, &scene, info.as_deref(), Some(t));
         v.actions.push(Action::Open(req));
     }
     if let Some(on) = favorite {
@@ -796,6 +833,28 @@ mod tests {
         assert_eq!(d.info.as_ref().unwrap().favorite, Some(true));
         f.favorites_only = true;
         assert_eq!(titles(&f), ["Beach"]);
+    }
+
+    #[test]
+    fn a_deovr_search_fetches_details_and_they_are_kept() {
+        // A DeoVR listing has titles but no tags: a search fetches the rest.
+        let mut f = view();
+        assert_eq!(f.unfilled(), ["a", "b", "c"]);
+        let info = SceneInfo {
+            tags: vec!["Sunset".into()],
+            ..SceneInfo::default()
+        };
+        f.scene_loaded("a", Ok(info), false);
+        assert_eq!((f.unfilled(), f.unsaved), (vec!["b".into(), "c".into()], 1));
+        f.search = "sunset".into();
+        assert_eq!(titles(&f), ["Beach"]);
+        let saved = f.library();
+        assert!(saved.scenes[0].detailed && saved.scenes[0].tags == ["Sunset"]);
+        assert_eq!(saved.groups, f.groups);
+        // A HereSphere scene a scan described needs no fetching.
+        let mut h = view();
+        h.kind = SourceKind::HereSphere;
+        assert!(h.unfilled().is_empty());
     }
 
     #[test]

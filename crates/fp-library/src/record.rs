@@ -205,6 +205,9 @@ pub struct MediaRecord {
     pub subtitles: Vec<String>,
     /// Tag names, sorted case-insensitively.
     pub tags: Vec<String>,
+    /// What its source says about it (Jellyfin's overview, a scene's
+    /// description).
+    pub description: Option<String>,
 }
 
 impl MediaRecord {
@@ -291,7 +294,7 @@ pub(crate) const MEDIA_COLUMNS: &str = "m.id, m.location, m.source_id, m.title, 
     m.duration, m.width, m.height, m.video_codec, m.detected_format, m.detected_evidence,
     m.user_format, m.view_settings, m.keyframes, m.rating, m.favorite, m.play_count,
     m.last_played, m.resume_position, m.added_at, m.missing, m.thumbnail, m.preview_strip,
-    m.thumbnail_url, m.probed, m.probe_error, m.scripts, m.subtitles,
+    m.thumbnail_url, m.probed, m.probe_error, m.scripts, m.subtitles, m.description,
     (SELECT json_group_array(t.name ORDER BY t.name COLLATE NOCASE)
        FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE mt.media_id = m.id)";
 
@@ -372,7 +375,8 @@ pub(crate) fn media_from_row(row: &Row<'_>) -> rusqlite::Result<MediaRecord> {
         probe_error: row.get(26)?,
         scripts: json_col(row, 27)?,
         subtitles: json_col(row, 28)?,
-        tags: json_col(row, 29)?,
+        description: row.get(29)?,
+        tags: json_col(row, 30)?,
     })
 }
 

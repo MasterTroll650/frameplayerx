@@ -1,31 +1,31 @@
-//! Manual (ordered) and smart (stored query) playlists.
+//! Playlists: ordered lists of videos from any source. What locked sources
+//! hide ([`Library::set_hidden`]) is left out of them as everywhere else.
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::library::{Library, ensure_media, get_many};
-use crate::query::{Query, count_conn, search_conn};
+use crate::library::{Hidden, Library, ensure_media, get_many};
 use crate::record::{MediaId, MediaRecord, PlaylistId, now};
 
 /// A playlist summary.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Playlist {
     pub id: PlaylistId,
     pub name: String,
-    /// For smart playlists, the query evaluated on every read.
-    pub smart_query: Option<Query>,
     /// Unix seconds.
     pub created_at: i64,
-    /// Entries (manual) or current matches (smart).
+    /// Videos in it, those hidden left out.
     pub item_count: usize,
+    /// Its first video (hidden ones left out), for a picture.
+    pub first: Option<MediaRecord>,
 }
 
-impl Playlist {
-    /// Whether the content comes from a stored query.
-    pub fn is_smart(&self) -> bool {
-        self.smart_query.is_some()
-    }
+/// A video in a playlist, at `position` among all its entries (hidden ones
+/// counted), which is what edits take.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaylistEntry {
+    pub position: usize,
+    pub record: MediaRecord,
 }
 
 fn check_name(name: &str) -> Result<&str> {
@@ -37,55 +37,7 @@ fn check_name(name: &str) -> Result<&str> {
     }
 }
 
-fn playlist_conn(conn: &Connection, id: PlaylistId) -> Result<Option<Playlist>> {
-    let row: Option<(String, Option<String>, i64)> = conn
-        .query_row(
-            "SELECT name, smart_query, created_at FROM playlists WHERE id = ?1",
-            [id.0],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .optional()?;
-    let Some((name, smart, created_at)) = row else {
-        return Ok(None);
-    };
-    let smart_query: Option<Query> = smart.map(|s| serde_json::from_str(&s)).transpose()?;
-    let item_count = match &smart_query {
-        Some(q) => {
-            let n = count_conn(conn, q)?.saturating_sub(q.offset);
-            q.limit.map_or(n, |l| n.min(l))
-        }
-        None => {
-            let n: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM playlist_items WHERE playlist_id = ?1",
-                [id.0],
-                |r| r.get(0),
-            )?;
-            n.max(0) as usize
-        }
-    };
-    Ok(Some(Playlist {
-        id,
-        name,
-        smart_query,
-        created_at,
-        item_count,
-    }))
-}
-
-fn require(conn: &Connection, id: PlaylistId) -> Result<Playlist> {
-    playlist_conn(conn, id)?.ok_or(Error::PlaylistNotFound(id))
-}
-
-fn require_manual(conn: &Connection, id: PlaylistId) -> Result<()> {
-    if require(conn, id)?.is_smart() {
-        return Err(Error::InvalidArgument(format!(
-            "playlist {id} is smart; its items come from its query"
-        )));
-    }
-    Ok(())
-}
-
-pub(crate) fn manual_ids(conn: &Connection, id: PlaylistId) -> Result<Vec<MediaId>> {
+fn ids(conn: &Connection, id: PlaylistId) -> Result<Vec<MediaId>> {
     let mut stmt = conn.prepare_cached(
         "SELECT media_id FROM playlist_items WHERE playlist_id = ?1 ORDER BY position",
     )?;
@@ -93,7 +45,7 @@ pub(crate) fn manual_ids(conn: &Connection, id: PlaylistId) -> Result<Vec<MediaI
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-pub(crate) fn write_ids(conn: &Connection, id: PlaylistId, items: &[MediaId]) -> Result<()> {
+fn write_ids(conn: &Connection, id: PlaylistId, items: &[MediaId]) -> Result<()> {
     conn.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [id.0])?;
     let mut ins = conn.prepare_cached(
         "INSERT INTO playlist_items (playlist_id, position, media_id) VALUES (?1, ?2, ?3)",
@@ -105,33 +57,71 @@ pub(crate) fn write_ids(conn: &Connection, id: PlaylistId, items: &[MediaId]) ->
     Ok(())
 }
 
-pub(crate) fn create_conn(
-    conn: &Connection,
-    name: &str,
-    query: Option<&Query>,
-) -> Result<PlaylistId> {
-    let name = check_name(name)?;
-    let smart = query.map(serde_json::to_string).transpose()?;
-    conn.execute(
-        "INSERT INTO playlists (name, smart_query, created_at) VALUES (?1, ?2, ?3)",
-        params![name, smart, now()],
-    )?;
-    Ok(PlaylistId(conn.last_insert_rowid()))
+fn entries(conn: &Connection, id: PlaylistId, hidden: &Hidden) -> Result<Vec<PlaylistEntry>> {
+    let ids = ids(conn, id)?;
+    let by_id: std::collections::HashMap<MediaId, MediaRecord> = get_many(conn, &ids)?
+        .into_iter()
+        .map(|r| (r.id, r))
+        .collect();
+    Ok(ids
+        .iter()
+        .enumerate()
+        .filter_map(|(position, m)| {
+            let record = by_id.get(m)?;
+            (!hidden.hides(&record.source_id)).then(|| PlaylistEntry {
+                position,
+                record: record.clone(),
+            })
+        })
+        .collect())
+}
+
+fn playlist_conn(conn: &Connection, id: PlaylistId, hidden: &Hidden) -> Result<Option<Playlist>> {
+    let row: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT name, created_at FROM playlists WHERE id = ?1",
+            [id.0],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((name, created_at)) = row else {
+        return Ok(None);
+    };
+    let items = entries(conn, id, hidden)?;
+    Ok(Some(Playlist {
+        id,
+        name,
+        created_at,
+        item_count: items.len(),
+        first: items.into_iter().next().map(|e| e.record),
+    }))
+}
+
+fn require(conn: &Connection, id: PlaylistId) -> Result<()> {
+    let found: Option<i64> = conn
+        .query_row("SELECT 1 FROM playlists WHERE id = ?1", [id.0], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    found.map(|_| ()).ok_or(Error::PlaylistNotFound(id))
 }
 
 impl Library {
-    /// Creates an empty manual playlist.
+    /// Creates an empty playlist.
     pub fn create_playlist(&self, name: &str) -> Result<PlaylistId> {
-        self.with(|c| create_conn(c, name, None))
-    }
-
-    /// Creates a smart playlist whose content is `query`, evaluated on read.
-    pub fn create_smart_playlist(&self, name: &str, query: &Query) -> Result<PlaylistId> {
-        self.with(|c| create_conn(c, name, Some(query)))
+        let name = check_name(name)?;
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO playlists (name, created_at) VALUES (?1, ?2)",
+                params![name, now()],
+            )?;
+            Ok(PlaylistId(c.last_insert_rowid()))
+        })
     }
 
     /// All playlists, by name.
     pub fn playlists(&self) -> Result<Vec<Playlist>> {
+        let hidden = self.hidden();
         self.with(|c| {
             let ids: Vec<PlaylistId> = {
                 let mut stmt =
@@ -141,14 +131,15 @@ impl Library {
             };
             let mut out = Vec::with_capacity(ids.len());
             for id in ids {
-                out.extend(playlist_conn(c, id)?);
+                out.extend(playlist_conn(c, id, &hidden)?);
             }
             Ok(out)
         })
     }
 
     pub fn playlist(&self, id: PlaylistId) -> Result<Option<Playlist>> {
-        self.with(|c| playlist_conn(c, id))
+        let hidden = self.hidden();
+        self.with(|c| playlist_conn(c, id, &hidden))
     }
 
     pub fn rename_playlist(&self, id: PlaylistId, name: &str) -> Result<()> {
@@ -165,21 +156,6 @@ impl Library {
         })
     }
 
-    /// Turns a playlist smart (`Some`, dropping manual entries) or manual
-    /// (`None`, starting empty), or changes a smart playlist's query.
-    pub fn set_smart_query(&self, id: PlaylistId, query: Option<&Query>) -> Result<()> {
-        let smart = query.map(serde_json::to_string).transpose()?;
-        self.in_tx(|c| {
-            require(c, id)?;
-            c.execute(
-                "UPDATE playlists SET smart_query = ?2 WHERE id = ?1",
-                params![id.0, smart],
-            )?;
-            c.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [id.0])?;
-            Ok(())
-        })
-    }
-
     /// Deletes a playlist (the videos stay).
     pub fn delete_playlist(&self, id: PlaylistId) -> Result<()> {
         self.with(|c| {
@@ -190,40 +166,33 @@ impl Library {
         })
     }
 
-    /// The videos of a playlist in order. Smart playlists run their query.
-    pub fn playlist_items(&self, id: PlaylistId) -> Result<Vec<MediaRecord>> {
-        self.with(|c| match require(c, id)?.smart_query {
-            Some(q) => search_conn(c, &q),
-            None => get_many(c, &manual_ids(c, id)?),
+    /// The videos of a playlist in order, those hidden left out.
+    pub fn playlist_items(&self, id: PlaylistId) -> Result<Vec<PlaylistEntry>> {
+        let hidden = self.hidden();
+        self.with(|c| {
+            require(c, id)?;
+            entries(c, id, &hidden)
         })
     }
 
-    /// Appends a video to a manual playlist (duplicates allowed).
-    pub fn add_to_playlist(&self, id: PlaylistId, media: MediaId) -> Result<()> {
+    /// Appends videos to a playlist (duplicates allowed).
+    pub fn add_to_playlist(&self, id: PlaylistId, media: &[MediaId]) -> Result<()> {
         self.edit_items(id, |items| {
-            items.push(media);
+            items.extend_from_slice(media);
             Ok(())
         })
     }
 
-    /// Inserts a video at `index` (clamped to the end).
-    pub fn insert_into_playlist(&self, id: PlaylistId, index: usize, media: MediaId) -> Result<()> {
+    /// Removes the entry at `position`.
+    pub fn remove_from_playlist(&self, id: PlaylistId, position: usize) -> Result<()> {
         self.edit_items(id, |items| {
-            items.insert(index.min(items.len()), media);
-            Ok(())
-        })
-    }
-
-    /// Removes the entry at `index`.
-    pub fn remove_from_playlist(&self, id: PlaylistId, index: usize) -> Result<()> {
-        self.edit_items(id, |items| {
-            if index >= items.len() {
+            if position >= items.len() {
                 return Err(Error::InvalidArgument(format!(
-                    "index {index} outside playlist of {}",
+                    "position {position} outside playlist of {}",
                     items.len()
                 )));
             }
-            items.remove(index);
+            items.remove(position);
             Ok(())
         })
     }
@@ -243,22 +212,14 @@ impl Library {
         })
     }
 
-    /// Replaces the entries of a manual playlist.
-    pub fn set_playlist_items(&self, id: PlaylistId, items: &[MediaId]) -> Result<()> {
-        self.edit_items(id, |current| {
-            *current = items.to_vec();
-            Ok(())
-        })
-    }
-
     fn edit_items(
         &self,
         id: PlaylistId,
         f: impl FnOnce(&mut Vec<MediaId>) -> Result<()>,
     ) -> Result<()> {
         self.in_tx(|c| {
-            require_manual(c, id)?;
-            let mut items = manual_ids(c, id)?;
+            require(c, id)?;
+            let mut items = ids(c, id)?;
             f(&mut items)?;
             write_ids(c, id, &items)
         })
@@ -269,14 +230,13 @@ impl Library {
 mod tests {
     use super::*;
     use crate::library::MediaUpsert;
-    use crate::query::Sort;
 
     fn setup() -> (Library, Vec<MediaId>) {
         let lib = Library::open_in_memory().unwrap();
         let ids = ["a", "b", "c", "d"]
             .iter()
             .map(|n| {
-                lib.upsert(&MediaUpsert::new(format!("/v/{n}.mp4"), "local"))
+                lib.upsert(&MediaUpsert::new(format!("/v/{n}.mp4"), "movies"))
                     .unwrap()
                     .id
             })
@@ -288,39 +248,32 @@ mod tests {
         lib.playlist_items(p)
             .unwrap()
             .iter()
-            .map(|r| r.id)
+            .map(|e| e.record.id)
             .collect()
     }
 
     #[test]
-    fn manual_playlist_crud_and_reorder() {
+    fn playlists_are_made_edited_and_deleted() {
         let (lib, m) = setup();
         let p = lib.create_playlist("  Evening ").unwrap();
         assert!(lib.create_playlist("   ").is_err());
-        lib.add_to_playlist(p, m[0]).unwrap();
-        lib.add_to_playlist(p, m[1]).unwrap();
-        lib.add_to_playlist(p, m[2]).unwrap();
-        lib.insert_into_playlist(p, 0, m[3]).unwrap();
+        lib.add_to_playlist(p, &[m[0], m[1]]).unwrap();
+        lib.add_to_playlist(p, &[m[2], m[3]]).unwrap();
+        assert_eq!(items(&lib, p), vec![m[0], m[1], m[2], m[3]]);
+        lib.move_playlist_item(p, 3, 0).unwrap();
         assert_eq!(items(&lib, p), vec![m[3], m[0], m[1], m[2]]);
         lib.move_playlist_item(p, 0, 3).unwrap();
         assert_eq!(items(&lib, p), vec![m[0], m[1], m[2], m[3]]);
-        lib.move_playlist_item(p, 2, 0).unwrap();
-        assert_eq!(items(&lib, p), vec![m[2], m[0], m[1], m[3]]);
         lib.remove_from_playlist(p, 1).unwrap();
-        assert_eq!(items(&lib, p), vec![m[2], m[1], m[3]]);
+        assert_eq!(items(&lib, p), vec![m[0], m[2], m[3]]);
         assert!(lib.remove_from_playlist(p, 9).is_err());
         assert!(lib.move_playlist_item(p, 0, 9).is_err());
-        assert!(lib.add_to_playlist(p, MediaId(999)).is_err());
-        assert_eq!(
-            items(&lib, p),
-            vec![m[2], m[1], m[3]],
-            "failed edit rolled back"
-        );
-        lib.set_playlist_items(p, &[m[1], m[1]]).unwrap();
-        assert_eq!(items(&lib, p), vec![m[1], m[1]]);
+        assert!(lib.add_to_playlist(p, &[MediaId(999)]).is_err());
+        assert_eq!(items(&lib, p), vec![m[0], m[2], m[3]], "failed edit undone");
 
         let pl = lib.playlist(p).unwrap().unwrap();
-        assert_eq!((pl.name.as_str(), pl.item_count), ("Evening", 2));
+        assert_eq!((pl.name.as_str(), pl.item_count), ("Evening", 3));
+        assert_eq!(pl.first.map(|r| r.id), Some(m[0]));
         lib.rename_playlist(p, "Night").unwrap();
         let q = lib.create_playlist("aardvark").unwrap();
         let names: Vec<String> = lib
@@ -332,8 +285,8 @@ mod tests {
         assert_eq!(names, vec!["aardvark", "Night"]);
 
         // Removing a video removes its entries.
-        lib.remove_media(m[1]).unwrap();
-        assert!(items(&lib, p).is_empty());
+        lib.remove_media(m[2]).unwrap();
+        assert_eq!(items(&lib, p), vec![m[0], m[3]]);
         lib.delete_playlist(q).unwrap();
         assert!(matches!(
             lib.delete_playlist(q),
@@ -343,41 +296,24 @@ mod tests {
     }
 
     #[test]
-    fn smart_playlist_evaluates_query() {
+    fn locked_sources_are_left_out_and_edits_still_land() {
         let (lib, m) = setup();
-        lib.set_favorite(m[1], true).unwrap();
-        lib.set_favorite(m[3], true).unwrap();
-        lib.set_rating(m[3], 5).unwrap();
-        let q = Query {
-            favorites_only: true,
-            sort: Sort::Rating,
-            ..Default::default()
-        };
-        let p = lib.create_smart_playlist("Favs", &q).unwrap();
-        assert_eq!(items(&lib, p), vec![m[3], m[1]]);
-        let pl = lib.playlist(p).unwrap().unwrap();
-        assert!(pl.is_smart());
-        assert_eq!(pl.smart_query.as_ref(), Some(&q));
-        assert_eq!(pl.item_count, 2);
-        // Live: new favourites appear.
-        lib.set_favorite(m[0], true).unwrap();
-        assert_eq!(items(&lib, p).len(), 3);
-        // Limits apply to the count too.
-        let limited = Query {
-            limit: Some(1),
-            ..q.clone()
-        };
-        lib.set_smart_query(p, Some(&limited)).unwrap();
-        assert_eq!(lib.playlist(p).unwrap().unwrap().item_count, 1);
-        // Smart playlists cannot be edited by hand.
-        assert!(matches!(
-            lib.add_to_playlist(p, m[2]),
-            Err(Error::InvalidArgument(_))
-        ));
-        // Turning it manual starts empty and allows edits.
-        lib.set_smart_query(p, None).unwrap();
-        assert!(items(&lib, p).is_empty());
-        lib.add_to_playlist(p, m[2]).unwrap();
-        assert_eq!(items(&lib, p), vec![m[2]]);
+        let nas = lib
+            .upsert(&MediaUpsert::new("smb://nas/v/x.mp4", "nas"))
+            .unwrap()
+            .id;
+        let p = lib.create_playlist("Mix").unwrap();
+        lib.add_to_playlist(p, &[m[0], nas, m[1]]).unwrap();
+        lib.set_hidden(Hidden {
+            sources: vec!["nas".into()],
+        });
+        let shown = lib.playlist_items(p).unwrap();
+        let at: Vec<(usize, MediaId)> = shown.iter().map(|e| (e.position, e.record.id)).collect();
+        assert_eq!(at, vec![(0, m[0]), (2, m[1])]);
+        assert_eq!(lib.playlist(p).unwrap().unwrap().item_count, 2);
+        // Removing the second one shown removes it, not the hidden one.
+        lib.remove_from_playlist(p, shown[1].position).unwrap();
+        lib.set_hidden(Hidden::default());
+        assert_eq!(items(&lib, p), vec![m[0], nas]);
     }
 }

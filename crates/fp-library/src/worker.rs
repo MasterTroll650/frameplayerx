@@ -812,7 +812,8 @@ mod tests {
         let (stats, _) = run(&lib, &prober, &o);
         assert_eq!(stats, WorkerStats::default());
         // ...until asked.
-        assert_eq!(lib.retry_failed_probes().unwrap(), 1);
+        assert_eq!(lib.retry_failed_probes(Some("other")).unwrap(), 0);
+        assert_eq!(lib.retry_failed_probes(None).unwrap(), 1);
         assert_eq!(lib.pending_metadata_count().unwrap(), 1);
     }
 

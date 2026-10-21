@@ -45,73 +45,25 @@ pub struct Library {
     hidden: Arc<RwLock<Hidden>>,
 }
 
-/// Videos left out of listings: those of some sources, and those under
-/// some folders or addresses whichever source added them (the app hides
-/// sources locked with a PIN, and everything under their addresses).
+/// Videos left out of listings: those of some sources (the app hides
+/// sources locked with a PIN).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Hidden {
     /// Source ids.
     pub sources: Vec<String>,
-    pub locations: Vec<HiddenRoot>,
-}
-
-/// A folder or address whose videos are hidden whichever source added them.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct HiddenRoot {
-    /// `/media/x/Private`, `smb://nas/share/dir`: the location itself and
-    /// everything under it, ignoring ASCII case.
-    pub root: String,
-    /// Sources whose videos stay listed although they are under `root`.
-    pub except: Vec<String>,
-}
-
-impl HiddenRoot {
-    /// Hides everything under `root`.
-    pub fn new(root: impl Into<String>) -> HiddenRoot {
-        HiddenRoot {
-            root: root.into(),
-            except: Vec::new(),
-        }
-    }
 }
 
 impl Hidden {
     /// Nothing hidden.
     pub fn is_empty(&self) -> bool {
-        self.sources.is_empty() && self.locations.is_empty()
+        self.sources.is_empty()
     }
 
-    /// Whether a video from `source_id` at `location` is hidden; the same
-    /// test as the SQL from `hidden_sql`.
-    pub fn hides(&self, source_id: &str, location: &str) -> bool {
+    /// Whether the videos of `source_id` are hidden; the same test as the
+    /// SQL from `hidden_sql`.
+    pub fn hides(&self, source_id: &str) -> bool {
         self.sources.iter().any(|s| s == source_id)
-            || self
-                .locations
-                .iter()
-                .any(|h| under(&h.root, location) && !h.except.iter().any(|s| s == source_id))
     }
-}
-
-/// Whether `location` is `root` or under it (ignoring ASCII case).
-fn under(root: &str, location: &str) -> bool {
-    let root = root.trim_end_matches('/');
-    !root.is_empty()
-        && location
-            .get(..root.len())
-            .is_some_and(|p| p.eq_ignore_ascii_case(root))
-        && matches!(location.as_bytes().get(root.len()), None | Some(b'/'))
-}
-
-/// `root` as a LIKE pattern matching only itself.
-fn like_literal(root: &str) -> String {
-    let mut out = String::with_capacity(root.len());
-    for c in root.chars() {
-        if matches!(c, '%' | '_' | '\\') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
 }
 
 /// The condition keeping only what `hidden` does not hide, for a media
@@ -121,38 +73,14 @@ pub(crate) fn hidden_sql(prefix: &str, hidden: &Hidden) -> Option<(String, Vec<V
     if hidden.is_empty() {
         return None;
     }
-    let mut clauses = Vec::new();
-    let mut args = Vec::new();
-    if !hidden.sources.is_empty() {
-        clauses.push(format!(
-            "{prefix}source_id NOT IN ({})",
-            vec!["?"; hidden.sources.len()].join(",")
-        ));
-        args.extend(hidden.sources.iter().cloned().map(Value::Text));
-    }
-    for h in &hidden.locations {
-        let root = like_literal(h.root.trim_end_matches('/'));
-        if root.is_empty() {
-            continue;
-        }
-        // LIKE ignores ASCII case, as SMB and DLNA hosts and SMB paths do.
-        let mut clause =
-            format!("({prefix}location LIKE ? ESCAPE '\\' OR {prefix}location LIKE ? ESCAPE '\\')");
-        args.push(Value::Text(root.clone()));
-        args.push(Value::Text(format!("{root}/%")));
-        if !h.except.is_empty() {
-            clause += &format!(
-                " AND {prefix}source_id NOT IN ({})",
-                vec!["?"; h.except.len()].join(",")
-            );
-            args.extend(h.except.iter().cloned().map(Value::Text));
-        }
-        clauses.push(format!("NOT ({clause})"));
-    }
-    if clauses.is_empty() {
-        return None;
-    }
-    Some((clauses.join(" AND "), args))
+    let sql = format!(
+        "{prefix}source_id NOT IN ({})",
+        vec!["?"; hidden.sources.len()].join(",")
+    );
+    Some((
+        sql,
+        hidden.sources.iter().cloned().map(Value::Text).collect(),
+    ))
 }
 
 impl std::fmt::Debug for Library {
@@ -192,12 +120,27 @@ pub struct MediaUpsert {
     pub subtitles: Vec<String>,
     /// Remote thumbnail offered by the source.
     pub thumbnail_url: Option<String>,
+    /// What the source says about it; `None` keeps what was stored.
+    pub description: Option<String>,
+    /// The source's tags for it, replacing those stored; `None` keeps them
+    /// (a scan's files have none of their own).
+    pub tags: Option<Vec<String>>,
     /// Chapters from the source. `Some` replaces earlier source markers;
     /// user markers are never touched.
     pub source_markers: Option<Vec<(f64, String)>>,
     /// Treat the file as changed even when size and mtime match, so the
     /// worker probes it again.
     pub reset_metadata: bool,
+}
+
+/// What a video's source says about it, for [`Library::update_details`]:
+/// each field replaces what was stored when given.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SourceDetails<'a> {
+    pub title: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub thumbnail_url: Option<&'a str>,
+    pub tags: Option<&'a [String]>,
 }
 
 impl MediaUpsert {
@@ -217,6 +160,8 @@ impl MediaUpsert {
             scripts: Vec::new(),
             subtitles: Vec::new(),
             thumbnail_url: None,
+            description: None,
+            tags: None,
             source_markers: None,
             reset_metadata: false,
         }
@@ -257,6 +202,8 @@ impl MediaUpsert {
         u.mtime = entry.modified;
         u.duration = entry.duration.filter(|d| d.is_finite() && *d > 0.0);
         u.thumbnail_url = entry.thumbnail_url.clone();
+        u.description = entry.description.clone();
+        u.tags = (!entry.tags.is_empty()).then(|| entry.tags.clone());
         u.scripts = entry.scripts.clone();
         u.subtitles = entry.subtitles.iter().map(|s| s.location.clone()).collect();
         u.source_markers = Some(entry.markers.clone());
@@ -417,6 +364,8 @@ struct ExistingRow {
     scripts: String,
     subtitles: String,
     thumbnail_url: Option<String>,
+    description: Option<String>,
+    tags: Vec<String>,
     missing: bool,
 }
 
@@ -439,6 +388,8 @@ fn existing_row(conn: &Connection, location: &str) -> Result<Option<ExistingRow>
             scripts: json(&r.scripts)?,
             subtitles: json(&r.subtitles)?,
             thumbnail_url: r.thumbnail_url,
+            description: r.description,
+            tags: r.tags,
             missing: r.missing,
         }),
     })
@@ -494,8 +445,8 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
         conn.prepare_cached(
             "INSERT INTO media (location, source_id, title, size, mtime, duration,
                  detected_format, detected_evidence, projection_kind, stereo,
-                 scripts, subtitles, thumbnail_url, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                 scripts, subtitles, thumbnail_url, added_at, description)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         )?
         .execute(params![
             u.location,
@@ -512,10 +463,14 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
             subtitles,
             u.thumbnail_url,
             now(),
+            u.description,
         ])?;
         let id = MediaId(conn.last_insert_rowid());
         if let Some(markers) = &u.source_markers {
             replace_source_markers(conn, id, markers)?;
+        }
+        if let Some(tags) = &u.tags {
+            set_tags_conn(conn, id, tags)?;
         }
         return Ok(UpsertOutcome {
             id,
@@ -537,6 +492,7 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
         old.detected
     };
     let thumbnail_url = u.thumbnail_url.clone().or(old.thumbnail_url.clone());
+    let description = u.description.clone().or(old.description.clone());
 
     let mut changed = content_changed
         || old.missing
@@ -548,14 +504,16 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
         || old.detected != detected
         || old.scripts != scripts
         || old.subtitles != subtitles
-        || old.thumbnail_url != thumbnail_url;
+        || old.thumbnail_url != thumbnail_url
+        || old.description != description;
 
     if changed {
         let (kind, stereo) = effective_columns(&detected.format, old.user_format.as_ref());
         conn.prepare_cached(
             "UPDATE media SET source_id = ?2, title = ?3, size = ?4, mtime = ?5, duration = ?6,
                  detected_format = ?7, detected_evidence = ?8, projection_kind = ?9, stereo = ?10,
-                 scripts = ?11, subtitles = ?12, thumbnail_url = ?13, missing = 0
+                 scripts = ?11, subtitles = ?12, thumbnail_url = ?13, description = ?14,
+                 missing = 0
              WHERE id = ?1",
         )?
         .execute(params![
@@ -572,6 +530,7 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
             scripts,
             subtitles,
             thumbnail_url,
+            description,
         ])?;
     }
     if content_changed {
@@ -584,6 +543,12 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
     }
     if let Some(markers) = &u.source_markers {
         changed |= replace_source_markers(conn, old.id, markers)?;
+    }
+    if let Some(tags) = &u.tags
+        && normalize_tags(tags) != old.tags
+    {
+        set_tags_conn(conn, old.id, tags)?;
+        changed = true;
     }
     Ok(UpsertOutcome {
         id: old.id,
@@ -803,15 +768,21 @@ impl Library {
         self.with(|c| markers_conn(c, id))
     }
 
-    /// Every tag with its usage count, sorted by name.
+    /// Every tag on videos that aren't hidden, with how many of them carry
+    /// it, sorted by name.
     pub fn all_tags(&self) -> Result<Vec<TagCount>> {
+        let (shown, args) = match hidden_sql("m.", &self.hidden()) {
+            Some((sql, args)) => (format!("WHERE {sql}"), args),
+            None => (String::new(), Vec::new()),
+        };
         self.with(|c| {
-            let mut stmt = c.prepare_cached(
-                "SELECT t.name, COUNT(mt.media_id) FROM tags t
-                 LEFT JOIN media_tags mt ON mt.tag_id = t.id
-                 GROUP BY t.id ORDER BY t.name COLLATE NOCASE",
-            )?;
-            let rows = stmt.query_map([], |r| {
+            let mut stmt = c.prepare(&format!(
+                "SELECT t.name, COUNT(*) FROM tags t
+                 JOIN media_tags mt ON mt.tag_id = t.id
+                 JOIN media m ON m.id = mt.media_id {shown}
+                 GROUP BY t.id ORDER BY t.name COLLATE NOCASE"
+            ))?;
+            let rows = stmt.query_map(params_from_iter(args), |r| {
                 Ok(TagCount {
                     name: r.get(0)?,
                     count: r.get::<_, i64>(1)?.max(0) as usize,
@@ -1218,43 +1189,79 @@ impl Library {
         })
     }
 
+    /// What a video's source says about it now: its title, description,
+    /// thumbnail and tags, each when given. The rest of the video is left
+    /// alone.
+    pub fn update_details(&self, id: MediaId, details: &SourceDetails<'_>) -> Result<()> {
+        self.in_tx(|c| {
+            c.execute(
+                "UPDATE media SET title = COALESCE(?2, title),
+                     description = COALESCE(?3, description),
+                     thumbnail_url = COALESCE(?4, thumbnail_url)
+                 WHERE id = ?1",
+                params![
+                    id.0,
+                    details.title,
+                    details.description,
+                    details.thumbnail_url
+                ],
+            )?;
+            if let Some(tags) = details.tags {
+                set_tags_conn(c, id, tags)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Leaves the videos of `source_id` without a source, for a library
+    /// whose folder changed: its next scan takes back those still in it.
+    /// Returns how many there were.
+    pub fn detach_source(&self, source_id: &str) -> Result<usize> {
+        self.with(|c| {
+            Ok(c.execute(
+                "UPDATE media SET source_id = '' WHERE source_id = ?1",
+                [source_id],
+            )?)
+        })
+    }
+
     // -- metadata worker support ---------------------------------------------
 
     /// Videos the metadata worker still has to process: not missing, not
-    /// failed, and not yet probed or without a thumbnail. Oldest first.
+    /// failed, not on a card that is out, and not yet probed or without a
+    /// thumbnail. Oldest first.
     pub fn pending_metadata(&self, limit: usize) -> Result<Vec<MediaRecord>> {
-        self.with(|c| {
-            query_records(
-                c,
-                "WHERE m.missing = 0 AND m.probe_error IS NULL
-                   AND (m.probed = 0 OR m.thumbnail IS NULL)
-                 ORDER BY m.id LIMIT ?1",
-                [limit_i64(limit)],
-            )
-        })
+        let sql = format!(
+            "WHERE m.missing = 0 AND m.probe_error IS NULL
+               AND (m.probed = 0 OR m.thumbnail IS NULL){}
+             ORDER BY m.id LIMIT ?1",
+            on_inserted_cards()
+        );
+        self.with(|c| query_records(c, &sql, [limit_i64(limit)]))
     }
 
     /// Number of rows [`Library::pending_metadata`] would return without a
     /// limit.
     pub fn pending_metadata_count(&self) -> Result<usize> {
+        let sql = format!(
+            "SELECT COUNT(*) FROM media m WHERE m.missing = 0 AND m.probe_error IS NULL
+               AND (m.probed = 0 OR m.thumbnail IS NULL){}",
+            on_inserted_cards()
+        );
         self.with(|c| {
-            let n: i64 = c.query_row(
-                "SELECT COUNT(*) FROM media m WHERE m.missing = 0 AND m.probe_error IS NULL
-                   AND (m.probed = 0 OR m.thumbnail IS NULL)",
-                [],
-                |r| r.get(0),
-            )?;
+            let n: i64 = c.query_row(&sql, [], |r| r.get(0))?;
             Ok(n.max(0) as usize)
         })
     }
 
-    /// Clears recorded probe failures so the worker tries those videos
-    /// again. Returns how many were reset.
-    pub fn retry_failed_probes(&self) -> Result<usize> {
+    /// Clears recorded probe failures, of `source_id`'s videos when given,
+    /// so the worker tries those videos again. Returns how many were reset.
+    pub fn retry_failed_probes(&self, source_id: Option<&str>) -> Result<usize> {
         self.with(|c| {
             Ok(c.execute(
-                "UPDATE media SET probe_error = NULL WHERE probe_error IS NOT NULL",
-                [],
+                "UPDATE media SET probe_error = NULL
+                 WHERE probe_error IS NOT NULL AND (?1 IS NULL OR source_id = ?1)",
+                [source_id],
             )?)
         })
     }
@@ -1333,6 +1340,18 @@ pub(crate) struct StoredProbe {
 
 pub(crate) fn limit_i64(limit: usize) -> i64 {
     i64::try_from(limit).unwrap_or(i64::MAX)
+}
+
+/// SQL leaving out videos on cards that are not inserted
+/// ([`fp_core::volume`]). Card IDs hold only letters, digits and dashes.
+fn on_inserted_cards() -> String {
+    let scheme = fp_core::volume::SCHEME;
+    let mut sql = format!(" AND (m.location NOT LIKE '{scheme}%'");
+    for id in fp_core::volume::mounted().into_iter().filter_map(|v| v.id) {
+        sql += &format!(" OR m.location = '{scheme}{id}' OR m.location LIKE '{scheme}{id}/%'");
+    }
+    sql.push(')');
+    sql
 }
 
 #[cfg(test)]
@@ -1804,6 +1823,87 @@ mod tests {
         for id in [local, watched, fav, tagged, marked, other] {
             assert!(lib.get(id).unwrap().is_some(), "{id} was deleted");
         }
+        assert_eq!(lib.detach_source("nas").unwrap(), 4);
+        assert_eq!(lib.get(watched).unwrap().unwrap().source_id, "");
+        assert_eq!(lib.get(other).unwrap().unwrap().source_id, "feed");
+    }
+
+    #[test]
+    fn descriptions_are_kept_and_kept_current() {
+        let lib = lib();
+        let mut e = Entry::new("Beach", "http://feed/1", EntryKind::Video);
+        e.description = Some("Sun and sand.".into());
+        let id = lib.upsert_entry("feed", &e).unwrap().id;
+        let get = |id| lib.get(id).unwrap().unwrap();
+        assert_eq!(get(id).description.as_deref(), Some("Sun and sand."));
+        // An entry without one (a listing) keeps what was stored.
+        e.description = None;
+        lib.upsert_entry("feed", &e).unwrap();
+        assert_eq!(get(id).description.as_deref(), Some("Sun and sand."));
+        let details = SourceDetails {
+            title: Some("Beach day"),
+            description: Some("Sun, sand and sea."),
+            ..Default::default()
+        };
+        lib.update_details(id, &details).unwrap();
+        let r = get(id);
+        assert_eq!(r.title, "Beach day");
+        assert_eq!(r.description.as_deref(), Some("Sun, sand and sea."));
+        lib.update_details(id, &SourceDetails::default()).unwrap();
+        assert_eq!(get(id).title, "Beach day", "nothing given, nothing changed");
+    }
+
+    #[test]
+    fn a_sources_tags_are_kept_and_locked_ones_left_out_of_the_list() {
+        let lib = lib();
+        let mut e = Entry::new("Beach", "http://feed/1", EntryKind::Video);
+        e.tags = vec!["Outdoor".into(), "POV".into()];
+        let id = lib.upsert_entry("feed", &e).unwrap().id;
+        assert_eq!(lib.get(id).unwrap().unwrap().tags, ["Outdoor", "POV"]);
+        // A listing without them keeps them; new ones replace them.
+        e.tags.clear();
+        lib.upsert_entry("feed", &e).unwrap();
+        assert_eq!(lib.get(id).unwrap().unwrap().tags, ["Outdoor", "POV"]);
+        let tags = vec!["Outdoor".to_string(), "Sunset".to_string()];
+        let details = SourceDetails {
+            tags: Some(&tags),
+            ..Default::default()
+        };
+        lib.update_details(id, &details).unwrap();
+        assert_eq!(lib.get(id).unwrap().unwrap().tags, ["Outdoor", "Sunset"]);
+        // A scan leaves a file's tags alone.
+        let mine = add(&lib, "/v/mine.mp4");
+        lib.set_tags(mine, &["Outdoor"]).unwrap();
+        lib.upsert(&MediaUpsert::new("/v/mine.mp4", "local"))
+            .unwrap();
+        assert_eq!(lib.get(mine).unwrap().unwrap().tags, ["Outdoor"]);
+
+        let counts = |lib: &Library| -> Vec<(String, usize)> {
+            lib.all_tags()
+                .unwrap()
+                .into_iter()
+                .map(|t| (t.name, t.count))
+                .collect()
+        };
+        assert_eq!(
+            counts(&lib),
+            [("Outdoor".to_string(), 2), ("Sunset".to_string(), 1)]
+        );
+        lib.set_hidden(Hidden {
+            sources: vec!["feed".into()],
+        });
+        assert_eq!(counts(&lib), [("Outdoor".to_string(), 1)]);
+    }
+
+    #[test]
+    fn videos_on_cards_that_are_out_wait_for_their_thumbnails() {
+        let lib = lib();
+        // No card has this ID.
+        add(&lib, "volume:0000-0000/Clips/a.mp4");
+        let here = add(&lib, "/v/b.mp4");
+        let pending = lib.pending_metadata(10).unwrap();
+        assert_eq!(pending.iter().map(|r| r.id).collect::<Vec<_>>(), [here]);
+        assert_eq!(lib.pending_metadata_count().unwrap(), 1);
     }
 
     #[test]
@@ -1824,7 +1924,6 @@ mod tests {
 
         lib.set_hidden(Hidden {
             sources: vec!["nas".into()],
-            ..Default::default()
         });
         assert_eq!(ids(lib.search(&all).unwrap()), vec![mine]);
         assert_eq!(lib.count(&all).unwrap(), 1);
@@ -1848,77 +1947,6 @@ mod tests {
         assert_eq!(lib.count(&all).unwrap(), 2);
         assert_eq!(lib.history(10).unwrap().len(), 2);
         assert_eq!(lib.continue_watching(10).unwrap().len(), 2);
-    }
-
-    #[test]
-    fn hidden_folders_are_left_out_whichever_source_added_them() {
-        let lib = lib();
-        let up = |loc: &str, source: &str| lib.upsert(&MediaUpsert::new(loc, source)).unwrap().id;
-        // The whole share is a source, and so is its private folder.
-        let public = up("smb://nas/Videos/Public/a.mp4", "share");
-        let private = up("smb://nas/Videos/Private/b.mp4", "share");
-        let deeper = up("smb://NAS/videos/private/trip/c.mp4", "share");
-        let own = up("smb://nas/Videos/Private/d.mp4", "private");
-        let lookalike = up("smb://nas/Videos/PrivateParty/e.mp4", "share");
-        let wild = up("/media/x_y%/f.mp4", "local");
-        let wild_miss = up("/media/xAyB/g.mp4", "local");
-        for id in [public, private, deeper, own, lookalike, wild, wild_miss] {
-            let s = lib.start_playback(id).unwrap();
-            lib.update_playback(s, 5.0, false).unwrap();
-        }
-        lib.set_hidden(Hidden {
-            sources: vec!["private".into()],
-            locations: vec![
-                HiddenRoot::new("smb://nas/Videos/Private/"),
-                HiddenRoot::new("/media/x_y%"),
-            ],
-        });
-        let mut ids: Vec<MediaId> = lib
-            .search(&crate::Query::default())
-            .unwrap()
-            .iter()
-            .map(|r| r.id)
-            .collect();
-        ids.sort();
-        assert_eq!(ids, vec![public, lookalike, wild_miss]);
-        assert_eq!(lib.count(&crate::Query::text("trip")).unwrap(), 0);
-        assert_eq!(lib.continue_watching(10).unwrap().len(), 3);
-        assert_eq!(lib.recently_added(10).unwrap().len(), 3);
-        assert_eq!(lib.history(10).unwrap().len(), 3);
-        let h = lib.hidden();
-        assert!(h.hides("share", "smb://nas/Videos/Private/b.mp4"));
-        assert!(h.hides("share", "smb://NAS/videos/private"));
-        assert!(!h.hides("share", "smb://nas/Videos/PrivateParty/e.mp4"));
-        assert!(h.hides("private", "anything"));
-    }
-
-    #[test]
-    fn hidden_folders_spare_the_sources_excepted() {
-        let lib = lib();
-        let up = |loc: &str, source: &str| lib.upsert(&MediaUpsert::new(loc, source)).unwrap().id;
-        // A DeoVR feed and a HereSphere API of one server: the same address.
-        let feed = up("http://vr:9999/deovr/1", "deovr");
-        let api = up("http://vr:9999/heresphere/2", "heresphere");
-        let scanned = up("http://vr:9999/files/3.mp4", "local");
-        lib.set_hidden(Hidden {
-            sources: vec!["heresphere".into()],
-            locations: vec![HiddenRoot {
-                root: "http://vr:9999".into(),
-                except: vec!["deovr".into()],
-            }],
-        });
-        let ids: Vec<MediaId> = lib
-            .search(&crate::Query::default())
-            .unwrap()
-            .iter()
-            .map(|r| r.id)
-            .collect();
-        assert_eq!(ids, vec![feed]);
-        let h = lib.hidden();
-        assert!(!h.hides("deovr", "http://vr:9999/deovr/1"));
-        assert!(h.hides("heresphere", "http://vr:9999/heresphere/2"));
-        assert!(h.hides("local", "http://vr:9999/files/3.mp4"));
-        assert!(lib.get(api).unwrap().is_some() && lib.get(scanned).unwrap().is_some());
     }
 
     #[test]

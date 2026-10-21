@@ -324,6 +324,11 @@ enum Go {
     Open(MbItem),
     /// Item `.1` of a list, the rest queued; `.2` from the start.
     Play(Vec<MbItem>, usize, bool),
+    /// Play next (`true`) or Add to queue.
+    Queue(MbItem, bool),
+    AddToPlaylist(MbItem),
+    /// Everything on the server with this tag.
+    Tag(String),
     Details(MbItem),
     /// Load again what the page shows (`Load` with the page's number).
     Reload(Load),
@@ -370,50 +375,48 @@ pub fn page(
     page::status(ui, p.loading && !has_content(&p.body), p.error.as_deref());
     let loading = p.loading;
     let mut go: Option<Go> = None;
-    egui::ScrollArea::vertical()
-        .auto_shrink(false)
-        .show(ui, |ui| {
-            go = match &mut p.body {
-                Body::Home {
-                    home,
-                    search,
-                    typed,
-                } => {
-                    if let Some(t) = *typed
-                        && t.elapsed() >= SEARCH_DELAY
-                    {
-                        *typed = None;
-                        (!search.trim().is_empty()).then(|| Go::Search(std::mem::take(search)))
-                    } else {
-                        if typed.is_some() {
-                            ui.ctx().request_repaint_after(SEARCH_DELAY);
-                        }
-                        home.as_ref().and_then(|h| home_rows(ui, v, h))
+    page::scroll(ui, |ui| {
+        go = match &mut p.body {
+            Body::Home {
+                home,
+                search,
+                typed,
+            } => {
+                if let Some(t) = *typed
+                    && t.elapsed() >= SEARCH_DELAY
+                {
+                    *typed = None;
+                    (!search.trim().is_empty()).then(|| Go::Search(std::mem::take(search)))
+                } else {
+                    if typed.is_some() {
+                        ui.ctx().request_repaint_after(SEARCH_DELAY);
                     }
+                    home.as_ref().and_then(|h| home_rows(ui, v, h))
                 }
-                Body::Search {
-                    search,
-                    typed,
-                    asked,
-                    results,
-                } => search_results(ui, v, search, typed, asked, results, loading),
-                Body::Grid {
-                    query,
-                    items,
-                    total,
-                    typed,
-                    ..
-                } => grid(ui, v, query, items, *total, typed),
-                Body::Series {
-                    series,
-                    seasons,
-                    season,
-                    episodes,
-                    next_up,
-                } => series_page(ui, v, series, seasons, season, episodes, next_up.as_deref()),
-                Body::Item { item } => details(ui, v, item),
-            };
-        });
+            }
+            Body::Search {
+                search,
+                typed,
+                asked,
+                results,
+            } => search_results(ui, v, search, typed, asked, results, loading),
+            Body::Grid {
+                query,
+                items,
+                total,
+                typed,
+                ..
+            } => grid(ui, v, query, items, *total, typed),
+            Body::Series {
+                series,
+                seasons,
+                season,
+                episodes,
+                next_up,
+            } => series_page(ui, v, series, seasons, season, episodes, next_up.as_deref()),
+            Body::Item { item } => details(ui, v, item),
+        };
+    });
     if let Some(go) = go {
         follow(v, source, j, go);
     }
@@ -443,6 +446,16 @@ fn follow(v: &mut View, source: &str, j: &mut JellyfinView, go: Go) {
                 .map(|(k, item)| request(source, item, from_start && k == i))
                 .collect();
             v.actions.push(Action::OpenList(reqs, i));
+        }
+        Go::Queue(item, next) => v.actions.push(Action::Queue {
+            req: request(source, &item, false),
+            next,
+        }),
+        Go::AddToPlaylist(item) => {
+            v.state.picking = Some(super::Picking {
+                reqs: vec![request(source, &item, false)],
+                title: item.name.clone(),
+            });
         }
         Go::Mark(id, mark, on) => {
             j.mark(&id, mark, on);
@@ -487,6 +500,22 @@ fn follow(v: &mut View, source: &str, j: &mut JellyfinView, go: Go) {
             let seq = v.state.next_seq();
             let (load, body) = page_for(item);
             ask(v, seq, load);
+            j.open(seq, body);
+        }
+        Go::Tag(tag) => {
+            let seq = v.state.next_seq();
+            let query = MbQuery {
+                limit: PAGE,
+                ..MbQuery::tagged(&tag)
+            };
+            let body = Body::Grid {
+                title: format!("Tagged {tag}"),
+                query: query.clone(),
+                items: Vec::new(),
+                total: 0,
+                typed: None,
+            };
+            ask(v, seq, Load::Grid(query));
             j.open(seq, body);
         }
     }
@@ -1190,6 +1219,27 @@ fn details(ui: &mut egui::Ui, v: &mut View, item: &MbItem) -> Option<Go> {
                 go = Some(Go::Play(vec![item.clone()], 0, true));
             }
         });
+        if matches!(
+            item.kind,
+            MbKind::Movie | MbKind::Episode | MbKind::Video | MbKind::MusicVideo
+        ) {
+            inner.add_space(8.0);
+            inner.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                let button = |ui: &mut egui::Ui, icon, label| {
+                    widgets::button(ui, Some(icon), label, Kind::Secondary).clicked()
+                };
+                if button(ui, icons::SKIP_FORWARD, "Play next") {
+                    go = Some(Go::Queue(item.clone(), true));
+                }
+                if button(ui, icons::QUEUE, "Add to queue") {
+                    go = Some(Go::Queue(item.clone(), false));
+                }
+                if button(ui, icons::PLAYLIST, "Add to playlist") {
+                    go = Some(Go::AddToPlaylist(item.clone()));
+                }
+            });
+        }
         inner.add_space(8.0);
         inner.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
@@ -1250,6 +1300,17 @@ fn details(ui: &mut egui::Ui, v: &mut View, item: &MbItem) -> Option<Go> {
             .join(",  "),
     );
     line(ui, "Studios", item.studios.join("  ·  "));
+    if !item.tags.is_empty() {
+        widgets::section_label(ui, "Tags");
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+            for t in &item.tags {
+                if widgets::chip(ui, t, false).clicked() {
+                    go = Some(Go::Tag(t.clone()));
+                }
+            }
+        });
+    }
     ui.add_space(20.0);
     go
 }

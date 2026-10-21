@@ -8,7 +8,7 @@ use super::{Action, SettingsTab, View, icons};
 use crate::settings::HapticDeviceConfig;
 use egui::{Align2, Color32, RichText, Sense, Vec2};
 
-const TABS: [(SettingsTab, &str, &str); 8] = [
+const TABS: [(SettingsTab, &str, &str); 7] = [
     (SettingsTab::Playback, icons::PLAY_CIRCLE, "Playback"),
     (SettingsTab::Passthrough, icons::EYEGLASSES, "Passthrough"),
     (
@@ -16,7 +16,6 @@ const TABS: [(SettingsTab, &str, &str); 8] = [
         icons::GAME_CONTROLLER,
         "Controller",
     ),
-    (SettingsTab::Device, icons::HARD_DRIVES, "On this device"),
     (SettingsTab::Haptics, icons::VIBRATE, "Haptics"),
     (SettingsTab::Remote, icons::DEVICE_MOBILE, "Remote control"),
     (SettingsTab::Updates, icons::CLOUD_ARROW_DOWN, "Updates"),
@@ -61,7 +60,6 @@ pub fn settings(ui: &mut egui::Ui, v: &mut View) {
                     SettingsTab::Playback => playback(ui, v),
                     SettingsTab::Passthrough => passthrough(ui, v),
                     SettingsTab::Controller => controller(ui, v),
-                    SettingsTab::Device => device(ui, v),
                     SettingsTab::Haptics => haptics(ui, v),
                     SettingsTab::Remote => remote(ui, v),
                     SettingsTab::Updates => updates(ui, v),
@@ -407,141 +405,6 @@ fn passthrough(ui: &mut egui::Ui, v: &mut View) {
     super::player::chroma_controls(ui, &mut s.default_view, available);
 }
 
-/// Where the headset looks for its own videos, and their thumbnails.
-fn device(ui: &mut egui::Ui, v: &mut View) {
-    heading(ui, "Folders searched for videos");
-    let mut remove = None;
-    widgets::rows(ui, |r| {
-        for (i, f) in v.settings.library_folders.iter().enumerate() {
-            let missing = !f.is_dir();
-            r.row(
-                &f.display().to_string(),
-                missing.then_some("Not found"),
-                |ui| {
-                    if widgets::icon_button(ui, icons::TRASH, 40.0, false)
-                        .tip("Remove")
-                        .clicked()
-                    {
-                        remove = Some(i);
-                    }
-                },
-            );
-        }
-        r.content(|ui| {
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut v.state.new_folder)
-                        .margin(egui::Margin::symmetric(12, 9))
-                        .hint_text("/run/media/deck/SDCARD/Videos")
-                        .font(theme::font(Weight::Regular, 17.0))
-                        .desired_width(ui.available_width() - 170.0),
-                );
-                let p = std::path::PathBuf::from(v.state.new_folder.trim());
-                let ok = p.is_absolute() && p.is_dir();
-                if ui
-                    .add_enabled_ui(ok, |ui| {
-                        widgets::button_sized(
-                            ui,
-                            Some(icons::PLUS),
-                            "Add folder",
-                            Kind::Secondary,
-                            44.0,
-                        )
-                    })
-                    .inner
-                    .clicked()
-                {
-                    v.actions.push(Action::AddFolder(p));
-                    v.state.new_folder.clear();
-                }
-            });
-            let suggestions = crate::services::suggested_folders(&v.settings.library_folders);
-            if !suggestions.is_empty() {
-                ui.add_space(6.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
-                    for s in suggestions {
-                        if widgets::chip_icon(
-                            ui,
-                            Some(icons::PLUS),
-                            &s.display().to_string(),
-                            false,
-                        )
-                        .clicked()
-                        {
-                            v.actions.push(Action::AddFolder(s));
-                        }
-                    }
-                });
-            }
-        });
-    });
-    if let Some(i) = remove {
-        v.actions.push(Action::RemoveFolder(i));
-    }
-    heading(ui, "microSD cards and USB drives");
-    widgets::rows(ui, |r| {
-        let mounts = crate::drives::removable_mounts();
-        let names: Vec<String> = mounts.iter().map(|m| m.display().to_string()).collect();
-        let desc = if names.is_empty() {
-            "None plugged in.".to_string()
-        } else {
-            names.join(", ")
-        };
-        r.switch(
-            "Search them for videos when inserted",
-            Some(desc.as_str()),
-            &mut v.settings.index_removable,
-        );
-    });
-    heading(ui, "Videos and thumbnails");
-    widgets::rows(ui, |r| {
-        r.row(
-            "Scan for new videos",
-            v.state.scan_status.as_deref(),
-            |ui| {
-                if widgets::button_sized(
-                    ui,
-                    Some(icons::ARROWS_CLOCKWISE),
-                    "Scan now",
-                    Kind::Primary,
-                    44.0,
-                )
-                .clicked()
-                {
-                    v.actions.push(Action::Rescan { force: false });
-                }
-            },
-        );
-        r.row(
-            "Rebuild thumbnails",
-            Some("Scans everything again."),
-            |ui| {
-                if widgets::button_sized(ui, None, "Rebuild", Kind::Secondary, 44.0).clicked() {
-                    v.actions.push(Action::Rescan { force: true });
-                }
-            },
-        );
-        r.row("Retry videos that failed to read", None, |ui| {
-            if widgets::button_sized(ui, None, "Retry", Kind::Secondary, 44.0).clicked() {
-                v.actions.push(Action::RetryFailed);
-            }
-        });
-    });
-    note(
-        ui,
-        "These are the videos under Home › On this device. The watch history is cleared \
-         from its own page.",
-    );
-    note(
-        ui,
-        &format!(
-            "Haptic scripts are also looked up in {}",
-            fp_core::dirs::interactive_dir().display()
-        ),
-    );
-}
-
 const DEVICE_KINDS: [(&str, &str); 3] = [
     ("Intiface Central", "ws://192.168.1.20:12345"),
     (
@@ -676,6 +539,13 @@ fn haptics(ui: &mut egui::Ui, v: &mut View) {
             &mut h.stroke_to_vibration,
         );
     });
+    note(
+        ui,
+        &format!(
+            "Scripts are found next to their videos, and in {}",
+            fp_core::dirs::interactive_dir().display()
+        ),
+    );
 }
 
 fn remote(ui: &mut egui::Ui, v: &mut View) {

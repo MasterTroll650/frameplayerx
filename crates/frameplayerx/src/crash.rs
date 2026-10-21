@@ -54,12 +54,6 @@ impl Private {
         for s in sources {
             leaves(&serde_json::to_value(s).unwrap_or_default(), &mut p.servers);
         }
-        p.local.extend(
-            settings
-                .library_folders
-                .iter()
-                .map(|f| f.display().to_string()),
-        );
         leaves(
             &serde_json::to_value(&settings.haptic_devices).unwrap_or_default(),
             &mut p.local,

@@ -15,7 +15,9 @@ pub mod local;
 pub mod page;
 pub mod perf;
 pub mod player;
+pub mod playlists;
 pub mod premium;
+pub mod queue;
 pub mod settings;
 pub mod sources;
 pub mod subtitle_text;
@@ -27,9 +29,8 @@ use crate::playback::OpenRequest;
 use crate::settings::HapticDeviceConfig;
 use fp_core::format::VideoFormat;
 use fp_core::source::Entry;
-use fp_library::{MediaId, Query};
+use fp_library::{MediaId, PlaylistId, Query};
 use fp_sources::SourceConfig;
-use std::path::PathBuf;
 
 /// `h:mm:ss` or `m:ss`.
 pub fn fmt_time(t: f64) -> String {
@@ -68,6 +69,32 @@ pub enum Action {
     Open(OpenRequest),
     /// Open item `.1` of a list; grip + thumbstick moves through the list.
     OpenList(Vec<OpenRequest>, usize),
+    /// Plays the list from `.1`, through to its end (Play all, a playlist).
+    PlayAll(Vec<OpenRequest>, usize),
+    /// Queues a video right after the one playing (`next`) or at the end.
+    Queue {
+        req: OpenRequest,
+        next: bool,
+    },
+    /// Plays the one at this place in Up next.
+    QueueJump(usize),
+    QueueRemove(usize),
+    QueueMove(usize, usize),
+    /// Keeps only the video playing in Up next.
+    QueueClear,
+    /// Shows Up next in the browse panel over the video.
+    ShowUpNext,
+    /// Adds videos to a playlist, or to a new one named `name`.
+    AddToPlaylist {
+        playlist: Option<PlaylistId>,
+        name: String,
+        reqs: Vec<OpenRequest>,
+    },
+    RenamePlaylist(PlaylistId, String),
+    DeletePlaylist(PlaylistId),
+    /// Takes out the entry at this position.
+    PlaylistRemove(PlaylistId, usize),
+    PlaylistMove(PlaylistId, usize, usize),
     TogglePause,
     Seek(f64),
     SeekRelative(f64),
@@ -90,13 +117,14 @@ pub enum Action {
     SetRating(MediaId, u8),
     SetUserFormat(MediaId, Option<VideoFormat>),
     RemoveFromHistory(MediaId),
+    /// Scans a library now; `force` makes its thumbnails again.
     Rescan {
+        source: String,
         force: bool,
     },
-    RetryFailed,
+    /// Tries a library's videos that couldn't be read again.
+    RetryFailed(String),
     ClearHistory,
-    AddFolder(PathBuf),
-    RemoveFolder(usize),
     AddSource(SourceConfig),
     /// Saves an edited source (the same id).
     UpdateSource(SourceConfig),
@@ -203,6 +231,10 @@ pub enum Screen {
     History,
     Sources,
     Settings,
+    /// Your playlists, and one of them.
+    Playlists,
+    /// The queue, opened from the control bar.
+    UpNext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,8 +242,6 @@ pub enum SettingsTab {
     Playback,
     Passthrough,
     Controller,
-    /// The headset's own folders, drives and thumbnails.
-    Device,
     Haptics,
     Remote,
     Updates,
@@ -254,8 +284,10 @@ pub struct SourceView {
 pub enum SourcePage {
     /// Files and folders (SMB, WebDAV, HTTP, DLNA, local folders).
     Folders(Browse),
-    /// Everything on the headset: its indexed videos, and its folders.
+    /// The headset's folders and drives.
     Local(local::LocalView),
+    /// A library's videos, and its folders.
+    Library(local::LibraryView),
     /// A Jellyfin/Emby server's libraries, series and films.
     Jellyfin(jellyfin::JellyfinView),
     /// A DeoVR feed's or HereSphere API's scenes.
@@ -278,6 +310,7 @@ impl SourceView {
         match &mut self.page {
             SourcePage::Folders(b) => Some(b),
             SourcePage::Local(l) => l.folder.as_mut(),
+            SourcePage::Library(l) if l.folders => l.folder.as_mut(),
             _ => None,
         }
     }
@@ -303,6 +336,17 @@ impl SourceView {
                     Back::Done
                 }),
                 None => Back::Leave,
+            },
+            // Up the folders, then to the videos, then out.
+            SourcePage::Library(l) if l.folders => match l.folder.as_mut() {
+                Some(b) => parent(b).unwrap_or_else(|| {
+                    l.folders = false;
+                    Back::Done
+                }),
+                None => {
+                    l.folders = false;
+                    Back::Done
+                }
             },
             SourcePage::Jellyfin(j) if j.pages.len() > 1 => {
                 j.pages.pop();
@@ -357,16 +401,10 @@ impl LibraryGrid {
         LibraryGrid::new(base, fp_library::Sort::LastPlayed)
     }
 
-    /// Videos on the headset, its drives and cards, newest first.
-    pub fn local() -> LibraryGrid {
+    /// A library's videos, newest first.
+    pub fn of(source: &str) -> LibraryGrid {
         let base = Query {
-            sources: [
-                crate::services::LIBRARY_SOURCE,
-                crate::services::HOME_SOURCE,
-                crate::services::REMOVABLE_SOURCE,
-            ]
-            .map(String::from)
-            .to_vec(),
+            sources: vec![source.to_string()],
             ..Default::default()
         };
         LibraryGrid::new(base, fp_library::Sort::Added)
@@ -493,6 +531,12 @@ pub enum RemapSlot {
     Axis(usize, crate::bindings::Axis),
 }
 
+/// Videos being added to a playlist, and what the picker calls them.
+pub struct Picking {
+    pub reqs: Vec<OpenRequest>,
+    pub title: String,
+}
+
 /// View-local UI state.
 pub struct UiState {
     pub screen: Screen,
@@ -507,6 +551,22 @@ pub struct UiState {
     pub clear_armed: Option<std::time::Instant>,
     pub home: Option<HomeRows>,
     pub details: Option<MediaId>,
+    /// The playlist open on the Playlists screen.
+    pub playlist: Option<PlaylistId>,
+    /// The playlists, and the open one's videos, as last read.
+    pub playlists: Option<Vec<fp_library::Playlist>>,
+    pub playlist_items: Option<(PlaylistId, Vec<fp_library::PlaylistEntry>)>,
+    /// A new playlist's name, or the open one's while it is renamed.
+    pub playlist_name: String,
+    pub renaming: bool,
+    /// Delete was pressed once on the open playlist: pressing again within
+    /// a few seconds deletes it.
+    pub delete_armed: Option<std::time::Instant>,
+    /// Videos being added to a playlist (the picker shows instead of the
+    /// screen).
+    pub picking: Option<Picking>,
+    /// Up next as last shown, with the queue's version it was made from.
+    pub up_next: Option<(u64, Vec<queue::Row>)>,
     /// The source being browsed (shown on the Sources screen).
     pub source: Option<SourceView>,
     /// Counts requests to sources, so answers reach the page that asked.
@@ -518,10 +578,10 @@ pub struct UiState {
     pub unlocked_sources: std::collections::HashSet<String>,
     pub dlna_found: Vec<fp_sources::DlnaDevice>,
     pub dlna_searching: bool,
-    pub new_folder: String,
     pub new_device: String,
     pub new_device_kind: usize,
-    pub scan_status: Option<String>,
+    /// Libraries being scanned, with how far each got.
+    pub scans: std::collections::BTreeMap<String, String>,
     pub worker_status: Option<String>,
     pub update: UpdateStatus,
     pub adjust_open: bool,
@@ -562,6 +622,14 @@ impl Default for UiState {
             clear_armed: None,
             home: None,
             details: None,
+            playlist: None,
+            playlists: None,
+            playlist_items: None,
+            playlist_name: String::new(),
+            renaming: false,
+            delete_armed: None,
+            picking: None,
+            up_next: None,
             source: None,
             seq: 0,
             source_form: None,
@@ -569,10 +637,9 @@ impl Default for UiState {
             unlocked_sources: Default::default(),
             dlna_found: Vec::new(),
             dlna_searching: false,
-            new_folder: String::new(),
             new_device: String::new(),
             new_device_kind: 0,
-            scan_status: None,
+            scans: Default::default(),
             worker_status: None,
             update: UpdateStatus::Unknown,
             adjust_open: false,
@@ -596,8 +663,11 @@ impl UiState {
     pub fn invalidate(&mut self) {
         self.history.results = None;
         self.home = None;
+        self.playlists = None;
+        self.playlist_items = None;
+        self.up_next = None;
         if let Some(SourceView {
-            page: SourcePage::Local(l),
+            page: SourcePage::Library(l),
             ..
         }) = self.source.as_mut()
         {
@@ -666,6 +736,7 @@ impl UiState {
 /// Everything a panel's UI may read or change.
 pub struct View<'a> {
     pub state: &'a mut UiState,
+    pub queue: &'a crate::queue::Queue,
     pub settings: &'a mut crate::settings::Settings,
     pub services: &'a crate::services::Services,
     pub thumbs: &'a mut thumbs::Thumbs,
@@ -736,7 +807,6 @@ mod tests {
                 source: crate::services::HOME_SOURCE.into(),
                 ..Default::default()
             }),
-            ..Default::default()
         };
         s.source = Some(SourceView {
             source: crate::services::LOCAL_HUB.into(),
@@ -748,6 +818,30 @@ mod tests {
         assert!(s.source_back().is_none());
         assert!(s.source.is_some() && s.folder_mut().is_none());
         // ...then the page itself.
+        assert!(s.source_back().is_none());
+        assert!(s.source.is_none());
+
+        // A library's folders: up to its top, then its videos, then out.
+        let mut lib = local::LibraryView::new("movies");
+        lib.folders = true;
+        lib.folder = Some(Browse {
+            source: "movies".into(),
+            location: Some("/v/Movies/Old".into()),
+            stack: vec![None],
+            ..Default::default()
+        });
+        s.source = Some(SourceView {
+            source: "movies".into(),
+            name: "Movies".into(),
+            back_to: Screen::Sources,
+            page: SourcePage::Library(lib),
+        });
+        assert!(matches!(
+            s.source_back(),
+            Some(Action::Browse { location: None, .. })
+        ));
+        assert!(s.source_back().is_none());
+        assert!(s.source.is_some() && s.folder_mut().is_none(), "its videos");
         assert!(s.source_back().is_none());
         assert!(s.source.is_none());
 
@@ -783,14 +877,9 @@ mod tests {
         assert_eq!(q.text, "beach");
         assert_eq!(q.sort, fp_library::Sort::Relevance);
         assert_eq!(q.projections, [fp_library::ProjectionKind::Equirect180]);
-        let local = LibraryGrid::local().query();
-        assert!(!local.watched_only);
-        assert!(
-            local
-                .sources
-                .iter()
-                .any(|s| s == crate::services::LIBRARY_SOURCE)
-        );
-        assert_eq!(local.sort, fp_library::Sort::Added);
+        let movies = LibraryGrid::of("movies").query();
+        assert!(!movies.watched_only);
+        assert_eq!(movies.sources, ["movies"]);
+        assert_eq!(movies.sort, fp_library::Sort::Added);
     }
 }

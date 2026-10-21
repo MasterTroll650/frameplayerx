@@ -8,6 +8,11 @@ impl App {
         crate::pin::locked(&self.settings.source_pins, &self.ui.unlocked_sources, id)
     }
 
+    /// The media library.
+    pub(crate) fn library(&self) -> &Library {
+        &self.services.library
+    }
+
     pub(crate) fn source_config(&self, id: &str) -> Option<&fp_sources::SourceConfig> {
         self.services.source_config(id)
     }
@@ -32,83 +37,28 @@ impl App {
         });
     }
 
-    /// The locked source whose folder or address `location` is under, when
-    /// reached through source `via` (whose own PIN may have let the user
-    /// past it, see [`crate::pin::exempt_from`]).
-    pub(super) fn locked_by(&self, location: &str, via: Option<&str>) -> Option<String> {
-        self.services
-            .source_configs
-            .iter()
-            .filter(|c| self.source_locked(c.id()))
-            .filter(|c| crate::pin::source_contains(c, location))
-            .find(|c| !via.is_some_and(|v| self.exempt_from(c).iter().any(|e| e == v)))
-            .map(|c| c.id().to_string())
-    }
-
-    /// The sources whose own PIN lets them past `locked`'s lock.
-    fn exempt_from(&self, locked: &fp_sources::SourceConfig) -> Vec<String> {
-        crate::pin::exempt_from(
-            locked,
-            &self.services.source_configs,
-            &self.settings.source_pins,
-            &self.ui.unlocked_sources,
-        )
-    }
-
-    /// The locked source keeping `source` shut: itself, or a locked source
-    /// its folder or address is inside (the share a locked folder is in
-    /// stays open, a folder inside a locked share does not, unless it was
-    /// unlocked with a PIN of its own).
-    pub(super) fn lock_on(&self, source: &str) -> Option<String> {
-        if self.source_locked(source) {
-            return Some(source.to_string());
-        }
-        let root = self
-            .services
-            .source_config(source)
-            .map(crate::pin::source_root)?;
-        self.locked_by(&root, Some(source))
-    }
-
     /// The locked source a video belongs to, if any: the one it was opened
-    /// from, the one its library entry came from, or one whose folder or
-    /// address it is under, whichever source it was opened from.
+    /// from, else the one its library entry came from.
     pub(super) fn locked_source_of(&self, req: &OpenRequest) -> Option<String> {
         if self.settings.source_pins.is_empty() {
             return None;
         }
-        let from_library = self
-            .services
-            .library
-            .get_by_location(&req.location)
-            .ok()
-            .flatten()
-            .map(|r| r.source_id);
-        let via = req.source_id.clone().or_else(|| from_library.clone());
-        [req.source_id.clone(), from_library]
-            .into_iter()
-            .flatten()
-            .find(|id| self.source_locked(id))
-            .or_else(|| self.locked_by(&req.location, via.as_deref()))
+        let source = req.source_id.clone().or_else(|| {
+            self.services
+                .library
+                .get_by_location(&req.location)
+                .ok()
+                .flatten()
+                .map(|r| r.source_id)
+        })?;
+        self.source_locked(&source).then_some(source)
     }
 
-    /// What locked sources hide: their videos, and everything under their
-    /// folders or addresses whichever source lists or added it, except
-    /// sources their own PIN let the user into.
+    /// What locked sources hide: their videos.
     pub(super) fn locked_hidden(&self) -> fp_library::Hidden {
-        let sources = crate::pin::locked_ids(&self.settings.source_pins, &self.ui.unlocked_sources);
-        let locations = self
-            .services
-            .source_configs
-            .iter()
-            .filter(|c| sources.iter().any(|s| s == c.id()))
-            .map(|c| fp_library::HiddenRoot {
-                root: crate::pin::source_root(c),
-                except: self.exempt_from(c),
-            })
-            .filter(|h| !h.root.is_empty())
-            .collect();
-        fp_library::Hidden { sources, locations }
+        fp_library::Hidden {
+            sources: crate::pin::locked_ids(&self.settings.source_pins, &self.ui.unlocked_sources),
+        }
     }
 
     /// Leaves locked sources' videos out of the library's listings (and the
@@ -129,17 +79,12 @@ impl App {
             {
                 self.close_playback();
             }
-            // A folder being browsed may hold what is hidden now.
-            if let Some(b) = self.ui.folder_mut() {
-                let (source, location) = (b.source.clone(), b.location.clone());
-                self.browse(source, location);
-            }
         }
     }
 
     pub fn browse(&mut self, source: String, location: Option<String>) {
-        if let Some(lock) = self.lock_on(&source) {
-            self.ask_pin(&lock);
+        if self.source_locked(&source) {
+            self.ask_pin(&source);
             return;
         }
         let Some(src) = self.services.opener.source(&source) else {
@@ -179,10 +124,14 @@ impl App {
             });
             let result = result.map_err(|e| {
                 let removable = source == crate::services::REMOVABLE_SOURCE;
-                if removable && crate::drives::removable_mounts().is_empty() {
-                    "No microSD card or USB drive is inserted.".to_string()
-                } else {
-                    e.to_string()
+                match e {
+                    fp_sources::Error::NotInserted => {
+                        "The microSD card or USB drive this is on is not inserted.".to_string()
+                    }
+                    _ if removable && crate::drives::removable_mounts().is_empty() => {
+                        "No microSD card or USB drive is inserted.".to_string()
+                    }
+                    e => e.to_string(),
                 }
             });
             Job::Listed {
@@ -209,8 +158,8 @@ impl App {
             });
             return;
         }
-        if let Some(lock) = self.lock_on(&source) {
-            self.ask_pin(&lock);
+        if self.source_locked(&source) {
+            self.ask_pin(&source);
             return;
         }
         let Some(kind) = self
@@ -244,6 +193,12 @@ impl App {
                 let f = ui::feeds::FeedView::new(kind);
                 self.ui.source = Some(view(SourcePage::Feed(f)));
                 self.apply(Action::FeedLoad { source });
+            }
+            fp_sources::SourceKind::Library => {
+                let l = ui::local::LibraryView::new(&source);
+                self.ui.source = Some(view(SourcePage::Library(l)));
+                // New files show up without a restart.
+                self.scan_libraries(|l| l.id == source, false, false);
             }
             _ => {
                 self.ui.source = Some(view(SourcePage::Folders(Browse {
@@ -335,6 +290,24 @@ impl App {
         });
     }
 
+    /// Scans library `source` now, saying how it went; `force` makes its
+    /// thumbnails again.
+    pub(super) fn rescan(&mut self, source: &str, force: bool) {
+        let Some(fp_sources::SourceConfig::Library(l)) = self.source_config(source) else {
+            return;
+        };
+        if !crate::libraries::present(l) {
+            let card = l.card.as_ref().map_or("", |c| c.label.as_str());
+            self.ui.toast(format!("Insert {card} to scan {}", l.name));
+            return;
+        }
+        if self.ui.scans.contains_key(source) {
+            self.ui.toast(format!("{} is being scanned", l.name));
+            return;
+        }
+        self.scan_libraries(|l| l.id == source, force, true);
+    }
+
     // ---- editing sources ----
 
     pub(super) fn add_source(&mut self, cfg: fp_sources::SourceConfig) {
@@ -361,6 +334,13 @@ impl App {
             self.ask_pin(&id);
             return;
         }
+        let moved = match (self.source_config(&id), &cfg) {
+            (
+                Some(fp_sources::SourceConfig::Library(old)),
+                fp_sources::SourceConfig::Library(new),
+            ) => old.root() != new.root(),
+            _ => false,
+        };
         let list = self
             .services
             .source_configs
@@ -368,6 +348,17 @@ impl App {
             .map(|c| if c.id() == id { cfg.clone() } else { c.clone() })
             .collect();
         let change = self.services.set_sources(list);
+        if moved {
+            // Its next scan takes back the videos still in the new folder.
+            let lib = &self.services.library;
+            if let Err(e) = lib
+                .forget_unwatched(&id)
+                .and_then(|_| lib.detach_source(&id))
+            {
+                log::warn!("letting go of the videos of {id}: {e}");
+            }
+            self.scan_libraries(|l| l.id == id, false, false);
+        }
         match change.errors.into_iter().find(|e| e.id == id) {
             Some(e) => self.ui.toast(e.to_string()),
             None => self.ui.toast(match change.save_error {
@@ -536,8 +527,9 @@ impl App {
                     cached,
                 };
             // A DeoVR feed's root can take seconds.
-            if let Some(lib) = fp_sources::FeedLibrary::load(&path) {
-                let _ = tx.send(listed(Ok(lib), true));
+            let saved = fp_sources::FeedLibrary::load(&path);
+            if let Some(lib) = &saved {
+                let _ = tx.send(listed(Ok(lib.clone()), true));
             }
             let Some(feed) = src.as_scene_feed() else {
                 return listed(Err("not a scene feed".into()), false);
@@ -550,6 +542,9 @@ impl App {
             let scenes = feed.scan();
             if let Some(s) = &scenes {
                 lib.merge_scan(s.clone());
+            }
+            if let Some(saved) = &saved {
+                lib.keep_details(saved);
             }
             if let Err(e) = lib.save(&path) {
                 log::warn!("saving the listing of {source}: {e}");

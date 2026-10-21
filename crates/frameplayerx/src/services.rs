@@ -6,6 +6,7 @@ use crate::settings::{HapticDeviceConfig, Settings};
 use fp_core::ByteSource;
 use fp_core::source::FileSource;
 use fp_core::sync::{read, write};
+use fp_core::volume;
 use fp_haptics::HapticsEngine;
 use fp_library::Library;
 use fp_remote::{RemoteEvent, RemoteHub, RemoteItem, RemoteLibrary};
@@ -14,6 +15,8 @@ use ring::rand::SecureRandom;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+
+const NOT_INSERTED: &str = "This video is on a microSD card or USB drive that is not inserted.";
 
 /// What changing the source list did.
 pub struct SourcesChange {
@@ -81,12 +84,14 @@ impl Opener {
         source_id: Option<&str>,
         location: &str,
     ) -> Result<Arc<dyn ByteSource>, String> {
+        if location.starts_with(volume::SCHEME) {
+            let path = volume::resolve(location).ok_or(NOT_INSERTED)?;
+            return self.open_in(None, &path);
+        }
         if location.starts_with('/') {
             let path = Path::new(location);
             if !path.exists() && location.starts_with(&format!("{REMOVABLE_ROOT}/")) {
-                return Err(
-                    "This video is on a microSD card or USB drive that is not inserted.".into(),
-                );
+                return Err(NOT_INSERTED.into());
             }
             return FileSource::open(path)
                 .map(|f| Arc::new(f) as Arc<dyn ByteSource>)
@@ -132,6 +137,7 @@ impl Opener {
     ) -> Result<Vec<u8>, String> {
         if let Some(src) = source_id.and_then(|id| self.source(id))
             && !location.starts_with('/')
+            && !location.starts_with(volume::SCHEME)
         {
             let read = src
                 .open(location)
@@ -148,6 +154,10 @@ impl Opener {
 
     /// Small downloads (thumbnails, scripts) from any http(s) URL.
     pub fn fetch(&self, url: &str, limit: u64) -> Result<Vec<u8>, String> {
+        if url.starts_with(volume::SCHEME) {
+            let path = volume::resolve(url).ok_or(NOT_INSERTED)?;
+            return self.fetch(&path, limit);
+        }
         if url.starts_with('/') {
             return std::fs::read(url).map_err(|e| e.to_string());
         }
@@ -198,25 +208,11 @@ pub fn builtin_sources() -> Vec<SourceConfig> {
     out
 }
 
-/// The source id the library's folder scans record videos under.
-pub const LIBRARY_SOURCE: &str = "local";
 pub const HOME_SOURCE: &str = "device-home";
 pub const REMOVABLE_SOURCE: &str = "device-removable";
-/// The headset as one place to browse: its indexed videos, and the home
-/// folder and removable drives (not a [`Source`] of its own).
+/// The headset's folders and drives as one place to browse (not a
+/// [`Source`] of its own).
 pub const LOCAL_HUB: &str = "on-device";
-/// Video folders worth offering for the library that are not in it yet
-/// (removable drives are indexed automatically).
-pub fn suggested_folders(existing: &[PathBuf]) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        for d in ["Videos", "Downloads", "Movies"] {
-            out.push(home.join(d));
-        }
-    }
-    out.retain(|p| p.is_dir() && !existing.iter().any(|e| p.starts_with(e)));
-    out
-}
 
 pub struct Services {
     pub library: Library,
@@ -276,7 +272,7 @@ impl RemoteLibrary for WebLibrary {
     fn thumbnail_path(&self, id: i64) -> Option<PathBuf> {
         let r = self.0.get(fp_library::MediaId(id)).ok().flatten()?;
         // Not for videos of a source locked with a PIN.
-        if self.0.hidden().hides(&r.source_id, &r.location) {
+        if self.0.hidden().hides(&r.source_id) {
             return None;
         }
         r.thumbnail

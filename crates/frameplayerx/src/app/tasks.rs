@@ -9,8 +9,17 @@ pub(super) enum Job {
         location: Option<String>,
         result: Result<Vec<fp_core::source::Entry>, String>,
     },
-    Status(String),
-    ScanDone(String),
+    /// How far scanning library `source` got.
+    ScanStatus {
+        source: String,
+        status: String,
+    },
+    /// Library `source` scanned; `told`: someone asked, so say how it went.
+    ScanDone {
+        source: String,
+        result: Result<fp_library::ScanReport, String>,
+        told: bool,
+    },
     Jellyfin {
         source: String,
         seq: u64,
@@ -66,54 +75,88 @@ pub(super) enum Job {
 }
 
 impl App {
-    pub(super) fn rescan(&mut self, force: bool) {
-        let mut folders = self.settings.library_folders.clone();
-        if self.settings.index_removable {
-            // Each drive on its own, so an absent card never marks videos
-            // on another drive missing.
-            let extra: Vec<_> = self
-                .mounts
-                .iter()
-                .filter(|m| !folders.iter().any(|f| m.starts_with(f)))
-                .cloned()
-                .collect();
-            folders.extend(extra);
-        }
-        let lib = self.services.library.clone();
-        let tx = self.jobs.sender();
-        self.ui.scan_status = Some("Scanning…".into());
-        self.jobs.spawn("scan", move || {
-            let opts = fp_library::ScanOptions {
-                force,
-                ..Default::default()
-            };
-            let (mut added, mut missing, mut errors) = (0, 0, Vec::new());
-            for f in &folders {
+    /// Scans the libraries `which` picks whose folder can be reached now,
+    /// each on its own (so a card that is out never marks videos missing),
+    /// unless it is being scanned already. `force` makes thumbnails again;
+    /// `told` says how it went.
+    pub(super) fn scan_libraries(
+        &mut self,
+        which: impl Fn(&fp_sources::LibraryConfig) -> bool,
+        force: bool,
+        told: bool,
+    ) {
+        let targets: Vec<_> = self
+            .services
+            .source_configs
+            .iter()
+            .filter_map(|c| match c {
+                fp_sources::SourceConfig::Library(l) => Some(l),
+                _ => None,
+            })
+            .filter(|l| which(l) && !self.ui.scans.contains_key(&l.id))
+            .filter_map(|l| crate::libraries::scan_target(l).map(|t| (l.id.clone(), t)))
+            .collect();
+        for (source, (root, location_root)) in targets {
+            let lib = self.services.library.clone();
+            let tx = self.jobs.sender();
+            self.ui.scans.insert(source.clone(), "Scanning…".into());
+            self.jobs.spawn("scan", move || {
+                let opts = fp_library::ScanOptions {
+                    force,
+                    location_root,
+                    ..Default::default()
+                };
                 let mut last = Instant::now();
-                let r = lib.scan_folder(f, crate::services::LIBRARY_SOURCE, &opts, |p| {
-                    if last.elapsed() > Duration::from_millis(300) {
-                        last = Instant::now();
-                        let _ = tx.send(Job::Status(format!(
-                            "Scanning {}: {} videos",
-                            f.display(),
-                            p.videos_found
-                        )));
-                    }
-                });
-                match r {
-                    Ok(rep) => {
-                        added += rep.added;
-                        missing += rep.missing;
-                    }
-                    Err(e) => errors.push(format!("{}: {e}", f.display())),
+                let result = lib
+                    .scan_folder(&root, &source, &opts, |p| {
+                        if last.elapsed() > Duration::from_millis(300) {
+                            last = Instant::now();
+                            let _ = tx.send(Job::ScanStatus {
+                                source: source.clone(),
+                                status: format!("Scanning: {} videos", p.videos_found),
+                            });
+                        }
+                    })
+                    .map_err(|e| e.to_string());
+                Job::ScanDone {
+                    source,
+                    result,
+                    told,
+                }
+            });
+        }
+    }
+
+    fn scanned(
+        &mut self,
+        source: &str,
+        result: Result<fp_library::ScanReport, String>,
+        told: bool,
+    ) {
+        self.ui.scans.remove(source);
+        if self.source_config(source).is_none() {
+            // Removed while it was scanned.
+            let _ = self.services.library.forget_unwatched(source);
+            return;
+        }
+        let name = self.source_name(source);
+        match result {
+            Ok(r) => {
+                let msg = format!("{name}: {} new, {} missing", r.added, r.missing);
+                log::info!("scanned {msg}, {} unreadable", r.errors.len());
+                if told {
+                    self.ui.toast(msg);
                 }
             }
-            let mut msg = format!("Scan finished: {added} new, {missing} missing");
-            if !errors.is_empty() {
-                msg += &format!(" · {}", errors.join("; "));
+            Err(e) => {
+                log::warn!("scanning {name}: {e}");
+                if told {
+                    self.ui.toast(format!("{name} couldn't be scanned: {e}"));
+                }
             }
-            Job::ScanDone(msg)
-        });
+        }
+        self.ui.invalidate();
+        self.services.wake_worker();
     }
 
     /// Connects every configured device, while haptics are turned on.
@@ -276,13 +319,16 @@ impl App {
                 location,
                 result,
             } => self.listed(&source, location.as_deref(), result),
-            Job::Status(s) => self.ui.scan_status = Some(s),
-            Job::ScanDone(s) => {
-                log::info!("{s}");
-                self.ui.scan_status = Some(s);
-                self.ui.invalidate();
-                self.services.wake_worker();
+            Job::ScanStatus { source, status } => {
+                if let Some(s) = self.ui.scans.get_mut(&source) {
+                    *s = status;
+                }
             }
+            Job::ScanDone {
+                source,
+                result,
+                told,
+            } => self.scanned(&source, result, told),
             Job::Jellyfin {
                 source,
                 seq,
@@ -319,6 +365,22 @@ impl App {
                     f.scene_loaded(&url, *result, full);
                 }
                 self.pump_feed();
+                // A batch of details done: kept with the listing, so a search
+                // finds their tags next time too.
+                if self.feed_busy == 0
+                    && self.feed_queue.is_empty()
+                    && let Some(f) = self.ui.feed_page(&source).filter(|f| f.unsaved > 0)
+                {
+                    f.unsaved = 0;
+                    let lib = f.library();
+                    self.jobs.spawn("feed-save", move || {
+                        let path = fp_sources::FeedLibrary::cache_path(&source);
+                        if let Err(e) = lib.save(&path) {
+                            log::warn!("saving the listing of {source}: {e}");
+                        }
+                        Job::Done
+                    });
+                }
             }
             Job::Toast(t) => self.ui.toast(t),
             Job::Done => {}
@@ -425,6 +487,9 @@ impl App {
                     h.load(o.scripts);
                 }
                 self.playback = Some(o.playback);
+                if let Some(p) = &mut self.playback {
+                    p.place_flat(self.offsets.main);
+                }
                 self.ui.open_error = None;
                 self.ui.adjust_open = false;
                 self.show_browser = false;
@@ -457,9 +522,6 @@ impl App {
         b.loading = false;
         match result {
             Ok(mut e) => {
-                // Folders of locked sources inside this one.
-                let hidden = self.services.library.hidden();
-                e.retain(|entry| !hidden.hides(source, &entry.location));
                 fp_sources::sort_entries_by(&mut e, self.settings.browse_sort);
                 b.entries = e;
                 b.error = None;
@@ -569,7 +631,7 @@ impl App {
         }
         self.mounts_checked = Instant::now();
         self.mount_drives();
-        let now = crate::drives::removable_mounts();
+        let now = crate::drives::refresh_mounts();
         if now == self.mounts {
             return;
         }
@@ -586,9 +648,7 @@ impl App {
                 .unwrap_or_default();
             log::info!("drive mounted: {}", m.display());
             self.ui.toast(format!("Found drive \"{name}\""));
-            if self.settings.index_removable {
-                self.rescan(false);
-            }
+            self.scan_libraries(|l| l.card.is_some(), false, false);
         } else {
             log::info!("a drive was removed");
         }
@@ -603,7 +663,12 @@ impl App {
         }
     }
 
-    pub(super) fn open_request(&mut self, req: OpenRequest) {
+    pub(super) fn open_request(&mut self, mut req: OpenRequest) {
+        // A file on a card goes by the card's ID, as the library has it.
+        req.location = fp_core::volume::stable(&req.location).into_owned();
+        if let Some(e) = req.entry.as_mut() {
+            e.location = fp_core::volume::stable(&e.location).into_owned();
+        }
         if let Some(source) = self.locked_source_of(&req) {
             self.ui
                 .toast(format!("{} is locked", self.source_name(&source)));

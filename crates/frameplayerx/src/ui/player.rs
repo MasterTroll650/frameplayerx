@@ -209,7 +209,7 @@ fn seek_row(
     });
 }
 
-/// Library, speed and sound.
+/// Browse, speed and sound.
 fn browse_and_sound(
     ui: &mut egui::Ui,
     pb: &crate::playback::Playback,
@@ -217,10 +217,16 @@ fn browse_and_sound(
     actions: &mut Vec<Action>,
 ) {
     if widgets::key(ui, icons::SQUARES_FOUR, 52.0, false)
-        .tip("Library")
+        .tip("Browse")
         .clicked()
     {
         actions.push(Action::ShowBrowser(true));
+    }
+    if widgets::key(ui, icons::QUEUE, 52.0, false)
+        .tip("Up next")
+        .clicked()
+    {
+        actions.push(Action::ShowUpNext);
     }
     let speed = pb.player.speed();
     if widgets::pill_key(ui, &fmt_speed(speed), (speed - 1.0).abs() > 1e-3)

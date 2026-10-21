@@ -281,6 +281,9 @@ mod tests {
         });
         let s = parse_deovr_scene(&v, "http://vr/deovr/1");
         assert_eq!(s.description.as_deref(), Some("Sun and sand."));
+        let mut e = Entry::new("x", "http://vr/deovr/1", EntryKind::Video);
+        s.apply_to(&mut e);
+        assert_eq!(e.description.as_deref(), Some("Sun and sand."));
         assert_eq!(s.released, Some(1_700_000_000));
         assert_eq!(s.studio.as_deref(), Some("VRStudio"));
         assert_eq!(s.actors, ["Jane", "Ann"]);

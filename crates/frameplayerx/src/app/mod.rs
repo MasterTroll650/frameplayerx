@@ -23,7 +23,7 @@ use crate::world::{
 };
 use fp_core::PlaybackStatus;
 use fp_core::format::Projection;
-use fp_library::Library;
+use fp_library::{Library, PlaylistId};
 use fp_media::{PlayerState, VideoFrame};
 use fp_render::{QuadDraw, Renderer, VideoParams};
 use fp_xr::Hand;
@@ -95,6 +95,11 @@ const KEYBOARD: usize = 3;
 const PERF_LAYER: u64 = 8;
 /// Where the performance overlay sits from the eyes: low and to the left.
 const PERF_OFFSET: Vec3 = Vec3::new(-0.3, -0.12, -0.85);
+/// How far below where you face the browse panel and a flat player sit,
+/// degrees: what is in front of you is a little below eye level (the
+/// panel's top bar, Quit among it, is then about level with your eyes),
+/// and the two line up.
+const BELOW_DEG: f32 = 12.0;
 
 /// How long a video may take to open before the app gives up on it. A
 /// server that never sends a frame (a live transcode it can't keep up with)
@@ -154,8 +159,8 @@ pub struct App {
     /// Where the library and adjust panels sit now (saved when let go).
     offsets: crate::settings::PanelOffsets,
     /// The list the open video came from, for next/previous.
-    queue: Vec<OpenRequest>,
-    queue_pos: usize,
+    /// Up next.
+    queue: crate::queue::Queue,
     last_status: Option<PlaybackStatus>,
     update: Option<fp_updater::Update>,
     /// Counts update checks, so a check for a channel the user has since
@@ -273,8 +278,7 @@ impl App {
             panel_drag: None,
             adjust_hold: None,
             offsets: Default::default(),
-            queue: Vec::new(),
-            queue_pos: 0,
+            queue: Default::default(),
             last_status: None,
             update: None,
             update_check: 0,
@@ -294,7 +298,7 @@ impl App {
         app.offsets = app.settings.panel_offsets;
         app.apply_ui_scale();
         app.check_last_run();
-        app.rescan(false);
+        app.scan_libraries(|_| true, false, false);
         app.connect_devices();
         if app.settings.check_updates && fp_updater::RELEASE_PUBLIC_KEY.is_some() {
             app.check_updates();
@@ -338,8 +342,8 @@ impl App {
                 p.settings.zoom,
                 p.settings.yaw,
                 p.settings.pitch,
-                self.queue_pos + 1,
-                self.queue.len(),
+                self.queue.pos + 1,
+                self.queue.items.len(),
                 p.player.is_paused()
             ),
             None => format!("no video, screen={:?} {ui}", self.ui.screen),

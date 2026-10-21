@@ -10,6 +10,7 @@ use fp_sources::{Credentials, SourceConfig, SourceKind, urlutil};
 pub(super) fn kind_icon(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::Local => icons::HARD_DRIVE,
+        SourceKind::Library => icons::BOOKS,
         SourceKind::Http => icons::GLOBE,
         SourceKind::WebDav => icons::CLOUD,
         SourceKind::Dlna => icons::BROADCAST,
@@ -21,7 +22,7 @@ pub(super) fn kind_icon(kind: SourceKind) -> &'static str {
 
 /// What the headset itself holds, as the Sources list and Home name it.
 pub(super) const LOCAL_NAME: &str = "On this device";
-const LOCAL_DESC: &str = "Videos on the headset, its microSD card and USB drives";
+const LOCAL_DESC: &str = "Folders on the headset, its microSD card and USB drives";
 
 /// A page title with an optional line under it and actions on the right.
 fn page_header(
@@ -98,7 +99,7 @@ fn rows(v: &View) -> Vec<Row> {
         id: crate::services::LOCAL_HUB.into(),
         name: LOCAL_NAME.into(),
         desc: LOCAL_DESC.into(),
-        facts: "This headset, microSD and USB".into(),
+        facts: "Folders, microSD and USB".into(),
         icon: icons::HARD_DRIVES,
         builtin: true,
         lock: Lock::None,
@@ -106,7 +107,12 @@ fn rows(v: &View) -> Vec<Row> {
     std::iter::once(local)
         .chain(v.services.source_configs.iter().map(|c| {
             let lock = lock_of(v, c.id());
-            let kind = c.kind().label();
+            let kind = match c {
+                SourceConfig::Library(l) if !crate::libraries::present(l) => {
+                    "Library · Not inserted"
+                }
+                _ => c.kind().label(),
+            };
             // The list's line and Home's; a locked source's address can say
             // what is in it, so it shows neither.
             let (desc, facts) = match lock {
@@ -284,6 +290,7 @@ fn browse(ui: &mut egui::Ui, v: &mut View) {
     let back = match &mut sv.page {
         SourcePage::Folders(b) => super::folders::page(ui, v, &sv.name, kind, b),
         SourcePage::Local(l) => super::local::page(ui, v, l),
+        SourcePage::Library(l) => super::local::library_page(ui, v, &sv.source, &sv.name, l),
         SourcePage::Jellyfin(j) => super::jellyfin::page(ui, v, &sv.source, &sv.name, j),
         SourcePage::Feed(f) => super::feeds::page(ui, v, &sv.source, &sv.name, f),
     };
@@ -346,7 +353,7 @@ pub fn source_row(ui: &mut egui::Ui, v: &mut View, back_to: Screen) {
                     placeholder: icons::PLUS,
                     tint: theme::ACCENT_HOVER,
                     title: "Add a source",
-                    facts: "Jellyfin, DeoVR, HereSphere, SMB…",
+                    facts: "A library, Jellyfin, DeoVR, SMB…",
                     play: false,
                     ..Card::default()
                 },
@@ -499,6 +506,11 @@ fn pin_form(ui: &mut egui::Ui, v: &mut View) {
 
 const KINDS: [(SourceKind, &str); 8] = [
     (
+        SourceKind::Library,
+        "A folder on this device, a microSD card or a USB drive: its videos are found, with \
+         thumbnails, filters and sorting, and it gets its own place on Home",
+    ),
+    (
         SourceKind::MediaBrowser,
         "Jellyfin / Emby server URL, e.g. http://192.168.1.10:8096",
     ),
@@ -526,15 +538,11 @@ const KINDS: [(SourceKind, &str); 8] = [
         SourceKind::Dlna,
         "DLNA media server on your network (Plex, Jellyfin, Emby, Serviio)",
     ),
-    (
-        SourceKind::Local,
-        "A folder on this device, a microSD card or a USB drive",
-    ),
 ];
 
 fn address_hint(kind: SourceKind) -> &'static str {
     match kind {
-        SourceKind::Local => "/run/media/deck/SDCARD/Videos",
+        SourceKind::Local | SourceKind::Library => "/home/steamos/Videos/Movies",
         SourceKind::MediaBrowser => "http://192.168.1.10:8096",
         SourceKind::DeoVr => "http://192.168.1.10:9999/deovr",
         SourceKind::HereSphere => "http://192.168.1.10:9999/heresphere",
@@ -553,7 +561,7 @@ fn name_hint(kind: SourceKind) -> &'static str {
         SourceKind::WebDav => "Optional (e.g. Nextcloud)",
         SourceKind::Http => "Optional (e.g. Video server)",
         SourceKind::Smb => "Optional (e.g. Home NAS)",
-        SourceKind::Local => "Optional (e.g. SD Card)",
+        SourceKind::Local | SourceKind::Library => "Optional (e.g. Movies)",
         SourceKind::Dlna => "Optional",
     }
 }
@@ -562,6 +570,7 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
     let dlna_found = v.state.dlna_found.clone();
     let searching = v.state.dlna_searching;
     let pins = v.settings.source_pins.clone();
+    let configs = v.services.source_configs.clone();
     let Some(f) = v.state.source_form.as_mut() else {
         return;
     };
@@ -579,6 +588,8 @@ fn add_form(ui: &mut egui::Ui, v: &mut View) {
         dlna_name_form(ui, f, old)
     } else if f.kind == SourceKind::Dlna {
         dlna_search(ui, v.actions, &dlna_found, searching, &id)
+    } else if f.kind == SourceKind::Library {
+        library_form(ui, f, id, &configs, v.actions)
     } else {
         server_form(ui, f, id, editing.as_ref(), v.actions)
     };
@@ -645,6 +656,93 @@ fn form_header(ui: &mut egui::Ui, f: &mut SourceForm, editing: Option<&SourceCon
     ui.label(RichText::new(help).color(theme::TEXT_2));
     ui.add_space(12.0);
     cancel
+}
+
+/// A library's name and folder, with folders worth having one for, and
+/// when editing, its videos' upkeep.
+fn library_form(
+    ui: &mut egui::Ui,
+    f: &mut SourceForm,
+    id: String,
+    configs: &[SourceConfig],
+    actions: &mut Vec<Action>,
+) -> Option<SourceConfig> {
+    let mut save = None;
+    let editing = f.editing.is_some();
+    widgets::rows(ui, |r| {
+        r.row(
+            "Name",
+            Some("Optional; the folder's name otherwise."),
+            |ui| text_field(ui, &mut f.name, name_hint(f.kind), false),
+        );
+        r.row("Folder", None, |ui| {
+            text_field(ui, &mut f.address, address_hint(f.kind), false);
+        });
+        let suggestions = crate::libraries::suggestions(configs);
+        if !suggestions.is_empty() {
+            r.content(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                    for s in suggestions {
+                        let text = s.display().to_string();
+                        if widgets::chip_icon(ui, Some(icons::FOLDER_SIMPLE), &text, false)
+                            .clicked()
+                        {
+                            f.address = text;
+                        }
+                    }
+                });
+            });
+        }
+    });
+    ui.add_space(12.0);
+    let built = build_config(f, id).and_then(|cfg| match &cfg {
+        SourceConfig::Library(l) => match crate::libraries::overlap(l, configs) {
+            Some(other) => Err(format!("This folder is in {other}, or holds it")),
+            None => Ok(cfg),
+        },
+        _ => Ok(cfg),
+    });
+    ui.horizontal(|ui| match built {
+        Ok(cfg) => {
+            if widgets::button(ui, Some(icons::CHECK), "Save", Kind::Primary).clicked() {
+                save = Some(cfg);
+            }
+        }
+        Err(e) => {
+            ui.add_enabled_ui(false, |ui| {
+                widgets::button(ui, Some(icons::CHECK), "Save", Kind::Primary)
+            });
+            if !f.address.is_empty() {
+                ui.label(RichText::new(e).color(theme::WARN));
+            }
+        }
+    });
+    if let Some(SourceConfig::Library(l)) = f.editing.as_ref().filter(|_| editing) {
+        ui.add_space(20.0);
+        widgets::section_label(ui, "Videos");
+        ui.add_space(4.0);
+        widgets::rows(ui, |r| {
+            r.row(
+                "Rebuild thumbnails",
+                Some("Reads every video again."),
+                |ui| {
+                    if widgets::button_sized(ui, None, "Rebuild", Kind::Secondary, 44.0).clicked() {
+                        actions.push(Action::Rescan {
+                            source: l.id.clone(),
+                            force: true,
+                        });
+                    }
+                },
+            );
+            r.row("Retry videos that couldn't be read", None, |ui| {
+                if widgets::button_sized(ui, None, "Retry", Kind::Secondary, 44.0).clicked() {
+                    actions.push(Action::RetryFailed(l.id.clone()));
+                }
+            });
+        });
+    }
+    save
 }
 
 /// A server found on the network: only its name is the user's.
@@ -995,6 +1093,7 @@ pub fn edit_form(cfg: &SourceConfig) -> SourceForm {
     };
     match cfg {
         SourceConfig::Local(c) => f.address = c.root.display().to_string(),
+        SourceConfig::Library(c) => f.address = library_address(c),
         SourceConfig::Http(c) | SourceConfig::WebDav(c) => {
             creds(&c.credentials);
             f.address = c.url.clone();
@@ -1027,6 +1126,15 @@ pub fn edit_form(cfg: &SourceConfig) -> SourceForm {
         }
     }
     f
+}
+
+/// A library's folder as its form shows it: the path, or while its card is
+/// out, the card's name and the folder on it.
+fn library_address(c: &fp_sources::LibraryConfig) -> String {
+    match fp_core::volume::resolve(&c.root()) {
+        Some(path) => path.into_owned(),
+        None => SourceConfig::Library(c.clone()).address(),
+    }
 }
 
 /// What the form doesn't show, kept from the source being edited.
@@ -1068,12 +1176,23 @@ pub fn build_config(f: &SourceForm, id: String) -> Result<SourceConfig, String> 
         }
     };
     Ok(match f.kind {
-        SourceKind::Local => {
-            let p = std::path::PathBuf::from(&address);
-            if !p.is_absolute() {
-                return Err("Enter an absolute folder path".into());
+        SourceKind::Local | SourceKind::Library => {
+            let path = std::path::Path::new(&address);
+            let name = if f.name.trim().is_empty() {
+                crate::libraries::default_name(path)
+            } else {
+                f.name.trim().to_string()
+            };
+            // Unchanged: kept as it is, also while its card is out.
+            if let Some(SourceConfig::Library(old)) = &f.editing
+                && address == library_address(old)
+            {
+                return Ok(SourceConfig::Library(fp_sources::LibraryConfig {
+                    name,
+                    ..old.clone()
+                }));
             }
-            SourceConfig::Local(fp_sources::LocalConfig { id, name, root: p })
+            SourceConfig::Library(crate::libraries::config_for(id, name, path)?)
         }
         SourceKind::Http | SourceKind::WebDav => {
             let c = fp_sources::HttpConfig {
@@ -1202,9 +1321,21 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        f.kind = SourceKind::Local;
+        f.kind = SourceKind::Library;
         f.address = "relative/path".into();
         assert!(build_config(&f, "x".into()).is_err());
+        let dir = std::env::temp_dir();
+        f.address = dir.join("fpx-no-such-folder").display().to_string();
+        assert!(build_config(&f, "x".into()).is_err(), "no such folder");
+        f.address = dir.display().to_string();
+        f.name.clear();
+        match build_config(&f, "x".into()).unwrap() {
+            SourceConfig::Library(c) => {
+                assert_eq!((c.folder.as_path(), c.card), (dir.as_path(), None));
+                assert_eq!(c.name, dir.file_name().unwrap().to_string_lossy());
+            }
+            other => panic!("{other:?}"),
+        }
 
         // MediaBrowser validation
         f.kind = SourceKind::MediaBrowser;
@@ -1247,7 +1378,7 @@ mod tests {
 
     #[test]
     fn editing_gives_back_what_was_saved() {
-        use fp_sources::{FeedConfig, HttpConfig, LocalConfig, MediaBrowserConfig, SmbConfig};
+        use fp_sources::{FeedConfig, HttpConfig, MediaBrowserConfig, SmbConfig};
         let creds = Some(Credentials::new("bob", "pw"));
         let saved = [
             SourceConfig::Smb(SmbConfig {
@@ -1284,10 +1415,21 @@ mod tests {
                 access_token: Some("tok".into()),
                 user_id: Some("u".into()),
             }),
-            SourceConfig::Local(LocalConfig {
+            SourceConfig::Library(fp_sources::LibraryConfig {
                 id: "l".into(),
                 name: "Private".into(),
-                root: "/home/deck/Private".into(),
+                folder: "/home/deck/Private".into(),
+                card: None,
+            }),
+            // On a card that is out.
+            SourceConfig::Library(fp_sources::LibraryConfig {
+                id: "c".into(),
+                name: "Clips".into(),
+                folder: "Clips".into(),
+                card: Some(fp_sources::CardRef {
+                    id: "0000-0000".into(),
+                    label: "SDCARD".into(),
+                }),
             }),
         ];
         for c in saved {

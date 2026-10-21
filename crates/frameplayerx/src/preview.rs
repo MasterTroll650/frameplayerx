@@ -105,6 +105,20 @@ impl Sim {
         Ok(out.quit)
     }
 
+    /// The library's videos, as their cards open them, by title.
+    fn library_requests(&self) -> Vec<crate::playback::OpenRequest> {
+        self.app
+            .library()
+            .search(&fp_library::Query {
+                sort: fp_library::Sort::Title,
+                ..Default::default()
+            })
+            .unwrap_or_default()
+            .iter()
+            .map(crate::ui::library::request)
+            .collect()
+    }
+
     fn run_frames(&mut self, n: u32) -> Result<(), Error> {
         for _ in 0..n {
             self.step()?;
@@ -213,6 +227,8 @@ impl Sim {
                     "history" => Screen::History,
                     "sources" => Screen::Sources,
                     "settings" => Screen::Settings,
+                    "playlists" => Screen::Playlists,
+                    "upnext" => Screen::UpNext,
                     other => return Err(format!("no screen {other:?}").into()),
                 };
                 let ui = &mut self.app.ui;
@@ -245,7 +261,6 @@ impl Sim {
                             ));
                             SettingsTab::Controller
                         }
-                        "device" => SettingsTab::Device,
                         "haptics" => SettingsTab::Haptics,
                         "remote" => SettingsTab::Remote,
                         "updates" => SettingsTab::Updates,
@@ -518,6 +533,79 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
+            // The form adding a source of a kind: `add-source library`.
+            Some("add-source") => {
+                let kind = parts.get(1).ok_or("add-source needs a kind")?;
+                let kind: fp_sources::SourceKind =
+                    serde_json::from_value(serde_json::Value::String(kind.to_string()))
+                        .map_err(|e| format!("no source kind {kind:?}: {e}"))?;
+                self.app.ui.screen = crate::ui::Screen::Sources;
+                self.app.ui.source = None;
+                self.app.ui.source_form = Some(crate::ui::SourceForm {
+                    kind,
+                    ..Default::default()
+                });
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // The library's videos made a playlist, as Add to playlist does:
+            // `playlist NAME`.
+            Some("playlist") => {
+                let name = parts.get(1).ok_or("playlist needs a name")?.to_string();
+                let reqs = self.library_requests();
+                self.app.apply(crate::ui::Action::AddToPlaylist {
+                    playlist: None,
+                    name,
+                    reqs,
+                });
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // The first playlist's page: `open-playlist`.
+            Some("open-playlist") => {
+                let first = self.app.library().playlists()?.into_iter().next();
+                self.app.ui.screen = crate::ui::Screen::Playlists;
+                self.app.ui.playlist = first.map(|p| p.id);
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // The library's videos queued with Add to queue: `queue-all`.
+            Some("queue-all") => {
+                for req in self.library_requests() {
+                    self.app
+                        .apply(crate::ui::Action::Queue { req, next: false });
+                }
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // The first video's details, as its title opens them: `details`.
+            Some("details") => {
+                let first = self.app.library().search(&fp_library::Query {
+                    sort: fp_library::Sort::Title,
+                    limit: Some(1),
+                    ..Default::default()
+                })?;
+                self.app.ui.details = first.first().map(|r| r.id);
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // Up next, as the control bar's button shows it: `up-next`.
+            Some("up-next") => {
+                self.app.apply(crate::ui::Action::ShowUpNext);
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            // The picker for the library's first video: `pick`.
+            Some("pick") => {
+                let reqs: Vec<_> = self.library_requests().into_iter().take(1).collect();
+                let title = reqs
+                    .first()
+                    .map(crate::playback::OpenRequest::shown_title)
+                    .unwrap_or_default();
+                self.app.ui.picking = Some(crate::ui::Picking { reqs, title });
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
             // The form editing a source, as its pencil opens: `edit-source ID`.
             Some("edit-source") => {
                 let id = parts.get(1).ok_or("edit-source needs a source")?;
@@ -531,14 +619,23 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
-            // The Folders tab of the headset's own page: `local-folders`.
-            Some("local-folders") => {
+            // The Folders tab of the library open, as its chip opens it:
+            // `library-folders`.
+            Some("library-folders") => {
                 if let Some(crate::ui::SourceView {
-                    page: crate::ui::SourcePage::Local(l),
+                    source,
+                    page: crate::ui::SourcePage::Library(l),
                     ..
                 }) = self.app.ui.source.as_mut()
                 {
                     l.folders = true;
+                    l.folder = Some(crate::ui::Browse {
+                        source: source.clone(),
+                        loading: true,
+                        ..Default::default()
+                    });
+                    let source = source.clone();
+                    self.app.browse(source, None);
                 }
                 self.app.repaint_all();
                 self.run_frames(3)?;

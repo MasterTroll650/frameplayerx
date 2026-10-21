@@ -41,8 +41,9 @@ mod xml;
 
 pub use cache::{CacheOptions, CacheStats};
 pub use config::{
-    Credentials, DlnaConfig, FeedConfig, HttpConfig, LocalConfig, MediaBrowserConfig, SmbConfig,
-    SourceConfig, SourceKind, default_config_path, load_configs, save_configs,
+    CardRef, Credentials, DlnaConfig, FeedConfig, HttpConfig, LibraryConfig, LocalConfig,
+    MediaBrowserConfig, SmbConfig, SourceConfig, SourceKind, default_config_path, load_configs,
+    save_configs,
 };
 pub use dlna::{DlnaDevice, DlnaSource, SsdpResponse, discover};
 pub use error::{Error, Result};
@@ -148,6 +149,7 @@ pub fn sidecars_from_folder<S: Source + ?Sized>(source: &S, video: &Entry) -> Re
 pub fn build(config: &SourceConfig) -> Result<Box<dyn Source>> {
     Ok(match config {
         SourceConfig::Local(c) => Box::new(LocalSource::new(c)),
+        SourceConfig::Library(c) => Box::new(LocalSource::library(c)),
         SourceConfig::Http(c) => Box::new(HttpDirSource::new(c)?),
         SourceConfig::WebDav(c) => Box::new(WebDavSource::new(c)?),
         SourceConfig::Dlna(c) => Box::new(DlnaSource::new(c)?),

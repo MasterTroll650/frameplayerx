@@ -51,10 +51,6 @@ pub const UI_SCALES: std::ops::RangeInclusive<f32> = 0.8..=1.5;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Local folders indexed into the library.
-    pub library_folders: Vec<PathBuf>,
-    /// Also index microSD cards and USB drives when they are mounted.
-    pub index_removable: bool,
     /// Use the V4L2 hardware decoder when available.
     pub hardware_decoding: bool,
     /// ALSA device ("default" routes to PipeWire on SteamOS).
@@ -112,18 +108,7 @@ pub struct PanelOffsets {
 
 impl Default for Settings {
     fn default() -> Self {
-        let mut library_folders = Vec::new();
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-            for d in ["Videos", "Downloads"] {
-                let p = home.join(d);
-                if p.is_dir() {
-                    library_folders.push(p);
-                }
-            }
-        }
         Settings {
-            library_folders,
-            index_removable: true,
             hardware_decoding: true,
             audio_device: "default".into(),
             volume: 1.0,

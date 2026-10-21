@@ -108,6 +108,16 @@ it into P010 planes in a compute pass.
 shared pieces in `ui/page.rs`. Browsing a network source writes nothing to
 the database; a video gets a row when it's opened.
 
+**Libraries and cards.** A library is a source (`SourceConfig::Library`)
+whose folder is scanned into the database under its own id
+(`Library::scan_folder`), on start, when its card is mounted, when its page
+opens and on Scan now (`app/tasks.rs`). Files on microSD cards and USB
+drives are located as `volume:<filesystem ID>/<path on the card>`
+(`fp_core::volume`): the local source lists them so, the scanner stores
+them so, and the opener resolves them to wherever the card is mounted, so
+two cards with the same label and folders never share rows. A card's ID
+comes from `/dev/disk/by-uuid`.
+
 **Watch sync.** Servers that keep watch state (Jellyfin and Emby, HereSphere
 APIs that name an `eventServer`) also implement `Source::watch_session` and
 `Source::report_watch` (`fp-sources/src/watch.rs`). The open video's `Watch`
@@ -340,7 +350,7 @@ what a crash report contains and where it goes, with the report itself on
 request; only **Send report** sends it. The report holds the app and
 system versions, what happened, and that run's log (its first 8 KB and
 last 40 KB) with every video title and location in the library, everything
-in `sources.json`, the library folders, haptic devices, URLs, IP addresses,
+in `sources.json` (libraries included), haptic devices, URLs, IP addresses,
 email addresses, paths under home and media folders, and media file names
 replaced by placeholders such as `<video 1>` (`crates/frameplayerx/src/crash.rs`).
 

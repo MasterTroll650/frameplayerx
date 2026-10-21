@@ -21,9 +21,9 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 - **VR and flat videos**: plays 180°, 360°, fisheye and flat videos, in 2D or 3D. The format is detected automatically, and you can change it for any video
 - **Hardware decoding**: HEVC (H.265) in 8 and 10 bits and H.264, both up to 8K, and VP9 play on the Frame's own video decoder. Anything else, AV1 included, plays with software decoding
 - **Picture adjustments**: position, zoom, depth, picture settings and fisheye lens calibration, saved for each video, and a screen that follows your head for watching lying down
-- **Videos on the headset**: finds videos in the Videos and Downloads folders and on microSD cards and USB drives, including cards formatted on Windows or a Mac
+- **Videos on the headset**: browse any folder on the headset, a microSD card or a USB drive, including cards formatted on Windows or a Mac, and make libraries of your folders, with thumbnails, filters and sorting
 - **Media servers**: browse and play from Jellyfin, Emby, any server with a DeoVR feed or HereSphere API, network shares (SMB), WebDAV, DLNA servers and web folders. Jellyfin, Emby and HereSphere APIs hear what you watch, so their resume points, watched marks and play counts stay in step with the headset
-- **Watch history**: carry on where you left off, and mark favorites and ratings
+- **Watch history, Up next and playlists**: carry on where you left off, queue what plays next, keep playlists of videos from any source, and mark favorites and ratings
 - **PIN locks**: hide a source behind a PIN until you unlock it
 - **Passthrough videos**: see your room around the people in passthrough videos, and behind green or blue screens
 - **Subtitles and spatial audio**: subtitles from a file or inside the video, picked in your language and shown in any script, and 360° audio that follows your head
@@ -68,7 +68,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 
      For `pair`, open Steam Settings › Developer › Pair new host on the headset and keep it showing.
 
-2. **Start it** from the Steam library on the headset. FramePlayerX finds the videos on the headset and its cards and drives by itself. Add a media server under **Sources › Add source**.
+2. **Start it** from the Steam library on the headset. Browse the headset and its cards under **On this device**, and add a library of a folder, or a media server, under **Sources › Add source**.
 
 To update later, open **Settings › Updates** and press **Download and install** when a new version is listed, then **Restart now**. To remove it again, see [Uninstall](docs/USER-GUIDE.md#uninstall) in the user guide.
 

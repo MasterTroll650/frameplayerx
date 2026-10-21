@@ -48,6 +48,8 @@ impl fmt::Debug for Credentials {
 pub enum SourceKind {
     /// A local folder (internal storage, microSD, USB drive).
     Local,
+    /// A folder on the headset or a card, scanned for videos.
+    Library,
     /// An HTTP(S) server with autoindex directory listings.
     Http,
     #[serde(rename = "webdav")]
@@ -72,6 +74,7 @@ impl SourceKind {
     pub fn label(&self) -> &'static str {
         match self {
             SourceKind::Local => "Local folder",
+            SourceKind::Library => "Library",
             SourceKind::Http => "HTTP",
             SourceKind::WebDav => "WebDAV",
             SourceKind::Dlna => "DLNA",
@@ -91,6 +94,42 @@ pub struct LocalConfig {
     pub name: String,
     /// Folder shown at the root of the source.
     pub root: PathBuf,
+}
+
+/// A library: a folder on the headset or on a microSD card or USB drive,
+/// scanned for videos.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LibraryConfig {
+    /// Stable identifier chosen by the app.
+    pub id: String,
+    pub name: String,
+    /// The folder: a path on the headset, or on [`Self::card`] when set.
+    pub folder: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<CardRef>,
+}
+
+/// A microSD card or USB drive, by its filesystem's ID
+/// ([`fp_core::volume`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CardRef {
+    pub id: String,
+    /// What it was mounted as when the library was made, to name it while
+    /// it is out.
+    pub label: String,
+}
+
+impl LibraryConfig {
+    /// Where its videos are: the folder's path, or its location on the
+    /// card.
+    pub fn root(&self) -> String {
+        let folder = self.folder.to_string_lossy();
+        match &self.card {
+            Some(c) if folder.is_empty() => format!("{}{}", fp_core::volume::SCHEME, c.id),
+            Some(c) => format!("{}{}/{folder}", fp_core::volume::SCHEME, c.id),
+            None => folder.into_owned(),
+        }
+    }
 }
 
 /// An HTTP(S) autoindex server or a WebDAV share.
@@ -265,6 +304,7 @@ impl fmt::Debug for DlnaConfig {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SourceConfig {
     Local(LocalConfig),
+    Library(LibraryConfig),
     /// An HTTP(S) server with autoindex listings.
     Http(HttpConfig),
     #[serde(rename = "webdav")]
@@ -289,6 +329,7 @@ impl SourceConfig {
     pub fn id(&self) -> &str {
         match self {
             SourceConfig::Local(c) => &c.id,
+            SourceConfig::Library(c) => &c.id,
             SourceConfig::Http(c) | SourceConfig::WebDav(c) => &c.id,
             SourceConfig::Dlna(c) => &c.id,
             SourceConfig::DeoVr(c) | SourceConfig::HereSphere(c) => &c.id,
@@ -301,6 +342,7 @@ impl SourceConfig {
     pub fn name(&self) -> &str {
         match self {
             SourceConfig::Local(c) => &c.name,
+            SourceConfig::Library(c) => &c.name,
             SourceConfig::Http(c) | SourceConfig::WebDav(c) => &c.name,
             SourceConfig::Dlna(c) => &c.name,
             SourceConfig::DeoVr(c) | SourceConfig::HereSphere(c) => &c.name,
@@ -313,6 +355,7 @@ impl SourceConfig {
     pub fn kind(&self) -> SourceKind {
         match self {
             SourceConfig::Local(_) => SourceKind::Local,
+            SourceConfig::Library(_) => SourceKind::Library,
             SourceConfig::Http(_) => SourceKind::Http,
             SourceConfig::WebDav(_) => SourceKind::WebDav,
             SourceConfig::Dlna(_) => SourceKind::Dlna,
@@ -327,6 +370,11 @@ impl SourceConfig {
     pub fn address(&self) -> String {
         match self {
             SourceConfig::Local(c) => c.root.display().to_string(),
+            SourceConfig::Library(c) => match &c.card {
+                Some(card) if c.folder.as_os_str().is_empty() => card.label.clone(),
+                Some(card) => format!("{}/{}", card.label, c.folder.display()),
+                None => c.folder.display().to_string(),
+            },
             SourceConfig::Http(c) | SourceConfig::WebDav(c) => redact(&c.url),
             SourceConfig::Dlna(c) => redact(&c.location),
             SourceConfig::DeoVr(c) | SourceConfig::HereSphere(c) => redact(&c.url),

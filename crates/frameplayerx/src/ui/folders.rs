@@ -105,7 +105,13 @@ pub fn page(ui: &mut egui::Ui, v: &mut View, title: &str, root: &str, b: &mut Br
                 });
             }
             for e in &shown {
-                if row(ui, v, e) {
+                let (open, more) = row(ui, v, e);
+                if more {
+                    v.state.picking = Some(super::Picking {
+                        reqs: queue(&[e]),
+                        title: e.name.clone(),
+                    });
+                } else if open {
                     match e.kind {
                         EntryKind::Directory => go = Some(e.location.clone()),
                         _ => {
@@ -147,12 +153,13 @@ fn counts(shown: &[Entry]) -> String {
     parts.join("  ·  ")
 }
 
-/// One folder or video; true when clicked.
-fn row(ui: &mut egui::Ui, v: &mut View, e: &Entry) -> bool {
+/// One folder or video: whether it was clicked, and whether a video's "…"
+/// was (Play next, Add to queue, Add to playlist).
+fn row(ui: &mut egui::Ui, v: &mut View, e: &Entry) -> (bool, bool) {
     let (rect, resp) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), 88.0), Sense::click());
     if !ui.is_rect_visible(rect) {
-        return false;
+        return (false, false);
     }
     let t = ui
         .ctx()
@@ -238,11 +245,34 @@ fn row(ui: &mut egui::Ui, v: &mut View, e: &Entry) -> bool {
         theme::icon(22.0),
         theme::TEXT_3.lerp_to_gamma(Color32::WHITE, t),
     );
-    resp.clicked()
+    let mut more = false;
+    if e.kind == EntryKind::Video {
+        let r = egui::Rect::from_center_size(
+            rect.right_center() - Vec2::new(80.0, 0.0),
+            Vec2::splat(48.0),
+        );
+        let m = ui.interact(r, resp.id.with("more"), Sense::click());
+        let h = ui.ctx().animate_bool_with_time(m.id, m.hovered(), 0.12);
+        ui.painter().circle_filled(
+            r.center(),
+            24.0,
+            Color32::from_white_alpha((h * 20.0) as u8),
+        );
+        ui.painter().text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            icons::DOTS_THREE,
+            theme::icon(24.0),
+            theme::TEXT_2.lerp_to_gamma(Color32::WHITE, h.max(t * 0.6)),
+        );
+        more = m.tip("Play next, add to a queue or playlist").clicked();
+    }
+    (resp.clicked() && !more, more)
 }
 
 fn short_location(l: &str) -> String {
-    let l = l.split('#').next().unwrap_or(l);
+    let l = crate::libraries::display_location(l);
+    let l = l.split('#').next().unwrap_or(&l);
     if l.chars().count() > 60 {
         let tail: String = l
             .chars()

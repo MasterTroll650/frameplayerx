@@ -1,21 +1,27 @@
-//! Local folders: internal storage, microSD cards, USB drives.
+//! Local folders and libraries: internal storage, microSD cards, USB
+//! drives.
 //!
-//! Locations are absolute paths. Files open as [`fp_core::source::FileSource`].
+//! Locations are absolute paths, and on cards `volume:` locations
+//! ([`fp_core::volume`]), which listings hand out and every method takes.
+//! Files open as [`fp_core::source::FileSource`].
 
-use crate::config::{LocalConfig, SourceKind};
+use crate::config::{LibraryConfig, LocalConfig, SourceKind};
 use crate::error::{Error, Result};
 use crate::timeutil::system_time_to_unix;
 use crate::{Source, dir_entry, file_entry, sort_entries};
 use fp_core::source::{ByteSource, Entry, FileSource};
+use fp_core::volume;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// A local folder.
+/// A local folder or a library.
 #[derive(Clone, Debug)]
 pub struct LocalSource {
     id: String,
     name: String,
-    root: PathBuf,
+    kind: SourceKind,
+    /// The location listed by `list(None)`.
+    root: String,
 }
 
 impl LocalSource {
@@ -24,14 +30,32 @@ impl LocalSource {
         LocalSource {
             id: config.id.clone(),
             name: config.name.clone(),
-            root: config.root.clone(),
+            kind: SourceKind::Local,
+            root: config.root.to_string_lossy().into_owned(),
         }
     }
 
-    /// Folder listed by `list(None)`.
-    pub fn root(&self) -> &Path {
+    /// Creates the source browsing a library's folder.
+    pub fn library(config: &LibraryConfig) -> LocalSource {
+        LocalSource {
+            id: config.id.clone(),
+            name: config.name.clone(),
+            kind: SourceKind::Library,
+            root: config.root(),
+        }
+    }
+
+    /// The location listed by `list(None)`.
+    pub fn root(&self) -> &str {
         &self.root
     }
+}
+
+/// Where `location` is now.
+fn path_of(location: &str) -> Result<PathBuf> {
+    volume::resolve(location)
+        .map(|p| PathBuf::from(p.as_ref()))
+        .ok_or(Error::NotInserted)
 }
 
 fn not_found_or_io(e: std::io::Error, path: &Path) -> Error {
@@ -52,17 +76,17 @@ impl Source for LocalSource {
     }
 
     fn kind(&self) -> SourceKind {
-        SourceKind::Local
+        self.kind
     }
 
     fn describe(&self) -> String {
-        format!("local folder {}", self.root.display())
+        format!("local folder {}", self.root)
     }
 
     /// Lists a folder, following symbolic links and skipping hidden files
     /// and names that are not valid UTF-8.
     fn list(&self, location: Option<&str>) -> Result<Vec<Entry>> {
-        let dir = location.map_or_else(|| self.root.clone(), PathBuf::from);
+        let dir = path_of(location.unwrap_or(&self.root))?;
         let read = std::fs::read_dir(&dir).map_err(|e| not_found_or_io(e, &dir))?;
         let mut out = Vec::new();
         for item in read {
@@ -85,7 +109,7 @@ impl Source for LocalSource {
             let Ok(meta) = std::fs::metadata(&path) else {
                 continue;
             };
-            let Some(location) = path.to_str().map(str::to_string) else {
+            let Some(location) = path.to_str().map(|p| volume::stable(p).into_owned()) else {
                 continue;
             };
             let modified = meta.modified().ok().map(system_time_to_unix);
@@ -100,17 +124,25 @@ impl Source for LocalSource {
     }
 
     fn open(&self, location: &str) -> Result<Arc<dyn ByteSource>> {
-        let path = Path::new(location);
-        let file = FileSource::open(path).map_err(|e| not_found_or_io(e, path))?;
+        let path = path_of(location)?;
+        let file = FileSource::open(&path).map_err(|e| not_found_or_io(e, &path))?;
         Ok(Arc::new(file))
     }
 
     fn parent(&self, location: &str) -> Option<String> {
-        Path::new(location)
-            .parent()
-            .and_then(Path::to_str)
-            .filter(|p| !p.is_empty())
-            .map(str::to_string)
+        match volume::split(location) {
+            // A card's top: the folder it is mounted in.
+            Some((_, "")) => self.parent(volume::resolve(location)?.as_ref()),
+            Some((id, path)) => Some(match path.rsplit_once('/') {
+                Some((up, _)) => format!("{}{id}/{up}", volume::SCHEME),
+                None => format!("{}{id}", volume::SCHEME),
+            }),
+            None => Path::new(location)
+                .parent()
+                .and_then(Path::to_str)
+                .filter(|p| !p.is_empty())
+                .map(str::to_string),
+        }
     }
 }
 
@@ -194,5 +226,35 @@ mod tests {
         ));
         assert_eq!(src.kind(), SourceKind::Local);
         assert!(src.describe().contains(dir.path().to_str().unwrap()));
+    }
+
+    #[test]
+    fn libraries_on_cards_that_are_out() {
+        let card = LibraryConfig {
+            id: "lib".into(),
+            name: "Clips".into(),
+            folder: "Clips".into(),
+            card: Some(crate::config::CardRef {
+                id: "FFFF-0000".into(),
+                label: "SDCARD".into(),
+            }),
+        };
+        let src = LocalSource::library(&card);
+        assert_eq!(src.root(), "volume:FFFF-0000/Clips");
+        assert_eq!(src.kind(), SourceKind::Library);
+        assert!(matches!(src.list(None), Err(Error::NotInserted)));
+        assert!(matches!(
+            src.open("volume:FFFF-0000/Clips/a.mp4"),
+            Err(Error::NotInserted)
+        ));
+        assert_eq!(
+            src.parent("volume:FFFF-0000/Clips/a.mp4").as_deref(),
+            Some("volume:FFFF-0000/Clips")
+        );
+        assert_eq!(
+            src.parent("volume:FFFF-0000/Clips").as_deref(),
+            Some("volume:FFFF-0000")
+        );
+        assert_eq!(src.parent("volume:FFFF-0000"), None, "not mounted");
     }
 }

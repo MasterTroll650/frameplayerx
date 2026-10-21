@@ -273,6 +273,13 @@ pub(crate) fn apply_item_details(
     if let Some(ticks) = num(v, "RunTimeTicks") {
         entry.duration = Some(ticks_to_seconds(ticks));
     }
+    if let Some(overview) = text(v, "Overview").filter(|o| !o.trim().is_empty()) {
+        entry.description = Some(overview);
+    }
+    let tags = catalog::strings(v, "Tags");
+    if !tags.is_empty() {
+        entry.tags = tags;
+    }
     if let Some(user) = get(v, "UserData") {
         entry.resume = Some(
             num(user, "PlaybackPositionTicks")
@@ -353,6 +360,8 @@ pub struct MediaBrowserSource {
     max_height: Option<u32>,
     auth: Mutex<Option<AuthState>>,
     parents: Mutex<HashMap<String, String>>,
+    /// The server's tags and when they were read.
+    tags: Mutex<Option<(std::time::Instant, Vec<String>)>>,
 }
 
 /// Authentication and session state for an active server connection.
@@ -419,6 +428,7 @@ impl MediaBrowserSource {
             max_height: config.max_height,
             auth: Mutex::new(auth),
             parents: Mutex::new(HashMap::new()),
+            tags: Mutex::new(None),
         })
     }
 
@@ -826,7 +836,8 @@ impl Source for MediaBrowserSource {
             return Ok(entry.clone());
         };
         let (_, user_id) = self.client()?;
-        let path = format!("/Users/{user_id}/Items/{id}?Fields=MediaSources,Chapters,Path");
+        let path =
+            format!("/Users/{user_id}/Items/{id}?Fields=MediaSources,Chapters,Path,Overview,Tags");
         let v = self.api_get_json(&path)?;
         let mut out = entry.clone();
         apply_item_details(&mut out, &v, &self.base_url, &id, self.max_height);
@@ -1115,6 +1126,8 @@ mod tests {
             "Name": "Demo VR Scene",
             "RunTimeTicks": 6000000000.0,
             "Path": "/media/demo_180_sbs.mp4",
+            "Overview": "A demo scene.",
+            "Tags": ["Beach", "Sunset"],
             "MediaSources": [
                 {
                     "Id": "ms1",
@@ -1178,6 +1191,8 @@ mod tests {
 
         assert_eq!(entry.duration, Some(600.0));
         assert_eq!(entry.size, Some(104857600));
+        assert_eq!(entry.description.as_deref(), Some("A demo scene."));
+        assert_eq!(entry.tags, ["Beach", "Sunset"]);
         assert!(entry.format.is_some());
         // The embedded Arabic track comes with the file, not as a download.
         let subs: Vec<_> = entry
