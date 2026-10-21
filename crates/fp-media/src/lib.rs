@@ -20,6 +20,7 @@ pub mod frame;
 pub mod info;
 pub(crate) mod input;
 pub(crate) mod io;
+pub(crate) mod nal;
 pub mod player;
 pub mod subtitle;
 pub mod thumb;

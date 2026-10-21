@@ -806,6 +806,11 @@ fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
         if pkt_serial != serial {
             serial = pkt_serial;
             dec.flush();
+            if let Some((fs, target)) = *lock(&sh.seek_floor)
+                && fs == serial
+            {
+                dec.skip_before(target, default_duration);
+            }
         }
         let pkt_ptr = pkt
             .as_ref()
@@ -836,15 +841,6 @@ fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
                         let dur = Some(dec.frame_duration(&frame))
                             .filter(|d| *d > 0.0)
                             .unwrap_or(default_duration);
-                        let floor = *lock(&sh.seek_floor);
-                        if let Some((fs, target)) = floor
-                            && fs == serial
-                            && pts + dur * 0.5 < target
-                        {
-                            // SAFETY: valid frame; drop its reference.
-                            unsafe { ff::av_frame_unref(frame.as_ptr()) };
-                            continue;
-                        }
                         let vf = match conv.convert(frame.take_raw(), pts, dur, serial) {
                             Ok(v) => Arc::new(v),
                             Err(e) => {
