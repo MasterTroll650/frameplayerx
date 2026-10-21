@@ -587,8 +587,9 @@ impl App {
                     cached,
                 };
             // A DeoVR feed's root can take seconds.
-            if let Some(lib) = fp_sources::FeedLibrary::load(&path) {
-                let _ = tx.send(listed(Ok(lib), true));
+            let saved = fp_sources::FeedLibrary::load(&path);
+            if let Some(lib) = &saved {
+                let _ = tx.send(listed(Ok(lib.clone()), true));
             }
             let Some(feed) = src.as_scene_feed() else {
                 return listed(Err("not a scene feed".into()), false);
@@ -601,6 +602,9 @@ impl App {
             let scenes = feed.scan();
             if let Some(s) = &scenes {
                 lib.merge_scan(s.clone());
+            }
+            if let Some(saved) = &saved {
+                lib.keep_details(saved);
             }
             if let Err(e) = lib.save(&path) {
                 log::warn!("saving the listing of {source}: {e}");

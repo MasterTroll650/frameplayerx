@@ -15,6 +15,7 @@ use crate::timeutil::parse_iso8601;
 use crate::urlutil::encode_form_value;
 use fp_core::format::VideoFormat;
 use fp_core::source::{Entry, EntryKind};
+use fp_core::sync::lock;
 use serde_json::Value;
 
 /// Fields asked for in listings, on top of those always sent (name, type,
@@ -23,7 +24,10 @@ const LIST_FIELDS: &str = "Overview,Genres,Path,DateCreated,ChildCount,PremiereD
 
 /// Fields asked for one item's details.
 const DETAIL_FIELDS: &str =
-    "Overview,Genres,Studios,People,Path,DateCreated,ChildCount,PremiereDate,MediaSources";
+    "Overview,Genres,Tags,Studios,People,Path,DateCreated,ChildCount,PremiereDate,MediaSources";
+
+/// What a tag can be on: films, series, episodes and other videos.
+const TAGGED: [&str; 5] = ["Movie", "Series", "Episode", "Video", "MusicVideo"];
 
 /// Image types listings ask tags for.
 const IMAGES: &str = "EnableImageTypes=Primary,Backdrop,Thumb&ImageTypeLimit=1";
@@ -114,6 +118,8 @@ pub struct MbItem {
     /// Age rating ("PG-13").
     pub official_rating: Option<String>,
     pub genres: Vec<String>,
+    /// Tags (details only).
+    pub tags: Vec<String>,
     /// Studios (details only).
     pub studios: Vec<String>,
     /// Cast and crew as (name, role), actors first (details only).
@@ -275,6 +281,8 @@ pub struct MbQuery {
     pub start: usize,
     /// Items per page.
     pub limit: usize,
+    /// Only items with one of these tags.
+    pub tags: Vec<String>,
 }
 
 impl Default for MbQuery {
@@ -289,11 +297,22 @@ impl Default for MbQuery {
             filter: MbFilter::All,
             start: 0,
             limit: 60,
+            tags: Vec::new(),
         }
     }
 }
 
 impl MbQuery {
+    /// Everything on the server with `tag`, by name.
+    pub fn tagged(tag: &str) -> MbQuery {
+        MbQuery {
+            types: TAGGED.iter().map(ToString::to_string).collect(),
+            recursive: true,
+            tags: vec![tag.to_string()],
+            ..MbQuery::default()
+        }
+    }
+
     /// What opening `item` lists: a film library its films, a TV library
     /// its series, a collection or folder what is in it.
     pub fn children(item: &MbItem) -> MbQuery {
@@ -342,6 +361,9 @@ impl MbQuery {
         if !search.is_empty() {
             q += &format!("&SearchTerm={}", encode_form_value(search));
         }
+        if !self.tags.is_empty() {
+            q += &format!("&Tags={}", encode_form_value(&self.tags.join("|")));
+        }
         q
     }
 }
@@ -355,6 +377,23 @@ pub(crate) const SEARCH_SECTIONS: [(&str, &[&str]); 4] = [
     ("Collections", &["BoxSet"]),
     ("Videos", &["Video", "MusicVideo"]),
 ];
+
+/// The tags (at most 20) that have every word of `text` in them, ignoring
+/// case.
+pub(crate) fn matching_tags(tags: &[String], text: &str) -> Vec<String> {
+    let words: Vec<String> = text.split_whitespace().map(str::to_lowercase).collect();
+    if words.is_empty() {
+        return Vec::new();
+    }
+    tags.iter()
+        .filter(|t| {
+            let t = t.to_lowercase();
+            words.iter().all(|w| t.contains(w.as_str()))
+        })
+        .take(20)
+        .cloned()
+        .collect()
+}
 
 /// Path and query string of one section of a search. It asks for no order,
 /// as Jellyfin's web client doesn't, so the server ranks the matches itself:
@@ -518,6 +557,7 @@ pub(crate) fn parse_item(v: &Value, base: &str) -> Option<MbItem> {
             .map(|r| r as f32),
         official_rating: text(v, "OfficialRating"),
         genres: strings(v, "Genres"),
+        tags: strings(v, "Tags"),
         studios: array(v, "Studios")
             .iter()
             .filter_map(|s| text(s, "Name").or_else(|| s.as_str().map(str::to_string)))
@@ -554,7 +594,7 @@ pub(crate) fn parse_item(v: &Value, base: &str) -> Option<MbItem> {
     })
 }
 
-fn strings(v: &Value, key: &str) -> Vec<String> {
+pub(super) fn strings(v: &Value, key: &str) -> Vec<String> {
     array(v, key)
         .iter()
         .filter_map(|s| s.as_str())
@@ -644,7 +684,38 @@ impl MediaBrowserSource {
                 found.push((section, items));
             }
         }
+        // The server searches titles only: what carries a tag with the
+        // words in it is a section of its own.
+        let tags = matching_tags(&self.all_tags().unwrap_or_default(), text);
+        if !tags.is_empty() {
+            let query = MbQuery {
+                tags,
+                limit,
+                ..MbQuery::tagged("")
+            };
+            let items = self.items(&query)?.items;
+            if !items.is_empty() {
+                found.push(("Tagged", items));
+            }
+        }
         Ok(found)
+    }
+
+    /// Every tag on the server's videos, read again after a few minutes.
+    fn all_tags(&self) -> Result<Vec<String>> {
+        if let Some((at, tags)) = lock(&self.tags).as_ref()
+            && at.elapsed() < std::time::Duration::from_secs(300)
+        {
+            return Ok(tags.clone());
+        }
+        let user = self.user()?;
+        let v = self.api_get_json(&format!(
+            "/Items/Filters?UserId={user}&Recursive=true&IncludeItemTypes={}",
+            TAGGED.join(",")
+        ))?;
+        let tags = strings(&v, "Tags");
+        *lock(&self.tags) = Some((std::time::Instant::now(), tags.clone()));
+        Ok(tags)
     }
 
     /// Partly watched films and episodes, most recent first.
@@ -905,6 +976,7 @@ mod tests {
             filter: MbFilter::Unplayed,
             start: 60,
             limit: 60,
+            tags: Vec::new(),
         };
         let p = q.path("u1");
         assert!(p.starts_with("/Users/u1/Items?Recursive=true&SortBy=DateCreated,SortName"));
@@ -922,6 +994,32 @@ mod tests {
         }
         let all = MbQuery::default().path("u1");
         assert!(!all.contains("ParentId") && !all.contains("Filters") && !all.contains("Search"));
+    }
+
+    #[test]
+    fn tags_are_searched_and_listed() {
+        let tags: Vec<String> = ["Beach Day", "beach", "Sunset", "Night Beach Party"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            matching_tags(&tags, "BEACH"),
+            ["Beach Day", "beach", "Night Beach Party"]
+        );
+        assert_eq!(matching_tags(&tags, "beach party"), ["Night Beach Party"]);
+        assert!(matching_tags(&tags, "  ").is_empty());
+        let p = MbQuery::tagged("Beach Day").path("u1");
+        assert!(p.contains("&Tags=Beach%20Day"), "{p}");
+        assert!(p.contains("Recursive=true"), "{p}");
+        assert!(
+            p.contains("IncludeItemTypes=Movie,Series,Episode,Video,MusicVideo"),
+            "{p}"
+        );
+        let two = MbQuery {
+            tags: vec!["a".into(), "b".into()],
+            ..MbQuery::default()
+        };
+        assert!(two.path("u1").contains("&Tags=a%7Cb"));
     }
 
     #[test]

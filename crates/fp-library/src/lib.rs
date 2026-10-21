@@ -30,8 +30,8 @@ mod worker;
 pub use error::{Error, Result};
 pub use image::RgbaImage;
 pub use library::{
-    Hidden, HiddenRoot, Library, MediaUpsert, PlaybackUpdate, UpsertOutcome, UpsertStatus,
-    WATCHED_FRACTION, default_db_path,
+    Hidden, HiddenRoot, Library, MediaUpsert, PlaybackUpdate, SourceDetails, UpsertOutcome,
+    UpsertStatus, WATCHED_FRACTION, default_db_path,
 };
 pub use playlist::{Playlist, PlaylistEntry};
 pub use query::{Query, Sort, SortDirection, StereoFilter};

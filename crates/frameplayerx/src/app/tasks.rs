@@ -365,6 +365,22 @@ impl App {
                     f.scene_loaded(&url, *result, full);
                 }
                 self.pump_feed();
+                // A batch of details done: kept with the listing, so a search
+                // finds their tags next time too.
+                if self.feed_busy == 0
+                    && self.feed_queue.is_empty()
+                    && let Some(f) = self.ui.feed_page(&source).filter(|f| f.unsaved > 0)
+                {
+                    f.unsaved = 0;
+                    let lib = f.library();
+                    self.jobs.spawn("feed-save", move || {
+                        let path = fp_sources::FeedLibrary::cache_path(&source);
+                        if let Err(e) = lib.save(&path) {
+                            log::warn!("saving the listing of {source}: {e}");
+                        }
+                        Job::Done
+                    });
+                }
             }
             Job::Toast(t) => self.ui.toast(t),
             Job::Done => {}

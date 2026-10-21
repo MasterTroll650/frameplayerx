@@ -194,12 +194,25 @@ pub struct MediaUpsert {
     pub thumbnail_url: Option<String>,
     /// What the source says about it; `None` keeps what was stored.
     pub description: Option<String>,
+    /// The source's tags for it, replacing those stored; `None` keeps them
+    /// (a scan's files have none of their own).
+    pub tags: Option<Vec<String>>,
     /// Chapters from the source. `Some` replaces earlier source markers;
     /// user markers are never touched.
     pub source_markers: Option<Vec<(f64, String)>>,
     /// Treat the file as changed even when size and mtime match, so the
     /// worker probes it again.
     pub reset_metadata: bool,
+}
+
+/// What a video's source says about it, for [`Library::update_details`]:
+/// each field replaces what was stored when given.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SourceDetails<'a> {
+    pub title: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub thumbnail_url: Option<&'a str>,
+    pub tags: Option<&'a [String]>,
 }
 
 impl MediaUpsert {
@@ -220,6 +233,7 @@ impl MediaUpsert {
             subtitles: Vec::new(),
             thumbnail_url: None,
             description: None,
+            tags: None,
             source_markers: None,
             reset_metadata: false,
         }
@@ -261,6 +275,7 @@ impl MediaUpsert {
         u.duration = entry.duration.filter(|d| d.is_finite() && *d > 0.0);
         u.thumbnail_url = entry.thumbnail_url.clone();
         u.description = entry.description.clone();
+        u.tags = (!entry.tags.is_empty()).then(|| entry.tags.clone());
         u.scripts = entry.scripts.clone();
         u.subtitles = entry.subtitles.iter().map(|s| s.location.clone()).collect();
         u.source_markers = Some(entry.markers.clone());
@@ -422,6 +437,7 @@ struct ExistingRow {
     subtitles: String,
     thumbnail_url: Option<String>,
     description: Option<String>,
+    tags: Vec<String>,
     missing: bool,
 }
 
@@ -445,6 +461,7 @@ fn existing_row(conn: &Connection, location: &str) -> Result<Option<ExistingRow>
             subtitles: json(&r.subtitles)?,
             thumbnail_url: r.thumbnail_url,
             description: r.description,
+            tags: r.tags,
             missing: r.missing,
         }),
     })
@@ -524,6 +541,9 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
         if let Some(markers) = &u.source_markers {
             replace_source_markers(conn, id, markers)?;
         }
+        if let Some(tags) = &u.tags {
+            set_tags_conn(conn, id, tags)?;
+        }
         return Ok(UpsertOutcome {
             id,
             status: UpsertStatus::Added,
@@ -595,6 +615,12 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
     }
     if let Some(markers) = &u.source_markers {
         changed |= replace_source_markers(conn, old.id, markers)?;
+    }
+    if let Some(tags) = &u.tags
+        && normalize_tags(tags) != old.tags
+    {
+        set_tags_conn(conn, old.id, tags)?;
+        changed = true;
     }
     Ok(UpsertOutcome {
         id: old.id,
@@ -814,15 +840,21 @@ impl Library {
         self.with(|c| markers_conn(c, id))
     }
 
-    /// Every tag with its usage count, sorted by name.
+    /// Every tag on videos that aren't hidden, with how many of them carry
+    /// it, sorted by name.
     pub fn all_tags(&self) -> Result<Vec<TagCount>> {
+        let (shown, args) = match hidden_sql("m.", &self.hidden()) {
+            Some((sql, args)) => (format!("WHERE {sql}"), args),
+            None => (String::new(), Vec::new()),
+        };
         self.with(|c| {
-            let mut stmt = c.prepare_cached(
-                "SELECT t.name, COUNT(mt.media_id) FROM tags t
-                 LEFT JOIN media_tags mt ON mt.tag_id = t.id
-                 GROUP BY t.id ORDER BY t.name COLLATE NOCASE",
-            )?;
-            let rows = stmt.query_map([], |r| {
+            let mut stmt = c.prepare(&format!(
+                "SELECT t.name, COUNT(*) FROM tags t
+                 JOIN media_tags mt ON mt.tag_id = t.id
+                 JOIN media m ON m.id = mt.media_id {shown}
+                 GROUP BY t.id ORDER BY t.name COLLATE NOCASE"
+            ))?;
+            let rows = stmt.query_map(params_from_iter(args), |r| {
                 Ok(TagCount {
                     name: r.get(0)?,
                     count: r.get::<_, i64>(1)?.max(0) as usize,
@@ -1229,23 +1261,26 @@ impl Library {
         })
     }
 
-    /// What a video's source says about it now: its title, description and
-    /// thumbnail, each when given. The rest of the video is left alone.
-    pub fn update_details(
-        &self,
-        id: MediaId,
-        title: Option<&str>,
-        description: Option<&str>,
-        thumbnail_url: Option<&str>,
-    ) -> Result<()> {
-        self.with(|c| {
+    /// What a video's source says about it now: its title, description,
+    /// thumbnail and tags, each when given. The rest of the video is left
+    /// alone.
+    pub fn update_details(&self, id: MediaId, details: &SourceDetails<'_>) -> Result<()> {
+        self.in_tx(|c| {
             c.execute(
                 "UPDATE media SET title = COALESCE(?2, title),
                      description = COALESCE(?3, description),
                      thumbnail_url = COALESCE(?4, thumbnail_url)
                  WHERE id = ?1",
-                params![id.0, title, description, thumbnail_url],
+                params![
+                    id.0,
+                    details.title,
+                    details.description,
+                    details.thumbnail_url
+                ],
             )?;
+            if let Some(tags) = details.tags {
+                set_tags_conn(c, id, tags)?;
+            }
             Ok(())
         })
     }
@@ -1877,13 +1912,60 @@ mod tests {
         e.description = None;
         lib.upsert_entry("feed", &e).unwrap();
         assert_eq!(get(id).description.as_deref(), Some("Sun and sand."));
-        lib.update_details(id, Some("Beach day"), Some("Sun, sand and sea."), None)
-            .unwrap();
+        let details = SourceDetails {
+            title: Some("Beach day"),
+            description: Some("Sun, sand and sea."),
+            ..Default::default()
+        };
+        lib.update_details(id, &details).unwrap();
         let r = get(id);
         assert_eq!(r.title, "Beach day");
         assert_eq!(r.description.as_deref(), Some("Sun, sand and sea."));
-        lib.update_details(id, None, None, None).unwrap();
+        lib.update_details(id, &SourceDetails::default()).unwrap();
         assert_eq!(get(id).title, "Beach day", "nothing given, nothing changed");
+    }
+
+    #[test]
+    fn a_sources_tags_are_kept_and_locked_ones_left_out_of_the_list() {
+        let lib = lib();
+        let mut e = Entry::new("Beach", "http://feed/1", EntryKind::Video);
+        e.tags = vec!["Outdoor".into(), "POV".into()];
+        let id = lib.upsert_entry("feed", &e).unwrap().id;
+        assert_eq!(lib.get(id).unwrap().unwrap().tags, ["Outdoor", "POV"]);
+        // A listing without them keeps them; new ones replace them.
+        e.tags.clear();
+        lib.upsert_entry("feed", &e).unwrap();
+        assert_eq!(lib.get(id).unwrap().unwrap().tags, ["Outdoor", "POV"]);
+        let tags = vec!["Outdoor".to_string(), "Sunset".to_string()];
+        let details = SourceDetails {
+            tags: Some(&tags),
+            ..Default::default()
+        };
+        lib.update_details(id, &details).unwrap();
+        assert_eq!(lib.get(id).unwrap().unwrap().tags, ["Outdoor", "Sunset"]);
+        // A scan leaves a file's tags alone.
+        let mine = add(&lib, "/v/mine.mp4");
+        lib.set_tags(mine, &["Outdoor"]).unwrap();
+        lib.upsert(&MediaUpsert::new("/v/mine.mp4", "local"))
+            .unwrap();
+        assert_eq!(lib.get(mine).unwrap().unwrap().tags, ["Outdoor"]);
+
+        let counts = |lib: &Library| -> Vec<(String, usize)> {
+            lib.all_tags()
+                .unwrap()
+                .into_iter()
+                .map(|t| (t.name, t.count))
+                .collect()
+        };
+        assert_eq!(
+            counts(&lib),
+            [("Outdoor".to_string(), 2), ("Sunset".to_string(), 1)]
+        );
+        lib.set_hidden(Hidden {
+            sources: vec!["feed".into()],
+            ..Default::default()
+        });
+        assert_eq!(counts(&lib), [("Outdoor".to_string(), 1)]);
     }
 
     #[test]

@@ -57,6 +57,8 @@ pub struct FeedView {
     pub details: Option<Details>,
     /// Scenes whose details were asked for.
     pub requested: HashSet<String>,
+    /// Scenes whose details came since the listing was last saved.
+    pub unsaved: usize,
 }
 
 /// A scene's details page.
@@ -85,6 +87,7 @@ impl FeedView {
             shown: PAGE,
             details: None,
             requested: HashSet::new(),
+            unsaved: 0,
         }
     }
 
@@ -166,6 +169,7 @@ impl FeedView {
             Ok(info) => {
                 if let Some(s) = self.scenes.get_mut(url) {
                     s.apply(&info);
+                    self.unsaved += 1;
                 }
                 if full && let Some(d) = self.details.as_mut().filter(|d| d.url == url) {
                     d.loading = false;
@@ -243,15 +247,34 @@ impl FeedView {
     }
 
     /// Scenes of the group shown that need their details fetched to be
-    /// searched: those known by their address only (no scan said more),
-    /// not asked for yet.
+    /// searched, not asked for yet: those known by their address only (no
+    /// scan said more), and a DeoVR feed's, whose listing has no tags or
+    /// performers.
     fn unfilled(&self) -> Vec<String> {
+        let deovr = self.kind == SourceKind::DeoVr;
         self.scope()
             .iter()
             .filter(|u| !self.requested.contains(*u))
-            .filter(|u| self.scenes.get(*u).is_some_and(|s| s.bare && !s.detailed))
+            .filter(|u| {
+                self.scenes
+                    .get(*u)
+                    .is_some_and(|s| !s.detailed && (s.bare || deovr))
+            })
             .cloned()
             .collect()
+    }
+
+    /// The groups and scenes as shown, details included, to save as the
+    /// listing shown next time.
+    pub fn library(&self) -> FeedLibrary {
+        FeedLibrary {
+            groups: self.groups.clone(),
+            scenes: self
+                .order
+                .iter()
+                .filter_map(|u| self.scenes.get(u).cloned())
+                .collect(),
+        }
     }
 }
 
@@ -517,8 +540,9 @@ fn scene_grid(
     picked
 }
 
-/// Asks for the details of scenes listed by address only (HereSphere):
-/// cards on screen first; while searching, the rest of the group after.
+/// Asks for the details of scenes whose listing lacks them: cards on screen
+/// first; while searching, the rest of the group after, so their tags and
+/// performers are searched too.
 fn fill_details(
     actions: &mut Vec<Action>,
     source: &str,
@@ -809,6 +833,28 @@ mod tests {
         assert_eq!(d.info.as_ref().unwrap().favorite, Some(true));
         f.favorites_only = true;
         assert_eq!(titles(&f), ["Beach"]);
+    }
+
+    #[test]
+    fn a_deovr_search_fetches_details_and_they_are_kept() {
+        // A DeoVR listing has titles but no tags: a search fetches the rest.
+        let mut f = view();
+        assert_eq!(f.unfilled(), ["a", "b", "c"]);
+        let info = SceneInfo {
+            tags: vec!["Sunset".into()],
+            ..SceneInfo::default()
+        };
+        f.scene_loaded("a", Ok(info), false);
+        assert_eq!((f.unfilled(), f.unsaved), (vec!["b".into(), "c".into()], 1));
+        f.search = "sunset".into();
+        assert_eq!(titles(&f), ["Beach"]);
+        let saved = f.library();
+        assert!(saved.scenes[0].detailed && saved.scenes[0].tags == ["Sunset"]);
+        assert_eq!(saved.groups, f.groups);
+        // A HereSphere scene a scan described needs no fetching.
+        let mut h = view();
+        h.kind = SourceKind::HereSphere;
+        assert!(h.unfilled().is_empty());
     }
 
     #[test]

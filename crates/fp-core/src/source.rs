@@ -122,6 +122,9 @@ pub struct Entry {
     /// description.
     #[serde(default)]
     pub description: Option<String>,
+    /// The source's tags for it.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// A subtitle file belonging to a video.
@@ -153,6 +156,7 @@ impl Entry {
             markers: Vec::new(),
             resume: None,
             description: None,
+            tags: Vec::new(),
         }
     }
 }

@@ -185,8 +185,9 @@ tile locks it (or, without a PIN yet, asks for one).
 On a video's card the picture plays it and the title under it opens its
 details: your rating and favorite, its format, *Play next*, *Add to queue*
 and *Add to playlist*, and what its server says about it (Jellyfin's story,
-a DeoVR or HereSphere scene's description), kept with the video and brought
-up to date each time it opens. In a folder, the ⋯ on a video's row offers
+a DeoVR or HereSphere scene's description, their tags), kept with the video
+and brought up to date each time it opens; library search finds those
+tags too. In a folder, the ⋯ on a video's row offers
 the same.
 
 **Watch history** lists everything you have played, from any source, with
@@ -219,8 +220,8 @@ Videos of a source locked with a PIN are left out until it is unlocked.
 |---|---|
 | On this device | The home folder and the inserted microSD card and USB drives, as folders: play any video, or *Play all* in a folder |
 | Library | **Videos**: every video in its folder, with thumbnails, search, format filters and sorting (newest, title, length, rating, shuffle). **Folders**: its folder as folders. **Scan now** looks for new and removed videos |
-| Jellyfin / Emby | Your libraries, *Continue watching*, *Next up* and the latest additions; a search of the whole server by title, as Jellyfin's own search shows it: a row each of movies, shows, collections and other videos, best matches first (episodes are found through their show); poster grids searched, sorted and filtered by the server (unwatched, in progress, favorites); series by season and episode; details with the story, cast and genres. Watched marks, favorites and resume points are the server's (see [Watch sync](#watch-sync-with-jellyfin-emby-and-heresphere)) |
-| DeoVR feed / HereSphere API | The server's scene groups as chips over a grid of scenes; search the chosen group (or *All*) across titles, studios, performers and tags; order by title, date, rating or length; a *Favorites* filter (and *Scripted*, with haptics on). ⋯ opens a scene's details: description, performers and tags (tap one to see all their scenes), chapters to start from, and ♡ to make it a favourite on a HereSphere API that takes favourites. The page opens with the scenes from last time while the server sends the current list ("updating…" under the title). A HereSphere API can also follow what you watch (see [Watch sync](#watch-sync-with-jellyfin-emby-and-heresphere)) |
+| Jellyfin / Emby | Your libraries, *Continue watching*, *Next up* and the latest additions; a search of the whole server by title, as Jellyfin's own search shows it: a row each of movies, shows, collections and other videos, best matches first (episodes are found through their show), and a *Tagged* row of what carries a tag with your words in it; poster grids searched, sorted and filtered by the server (unwatched, in progress, favorites); series by season and episode; details with the story, cast, genres and tags (tap a tag to see everything that has it). Watched marks, favorites and resume points are the server's (see [Watch sync](#watch-sync-with-jellyfin-emby-and-heresphere)) |
+| DeoVR feed / HereSphere API | The server's scene groups as chips over a grid of scenes; search the chosen group (or *All*) across titles, studios, performers and tags (a DeoVR feed's tags and performers come with each scene's details, fetched while you search and kept for next time); order by title, date, rating or length; a *Favorites* filter (and *Scripted*, with haptics on). ⋯ opens a scene's details: description, performers and tags (tap one to see all their scenes), chapters to start from, and ♡ to make it a favourite on a HereSphere API that takes favourites. The page opens with the scenes from last time while the server sends the current list ("updating…" under the title). A HereSphere API can also follow what you watch (see [Watch sync](#watch-sync-with-jellyfin-emby-and-heresphere)) |
 | SMB, WebDAV, HTTP folders, DLNA, local folders | Folders and files: search the folder you are in, order by name, date or size, *Play all* |
 
 ### Locking a source with a PIN

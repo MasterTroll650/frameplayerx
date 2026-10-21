@@ -327,6 +327,8 @@ enum Go {
     /// Play next (`true`) or Add to queue.
     Queue(MbItem, bool),
     AddToPlaylist(MbItem),
+    /// Everything on the server with this tag.
+    Tag(String),
     Details(MbItem),
     /// Load again what the page shows (`Load` with the page's number).
     Reload(Load),
@@ -498,6 +500,22 @@ fn follow(v: &mut View, source: &str, j: &mut JellyfinView, go: Go) {
             let seq = v.state.next_seq();
             let (load, body) = page_for(item);
             ask(v, seq, load);
+            j.open(seq, body);
+        }
+        Go::Tag(tag) => {
+            let seq = v.state.next_seq();
+            let query = MbQuery {
+                limit: PAGE,
+                ..MbQuery::tagged(&tag)
+            };
+            let body = Body::Grid {
+                title: format!("Tagged {tag}"),
+                query: query.clone(),
+                items: Vec::new(),
+                total: 0,
+                typed: None,
+            };
+            ask(v, seq, Load::Grid(query));
             j.open(seq, body);
         }
     }
@@ -1282,6 +1300,17 @@ fn details(ui: &mut egui::Ui, v: &mut View, item: &MbItem) -> Option<Go> {
             .join(",  "),
     );
     line(ui, "Studios", item.studios.join("  ·  "));
+    if !item.tags.is_empty() {
+        widgets::section_label(ui, "Tags");
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+            for t in &item.tags {
+                if widgets::chip(ui, t, false).clicked() {
+                    go = Some(Go::Tag(t.clone()));
+                }
+            }
+        });
+    }
     ui.add_space(20.0);
     go
 }

@@ -57,12 +57,14 @@ pub fn parse_heresphere_video(v: &Value, base: &str) -> SceneInfo {
         let Some(name) = text(t, "name") else {
             continue;
         };
-        // Timed tags are chapters; the rest describe the video.
+        // Timed tags are chapters, except facts some servers lay along the
+        // timeline; the rest describe the video.
         let start = num(t, "start").filter(|s| *s > 0.0);
         let end = num(t, "end").filter(|e| *e > 0.0);
         match (start, end) {
             (None, None) => meta.add(&name),
-            _ => markers.push((start.unwrap_or(0.0) / 1000.0, untagged(&name).to_string())),
+            _ if timeline_fact(&name) => {}
+            _ => markers.push((start.unwrap_or(0.0) / 1000.0, chapter_name(&name))),
         }
     }
     markers.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -117,19 +119,48 @@ impl HereSphereTags {
             "studio" | "site" => {
                 self.studio.get_or_insert_with(|| value.to_string());
             }
-            "talent" | "performer" | "actor" | "cast" => self.actors.push(value.to_string()),
+            "talent" | "performer" | "actor" | "cast" | "@" => self.actors.push(value.to_string()),
             // Computed facts (resolution, frame rate...) and groupings.
-            "feature" | "tag group" | "director" | "movie" | "group" => {}
+            "feature" | "tag group" | "director" | "movie" | "group" | "%" => {}
             _ => self.tags.push(value.to_string()),
         }
     }
 }
 
-/// A tag's name without its `Prefix:`.
-fn untagged(name: &str) -> &str {
+/// Facts about the video that some servers lay along the timeline as timed
+/// tags (a summary of its tags, how often it was played, its resolution),
+/// so HereSphere shows them on its timeline. They aren't chapters.
+fn timeline_fact(name: &str) -> bool {
+    const FACTS: [&str; 6] = [
+        "summary",
+        "played",
+        "o-count",
+        "resolution",
+        "organized",
+        "rating",
+    ];
+    name.split_once(':')
+        .is_some_and(|(p, _)| FACTS.contains(&p.trim().to_ascii_lowercase().as_str()))
+}
+
+/// A chapter's name from its tag: `Tag:Title`, whose tag is often its title
+/// again (`Blowjob:Blowjob`), once; `Marker:Title` as the title.
+fn chapter_name(name: &str) -> String {
     match name.split_once(':') {
-        Some((p, v)) if !p.contains(' ') && !v.trim().is_empty() => v.trim(),
-        _ => name,
+        Some((tag, title)) => {
+            let (tag, title) = (tag.trim(), title.trim());
+            if title.is_empty() {
+                tag.to_string()
+            } else if tag.is_empty()
+                || tag.eq_ignore_ascii_case(title)
+                || tag.eq_ignore_ascii_case("marker")
+            {
+                title.to_string()
+            } else {
+                format!("{tag}: {title}")
+            }
+        }
+        None => name.trim().to_string(),
     }
 }
 
@@ -320,6 +351,41 @@ mod tests {
         assert!(s.released.is_some() && s.added > s.released);
         assert_eq!(s.rating, Some(4.0));
         assert_eq!(s.favorite, Some(true));
+    }
+
+    #[test]
+    fn chapters_apart_from_facts_on_the_timeline() {
+        // As a server that lays facts along the timeline sends them.
+        let v = json!({
+            "duration": 3_000_000.0,
+            "tags": [
+                {"name": "Summary:Big | Outdoor", "start": 0.1, "track": 0},
+                {"name": "Played:3", "start": 0.1, "end": 500_000.0, "track": 1},
+                {"name": "O-Count:0", "start": 500_000.0, "end": 1_000_000.0, "track": 1},
+                {"name": "Resolution:4320p", "start": 1_000_000.0, "end": 1_500_000.0, "track": 1},
+                {"name": "Organized:true", "start": 1_500_000.0, "end": 2_000_000.0, "track": 1},
+                {"name": "Rating:?", "start": 2_000_000.0, "end": 3_000_000.0, "track": 1},
+                {"name": "Side Fuck:Side Fuck", "start": 1_340_000.0, "track": 0},
+                {"name": "Blowjob:Blowjob", "start": 80_000.0, "track": 0},
+                {"name": "Blowjob:Close up", "start": 90_000.0, "track": 0},
+                {"name": "#:Outdoor", "track": 2},
+                {"name": "@:Jane Doe", "track": 3},
+                {"name": "%:Summer Collection", "track": 4},
+                {"name": "Studio:VRStudio", "track": 5}
+            ]
+        });
+        let s = parse_heresphere_video(&v, "http://x/heresphere/1");
+        assert_eq!(
+            s.markers,
+            [
+                (80.0, "Blowjob".to_string()),
+                (90.0, "Blowjob: Close up".to_string()),
+                (1340.0, "Side Fuck".to_string())
+            ]
+        );
+        assert_eq!(s.tags, ["Outdoor"]);
+        assert_eq!(s.actors, ["Jane Doe"]);
+        assert_eq!(s.studio.as_deref(), Some("VRStudio"));
     }
 
     #[test]

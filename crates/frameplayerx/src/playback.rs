@@ -157,9 +157,12 @@ pub fn open(
                 if let Ok(u) = fp_library::MediaUpsert::from_entry(sid, e)
                     && let Err(err) = library.update_details(
                         r.id,
-                        Some(&u.title).filter(|t| !t.is_empty()).map(String::as_str),
-                        u.description.as_deref(),
-                        u.thumbnail_url.as_deref(),
+                        &fp_library::SourceDetails {
+                            title: Some(u.title.as_str()).filter(|t| !t.is_empty()),
+                            description: u.description.as_deref(),
+                            thumbnail_url: u.thumbnail_url.as_deref(),
+                            tags: u.tags.as_deref(),
+                        },
                     )
                 {
                     log::warn!("updating the details of {location}: {err}");

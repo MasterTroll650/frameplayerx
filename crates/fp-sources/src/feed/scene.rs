@@ -116,6 +116,9 @@ impl SceneInfo {
         if self.description.is_some() {
             entry.description = self.description.clone();
         }
+        if !self.tags.is_empty() {
+            entry.tags = self.tags.clone();
+        }
     }
 }
 
@@ -267,6 +270,24 @@ pub struct FeedLibrary {
 }
 
 impl FeedLibrary {
+    /// Keeps the details read before (`saved`'s detailed scenes) of the
+    /// scenes still listed, which the server's listing doesn't carry.
+    pub fn keep_details(&mut self, saved: &FeedLibrary) {
+        let detailed: std::collections::HashMap<&str, &FeedScene> = saved
+            .scenes
+            .iter()
+            .filter(|s| s.detailed)
+            .map(|s| (s.url.as_str(), s))
+            .collect();
+        for s in &mut self.scenes {
+            if !s.detailed
+                && let Some(old) = detailed.get(s.url.as_str())
+            {
+                *s = (*old).clone();
+            }
+        }
+    }
+
     /// Takes a HereSphere scan into the scenes it describes.
     pub fn merge_scan(&mut self, scan: Vec<FeedScene>) {
         let mut scanned: std::collections::HashMap<String, FeedScene> =
@@ -352,6 +373,32 @@ mod tests {
             ..SceneInfo::default()
         });
         assert!(!s.favorite);
+    }
+
+    #[test]
+    fn details_read_before_outlast_a_new_listing() {
+        let scene = |url: &str, detailed: bool| FeedScene {
+            url: url.into(),
+            title: url.into(),
+            tags: if detailed { vec!["Sun".into()] } else { vec![] },
+            detailed,
+            ..FeedScene::default()
+        };
+        let saved = FeedLibrary {
+            groups: vec![],
+            scenes: vec![scene("a", true), scene("b", false), scene("gone", true)],
+        };
+        let mut fresh = FeedLibrary {
+            groups: vec![],
+            scenes: vec![scene("a", false), scene("b", false), scene("new", false)],
+        };
+        fresh.keep_details(&saved);
+        let tags: Vec<(&str, usize)> = fresh
+            .scenes
+            .iter()
+            .map(|s| (s.url.as_str(), s.tags.len()))
+            .collect();
+        assert_eq!(tags, [("a", 1), ("b", 0), ("new", 0)]);
     }
 
     #[test]
