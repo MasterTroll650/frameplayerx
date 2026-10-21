@@ -15,6 +15,33 @@ pub const PORTRAIT: Vec2 = Vec2::new(168.0, 252.0);
 pub const CARD_TEXT: f32 = 56.0;
 /// Between cards.
 pub const GAP: f32 = 20.0;
+/// Room a pointed-at card grows into (its lift, ring and shadow), kept
+/// inside scrolling areas so it isn't cut off at their edges.
+const LIFT_ROOM: i8 = 16;
+
+/// A page that scrolls down, reaching [`LIFT_ROOM`] past `ui`'s sides with
+/// the same room inside: what is on it stays in line, and a card lifted at
+/// its edge shows whole.
+pub fn scroll<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::new()
+        .outer_margin(egui::Margin {
+            left: -LIFT_ROOM,
+            right: -LIFT_ROOM,
+            ..Default::default()
+        })
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .auto_shrink(false)
+                .show(ui, |ui| {
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::symmetric(LIFT_ROOM, 0))
+                        .show(ui, add)
+                        .inner
+                })
+                .inner
+        })
+        .inner
+}
 
 /// A page title with a back arrow and a line under it, actions on the
 /// right; true when the arrow was clicked.
@@ -284,7 +311,8 @@ pub struct Card<'a> {
     pub favorite: bool,
     /// Greyed title (a missing file).
     pub dim: bool,
-    /// A "…" button beside the title for details.
+    /// Details: its title and facts open them, a "…" beside the title
+    /// says so.
     pub more: bool,
     /// A play mark over the picture while pointed at.
     pub play: bool,
@@ -335,10 +363,13 @@ pub fn card(ui: &mut egui::Ui, thumbs: &mut Thumbs, c: &Card) -> CardResponse {
     if !ui.is_rect_visible(rect) {
         return CardResponse::default();
     }
-    // Pointed at, also while over one of its buttons.
-    let pointed = ui.rect_contains_pointer(rect);
-    let t = ui.ctx().animate_bool_with_time(resp.id, pointed, 0.14);
     let base = egui::Rect::from_min_size(rect.min, c.size);
+    // With details, the title and facts open them; the picture plays.
+    let text_area = egui::Rect::from_min_max(egui::pos2(rect.left(), base.bottom()), rect.max);
+    let on_text = c.more && ui.rect_contains_pointer(text_area);
+    // Pointed at, also while over one of its buttons.
+    let pointed = ui.rect_contains_pointer(rect) && !on_text;
+    let t = ui.ctx().animate_bool_with_time(resp.id, pointed, 0.14);
     // Lift: grows a little, casts a shadow, gains a ring.
     let img = egui::Rect::from_center_size(
         base.center() - Vec2::new(0.0, 3.0 * t),
@@ -441,22 +472,18 @@ pub fn card(ui: &mut egui::Ui, thumbs: &mut Thumbs, c: &Card) -> CardResponse {
     );
     let mut more_clicked = false;
     if c.more {
-        let more = egui::Rect::from_min_size(
-            egui::pos2(rect.right() - 36.0, text_top - 4.0),
-            Vec2::splat(36.0),
-        );
-        let more_resp = ui.interact(more, resp.id.with("more"), Sense::click());
+        let more_resp = ui.interact(text_area, resp.id.with("more"), Sense::click());
         let m = ui
             .ctx()
             .animate_bool_with_time(more_resp.id, more_resp.hovered(), 0.12);
         let painter = ui.painter();
-        painter.circle_filled(
-            more.center(),
-            18.0,
-            Color32::from_white_alpha((m * 20.0) as u8),
+        painter.rect_filled(
+            text_area.expand2(Vec2::new(4.0, 0.0)),
+            egui::CornerRadius::same(10),
+            Color32::from_white_alpha((m * 14.0) as u8),
         );
         painter.text(
-            more.center(),
+            egui::pos2(rect.right() - 18.0, text_top + 14.0),
             Align2::CENTER_CENTER,
             icons::DOTS_THREE,
             theme::icon(24.0),
@@ -523,16 +550,35 @@ pub fn carousel(
         return;
     }
     section_title(ui, title, count);
-    egui::ScrollArea::horizontal()
-        .id_salt(title)
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+    // Room for a pointed-at card, as in `scroll`, and above it for its lift.
+    egui::Frame::new()
+        .outer_margin(egui::Margin {
+            left: -LIFT_ROOM,
+            right: -LIFT_ROOM,
+            top: -8,
+            bottom: 0,
+        })
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = GAP;
-                for i in 0..n {
-                    add(ui, i);
-                }
-            });
+            egui::ScrollArea::horizontal()
+                .id_salt(title)
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .show(ui, |ui| {
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin {
+                            left: LIFT_ROOM,
+                            right: LIFT_ROOM,
+                            top: 8,
+                            bottom: 0,
+                        })
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = GAP;
+                                for i in 0..n {
+                                    add(ui, i);
+                                }
+                            });
+                        });
+                });
         });
     ui.add_space(18.0);
 }
@@ -645,4 +691,100 @@ mod tests {
         assert_eq!(plural(1, "video", "videos"), "1 video");
         assert_eq!(plural(3, "video", "videos"), "3 videos");
     }
+}
+
+/// What a [`list_row`] was asked to do.
+#[derive(Clone, Copy, Default)]
+pub struct RowResponse {
+    pub open: bool,
+    pub up: bool,
+    pub down: bool,
+    pub remove: bool,
+}
+
+/// A video in an ordered list (Up next, a playlist): its picture, title and
+/// facts, marked while it is the `current` one, with buttons on the right to
+/// move it up or down and take it out (not the current one). A click
+/// anywhere else opens it.
+pub fn list_row(
+    ui: &mut egui::Ui,
+    thumbs: &mut Thumbs,
+    thumb: Option<&str>,
+    title: &str,
+    facts: &str,
+    current: bool,
+    (first, last): (bool, bool),
+) -> RowResponse {
+    let (rect, resp) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 88.0), Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return RowResponse::default();
+    }
+    let t = ui
+        .ctx()
+        .animate_bool_with_time(resp.id, resp.hovered(), 0.12);
+    let fill = if current {
+        theme::SURFACE_2
+    } else {
+        theme::SURFACE.gamma_multiply(t)
+    };
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(14), fill);
+    if current {
+        let bar = egui::Rect::from_min_size(rect.min + Vec2::new(0.0, 16.0), Vec2::new(4.0, 56.0));
+        ui.painter()
+            .rect_filled(bar, egui::CornerRadius::same(2), theme::ACCENT);
+    }
+    let pic = egui::Rect::from_min_size(rect.min + Vec2::new(14.0, 8.0), Vec2::new(128.0, 72.0));
+    picture(ui, thumbs, thumb, pic, 10, icons::FILM_STRIP);
+    // Buttons from the right: take out, down, up.
+    let mut out = RowResponse::default();
+    let mut x = rect.right() - 12.0;
+    let mut button = |icon: &str, tip: &str, shown: bool, id: &str| -> bool {
+        x -= 48.0;
+        if !shown {
+            return false;
+        }
+        let r =
+            egui::Rect::from_center_size(egui::pos2(x + 24.0, rect.center().y), Vec2::splat(44.0));
+        let b = ui.interact(r, resp.id.with(id), Sense::click());
+        let h = ui.ctx().animate_bool_with_time(b.id, b.hovered(), 0.12);
+        ui.painter().circle_filled(
+            r.center(),
+            22.0,
+            Color32::from_white_alpha((10.0 + h * 20.0) as u8),
+        );
+        ui.painter().text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            icon,
+            theme::icon(22.0),
+            theme::TEXT_2.lerp_to_gamma(Color32::WHITE, h),
+        );
+        b.tip(tip).clicked()
+    };
+    out.remove = button(icons::X, "Take out", !current, "remove");
+    out.down = button(icons::CARET_DOWN, "Move down", !last, "down");
+    out.up = button(icons::CARET_UP, "Move up", !first, "up");
+    let room = (x - pic.right() - 30.0).max(40.0);
+    let line = |text: &str, font: egui::FontId, color: Color32| {
+        let mut job = egui::text::LayoutJob::single_section(
+            text.to_string(),
+            egui::TextFormat::simple(font, color),
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+        ui.fonts(|f| f.layout_job(job))
+    };
+    let title = line(title, theme::font(Weight::SemiBold, 18.0), theme::TEXT);
+    let facts = line(facts, theme::font(Weight::Regular, 15.0), theme::TEXT_2);
+    let left = pic.right() + 18.0;
+    ui.painter()
+        .galley(egui::pos2(left, rect.center().y - 24.0), title, theme::TEXT);
+    ui.painter().galley(
+        egui::pos2(left, rect.center().y + 3.0),
+        facts,
+        theme::TEXT_2,
+    );
+    out.open = resp.clicked() && !(out.up || out.down || out.remove);
+    out
 }

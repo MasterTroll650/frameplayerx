@@ -113,6 +113,9 @@ impl SceneInfo {
         entry.scripts = self.scripts.clone();
         entry.subtitles = self.subtitles.clone();
         entry.markers = self.markers.clone();
+        if self.description.is_some() {
+            entry.description = self.description.clone();
+        }
     }
 }
 

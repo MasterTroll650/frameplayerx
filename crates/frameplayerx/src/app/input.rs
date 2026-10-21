@@ -279,12 +279,12 @@ impl App {
 
     /// Next/previous video in the list the current one was opened from.
     pub(super) fn step_queue(&mut self, dir: i32) {
-        if self.queue.is_empty() {
+        if self.queue.items.is_empty() {
             self.ui.toast("No other videos in this list");
             return;
         }
-        let n = self.queue.len() as i32;
-        let next = self.queue_pos as i32 + dir;
+        let n = self.queue.items.len() as i32;
+        let next = self.queue.pos as i32 + dir;
         if !(0..n).contains(&next) {
             self.ui.toast(if dir > 0 {
                 "Last video in this list"
@@ -293,9 +293,10 @@ impl App {
             });
             return;
         }
-        self.queue_pos = next as usize;
-        let req = self.queue[self.queue_pos].clone();
-        self.ui.toast(format!("{} of {}", self.queue_pos + 1, n));
+        let Some(req) = self.queue.jump(next as usize).cloned() else {
+            return;
+        };
+        self.ui.toast(format!("{} of {}", next + 1, n));
         self.open_request(req);
     }
 }

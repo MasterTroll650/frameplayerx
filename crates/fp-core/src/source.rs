@@ -118,6 +118,10 @@ pub struct Entry {
     /// Emby keep it per user (0 when not started or watched to the end).
     #[serde(default)]
     pub resume: Option<f64>,
+    /// What the source says about it: Jellyfin's overview, a scene's
+    /// description.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// A subtitle file belonging to a video.
@@ -148,6 +152,7 @@ impl Entry {
             subtitles: Vec::new(),
             markers: Vec::new(),
             resume: None,
+            description: None,
         }
     }
 }

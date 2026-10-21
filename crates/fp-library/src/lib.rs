@@ -12,13 +12,11 @@
 //!   text plus filters and sorting), [`Library::continue_watching`],
 //!   [`Library::recently_added`], [`Library::get`].
 //! - User data: ratings, favourites, tags, markers, format overrides, view
-//!   settings, keyframes, playback progress and history, playlists (manual
-//!   and smart), all exportable with [`Library::export_json`].
+//!   settings, keyframes, playback progress and history, playlists.
 //! - [`MetadataWorker`]: a background thread that fills in duration, size,
 //!   codec and format via an app-provided [`MediaProber`] and writes JPEG
 //!   thumbnails and scrub-preview sheets.
 
-mod backup;
 mod error;
 mod image;
 mod library;
@@ -29,17 +27,13 @@ mod scan;
 mod schema;
 mod worker;
 
-pub use backup::{
-    EXPORT_FORMAT, EXPORT_VERSION, ImportReport, MarkerExport, MediaUserData, PlaylistExport,
-    UserDataExport,
-};
 pub use error::{Error, Result};
 pub use image::RgbaImage;
 pub use library::{
     Hidden, HiddenRoot, Library, MediaUpsert, PlaybackUpdate, UpsertOutcome, UpsertStatus,
     WATCHED_FRACTION, default_db_path,
 };
-pub use playlist::Playlist;
+pub use playlist::{Playlist, PlaylistEntry};
 pub use query::{Query, Sort, SortDirection, StereoFilter};
 pub use record::{
     HistoryEntry, Marker, MarkerId, MediaId, MediaRecord, PlaylistId, PreviewStrip, ProjectionKind,

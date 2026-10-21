@@ -8,6 +8,11 @@ impl App {
         crate::pin::locked(&self.settings.source_pins, &self.ui.unlocked_sources, id)
     }
 
+    /// The media library.
+    pub(crate) fn library(&self) -> &Library {
+        &self.services.library
+    }
+
     pub(crate) fn source_config(&self, id: &str) -> Option<&fp_sources::SourceConfig> {
         self.services.source_config(id)
     }

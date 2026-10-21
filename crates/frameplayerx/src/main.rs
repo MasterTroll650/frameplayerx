@@ -20,6 +20,7 @@ mod pin;
 mod playback;
 mod preview;
 mod prober;
+mod queue;
 mod seektest;
 mod services;
 mod settings;

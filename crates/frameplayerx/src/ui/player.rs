@@ -222,6 +222,12 @@ fn browse_and_sound(
     {
         actions.push(Action::ShowBrowser(true));
     }
+    if widgets::key(ui, icons::QUEUE, 52.0, false)
+        .tip("Up next")
+        .clicked()
+    {
+        actions.push(Action::ShowUpNext);
+    }
     let speed = pb.player.speed();
     if widgets::pill_key(ui, &fmt_speed(speed), (speed - 1.0).abs() > 1e-3)
         .tip("Speed")

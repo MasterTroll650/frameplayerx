@@ -99,9 +99,12 @@ CREATE INDEX history_media   ON history(media_id);
 CREATE INDEX history_started ON history(started_at);
 "#;
 
+/// Version 2: what a video's source says about it.
+const V2: &str = "ALTER TABLE media ADD COLUMN description TEXT;";
+
 /// All migrations, oldest first. The schema version equals the number of
 /// migrations applied.
-pub(crate) const MIGRATIONS: &[&str] = &[V1];
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2];
 
 /// Schema version this build writes.
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;

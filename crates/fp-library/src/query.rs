@@ -420,10 +420,6 @@ fn ranked(conn: &Connection, q: &Query, hidden: &Hidden) -> Result<Vec<Candidate
     Ok(out)
 }
 
-pub(crate) fn search_conn(conn: &Connection, q: &Query) -> Result<Vec<MediaRecord>> {
-    search_hiding(conn, q, &Hidden::default())
-}
-
 fn search_hiding(conn: &Connection, q: &Query, hidden: &Hidden) -> Result<Vec<MediaRecord>> {
     let ids: Vec<MediaId> = ranked(conn, q, hidden)?
         .into_iter()
@@ -432,10 +428,6 @@ fn search_hiding(conn: &Connection, q: &Query, hidden: &Hidden) -> Result<Vec<Me
         .map(|c| MediaId(c.id))
         .collect();
     get_many(conn, &ids)
-}
-
-pub(crate) fn count_conn(conn: &Connection, q: &Query) -> Result<usize> {
-    count_hiding(conn, q, &Hidden::default())
 }
 
 fn count_hiding(conn: &Connection, q: &Query, hidden: &Hidden) -> Result<usize> {

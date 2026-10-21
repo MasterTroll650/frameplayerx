@@ -53,6 +53,10 @@ cat >"$script" <<EOF
 # Library scan and thumbnails. Nothing watched yet: Home offers sources.
 wait 4
 panel main home
+# The first source tile pointed at: lifted whole at the row's edge.
+point main 0.13 0.70
+frames 8
+panel main home-hover-first
 screen history
 panel main history-empty
 # A library: its videos, then its folders. The headset's own folders.
@@ -64,6 +68,18 @@ wait 1
 panel main library-folders
 open-source on-device
 panel main local
+# Playlists: none yet, one made of the library, its page; Up next.
+details
+panel main details
+screen playlists
+panel main playlists-empty
+pick
+panel main playlist-picker
+playlist Evening
+screen playlists
+panel main playlists
+open-playlist
+panel main playlist
 screen sources
 panel main sources
 # Adding a library (a suggestion for Downloads), and editing one.
@@ -120,6 +136,10 @@ open-source videos
 point main 0.12 0.45
 frames 8
 panel main local-hover
+# Its title instead: that opens the details.
+point main 0.12 0.63
+frames 8
+panel main local-hover-title
 # The keyboard, from the search field.
 point main 0.12 0.30
 click
@@ -193,6 +213,11 @@ panel subs subtitles-arabic
 adjust 5
 frames 8
 panel adjust adjust-subtitles
+# The library queued behind it, and Up next from the control bar.
+queue-all
+up-next
+frames 8
+panel main up-next
 EOF
 
 cargo build -p frameplayerx

@@ -50,6 +50,10 @@ pub fn browser(ctx: &egui::Context, v: &mut View) {
                 super::crash::prompt(ui, v);
                 return;
             }
+            if v.state.picking.is_some() {
+                super::playlists::picker(ui, v);
+                return;
+            }
             if let Some(id) = v.state.details {
                 details(ui, v, id);
                 return;
@@ -57,8 +61,10 @@ pub fn browser(ctx: &egui::Context, v: &mut View) {
             match v.state.screen {
                 Screen::Home => home(ui, v),
                 Screen::History => history(ui, v),
+                Screen::Playlists => super::playlists::page(ui, v),
                 Screen::Sources => super::sources::sources(ui, v),
                 Screen::Settings => super::settings::settings(ui, v),
+                Screen::UpNext => super::queue::page(ui, v),
             }
         });
 }
@@ -202,6 +208,7 @@ fn nav(ui: &mut egui::Ui, v: &mut View) {
         let tabs = [
             (Screen::Home, icons::HOUSE, "Home"),
             (Screen::History, icons::CLOCK, "Watch history"),
+            (Screen::Playlists, icons::PLAYLIST, "Playlists"),
             (Screen::Sources, icons::HARD_DRIVES, "Sources"),
             (Screen::Settings, icons::GEAR_SIX, "Settings"),
         ];
@@ -221,12 +228,20 @@ fn nav(ui: &mut egui::Ui, v: &mut View) {
         let right = if v.playback.is_some() { 270.0 } else { 120.0 };
         let labelled = ui.available_width() >= labels + right;
         for (s, icon, label) in tabs {
-            let selected = v.state.screen == s && v.state.details.is_none();
+            let selected =
+                v.state.screen == s && v.state.details.is_none() && v.state.picking.is_none();
             if widgets::nav_tab(ui, icon, label, selected, labelled).clicked() {
                 v.state.screen = s;
                 v.state.details = None;
+                v.state.picking = None;
                 match s {
                     Screen::Home => v.state.home = None,
+                    // The tab is the list of playlists, whatever was open.
+                    Screen::Playlists => {
+                        v.state.playlist = None;
+                        v.state.renaming = false;
+                        v.state.playlists = None;
+                    }
                     // The tab is the list of sources, whatever was open.
                     Screen::Sources => {
                         v.state.source = None;
@@ -326,14 +341,14 @@ fn status_toast(ctx: &egui::Context, v: &mut View) {
         });
 }
 
-fn thumb_key(r: &MediaRecord) -> Option<String> {
+pub(super) fn thumb_key(r: &MediaRecord) -> Option<String> {
     r.thumbnail
         .as_ref()
         .map(|p| p.display().to_string())
         .or_else(|| r.thumbnail_url.clone())
 }
 
-fn request(r: &MediaRecord) -> OpenRequest {
+pub(crate) fn request(r: &MediaRecord) -> OpenRequest {
     OpenRequest {
         location: r.location.clone(),
         source_id: (!r.source_id.is_empty()
@@ -366,7 +381,7 @@ fn shown_format(r: &MediaRecord, default: VideoFormat) -> DetectedFormat {
 }
 
 /// "12:34 · 180° 3D".
-fn facts(r: &MediaRecord, default: VideoFormat) -> String {
+pub(super) fn facts(r: &MediaRecord, default: VideoFormat) -> String {
     let mut f = Vec::new();
     if let Some(d) = r.duration {
         f.push(fmt_time(d));
@@ -502,31 +517,29 @@ fn home(ui: &mut egui::Ui, v: &mut View) {
     let Some(rows) = v.state.home.take() else {
         return;
     };
-    egui::ScrollArea::vertical()
-        .auto_shrink(false)
-        .show(ui, |ui| {
-            ui.add_space(14.0);
-            let nothing = rows.continue_watching.is_empty()
-                && rows.last_watched.is_none()
-                && rows.favorites.is_empty();
-            if nothing {
-                page::empty_state(
-                    ui,
-                    icons::PLAY_CIRCLE,
-                    "Nothing watched yet",
-                    "Pick a source below: the videos on this headset, its microSD card and USB \
+    page::scroll(ui, |ui| {
+        ui.add_space(14.0);
+        let nothing = rows.continue_watching.is_empty()
+            && rows.last_watched.is_none()
+            && rows.favorites.is_empty();
+        if nothing {
+            page::empty_state(
+                ui,
+                icons::PLAY_CIRCLE,
+                "Nothing watched yet",
+                "Pick a source below: the videos on this headset, its microSD card and USB \
                  drives, your Jellyfin, DLNA, SMB and WebDAV servers, or any DeoVR feed or \
                  HereSphere API. What you watch shows up here.",
-                    |_| {},
-                );
-                ui.add_space(24.0);
-            } else {
-                hero(ui, v, &rows);
-            }
-            record_row(ui, v, "Continue watching", &rows.continue_watching);
-            record_row(ui, v, "Favorites", &rows.favorites);
-            super::sources::source_row(ui, v, Screen::Home);
-        });
+                |_| {},
+            );
+            ui.add_space(24.0);
+        } else {
+            hero(ui, v, &rows);
+        }
+        record_row(ui, v, "Continue watching", &rows.continue_watching);
+        record_row(ui, v, "Favorites", &rows.favorites);
+        super::sources::source_row(ui, v, Screen::Home);
+    });
     v.state.home = Some(rows);
 }
 
@@ -608,31 +621,29 @@ pub fn grid_page(
         || g.stereo_only
         || g.format_filter != FormatFilter::All;
     let mut more = false;
-    egui::ScrollArea::vertical()
-        .auto_shrink(false)
-        .show(ui, |ui| {
-            ui.add_space(4.0);
-            if results.is_empty() {
-                if filtered {
-                    page::empty_state(
-                        ui,
-                        icons::MAGNIFYING_GLASS,
-                        "Nothing matches",
-                        "Try another search, or clear the filters.",
-                        |_| {},
-                    );
-                } else {
-                    empty(ui, v);
-                }
+    page::scroll(ui, |ui| {
+        ui.add_space(4.0);
+        if results.is_empty() {
+            if filtered {
+                page::empty_state(
+                    ui,
+                    icons::MAGNIFYING_GLASS,
+                    "Nothing matches",
+                    "Try another search, or clear the filters.",
+                    |_| {},
+                );
+            } else {
+                empty(ui, v);
             }
-            record_grid(ui, v, &results);
-            if results.len() < g.total {
-                ui.vertical_centered(|ui| {
-                    more = widgets::button(ui, None, "Show more", Kind::Secondary).clicked();
-                });
-                ui.add_space(20.0);
-            }
-        });
+        }
+        record_grid(ui, v, &results);
+        if results.len() < g.total {
+            ui.vertical_centered(|ui| {
+                more = widgets::button(ui, None, "Show more", Kind::Secondary).clicked();
+            });
+            ui.add_space(20.0);
+        }
+    });
     if more {
         g.page_size += 48;
     } else {
@@ -733,6 +744,14 @@ fn details(ui: &mut egui::Ui, v: &mut View, id: fp_library::MediaId) {
                 page::picture(ui, v.thumbs, key.as_deref(), rect, 16, icons::FILM_STRIP);
                 ui.vertical(|ui| details_side(ui, v, &r));
             });
+            if let Some(about) = r.description.as_deref().filter(|d| !d.trim().is_empty()) {
+                ui.add_space(24.0);
+                ui.label(
+                    RichText::new(about.trim())
+                        .font(theme::font(Weight::Regular, 18.0))
+                        .color(theme::TEXT_2),
+                );
+            }
             ui.add_space(28.0);
             widgets::section_label(ui, "Format");
             ui.add_space(2.0);
@@ -844,6 +863,11 @@ fn details_side(ui: &mut egui::Ui, v: &mut View, r: &MediaRecord) {
         if widgets::chip_icon(ui, Some(icons::HEART), heart, r.favorite).clicked() {
             v.actions.push(Action::SetFavorite(r.id, !r.favorite));
         }
+    });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        super::queue::buttons(ui, v, &request(r));
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {

@@ -192,6 +192,8 @@ pub struct MediaUpsert {
     pub subtitles: Vec<String>,
     /// Remote thumbnail offered by the source.
     pub thumbnail_url: Option<String>,
+    /// What the source says about it; `None` keeps what was stored.
+    pub description: Option<String>,
     /// Chapters from the source. `Some` replaces earlier source markers;
     /// user markers are never touched.
     pub source_markers: Option<Vec<(f64, String)>>,
@@ -217,6 +219,7 @@ impl MediaUpsert {
             scripts: Vec::new(),
             subtitles: Vec::new(),
             thumbnail_url: None,
+            description: None,
             source_markers: None,
             reset_metadata: false,
         }
@@ -257,6 +260,7 @@ impl MediaUpsert {
         u.mtime = entry.modified;
         u.duration = entry.duration.filter(|d| d.is_finite() && *d > 0.0);
         u.thumbnail_url = entry.thumbnail_url.clone();
+        u.description = entry.description.clone();
         u.scripts = entry.scripts.clone();
         u.subtitles = entry.subtitles.iter().map(|s| s.location.clone()).collect();
         u.source_markers = Some(entry.markers.clone());
@@ -417,6 +421,7 @@ struct ExistingRow {
     scripts: String,
     subtitles: String,
     thumbnail_url: Option<String>,
+    description: Option<String>,
     missing: bool,
 }
 
@@ -439,6 +444,7 @@ fn existing_row(conn: &Connection, location: &str) -> Result<Option<ExistingRow>
             scripts: json(&r.scripts)?,
             subtitles: json(&r.subtitles)?,
             thumbnail_url: r.thumbnail_url,
+            description: r.description,
             missing: r.missing,
         }),
     })
@@ -494,8 +500,8 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
         conn.prepare_cached(
             "INSERT INTO media (location, source_id, title, size, mtime, duration,
                  detected_format, detected_evidence, projection_kind, stereo,
-                 scripts, subtitles, thumbnail_url, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                 scripts, subtitles, thumbnail_url, added_at, description)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         )?
         .execute(params![
             u.location,
@@ -512,6 +518,7 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
             subtitles,
             u.thumbnail_url,
             now(),
+            u.description,
         ])?;
         let id = MediaId(conn.last_insert_rowid());
         if let Some(markers) = &u.source_markers {
@@ -537,6 +544,7 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
         old.detected
     };
     let thumbnail_url = u.thumbnail_url.clone().or(old.thumbnail_url.clone());
+    let description = u.description.clone().or(old.description.clone());
 
     let mut changed = content_changed
         || old.missing
@@ -548,14 +556,16 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
         || old.detected != detected
         || old.scripts != scripts
         || old.subtitles != subtitles
-        || old.thumbnail_url != thumbnail_url;
+        || old.thumbnail_url != thumbnail_url
+        || old.description != description;
 
     if changed {
         let (kind, stereo) = effective_columns(&detected.format, old.user_format.as_ref());
         conn.prepare_cached(
             "UPDATE media SET source_id = ?2, title = ?3, size = ?4, mtime = ?5, duration = ?6,
                  detected_format = ?7, detected_evidence = ?8, projection_kind = ?9, stereo = ?10,
-                 scripts = ?11, subtitles = ?12, thumbnail_url = ?13, missing = 0
+                 scripts = ?11, subtitles = ?12, thumbnail_url = ?13, description = ?14,
+                 missing = 0
              WHERE id = ?1",
         )?
         .execute(params![
@@ -572,6 +582,7 @@ pub(crate) fn upsert_conn(conn: &Connection, u: &MediaUpsert) -> Result<UpsertOu
             scripts,
             subtitles,
             thumbnail_url,
+            description,
         ])?;
     }
     if content_changed {
@@ -1218,6 +1229,27 @@ impl Library {
         })
     }
 
+    /// What a video's source says about it now: its title, description and
+    /// thumbnail, each when given. The rest of the video is left alone.
+    pub fn update_details(
+        &self,
+        id: MediaId,
+        title: Option<&str>,
+        description: Option<&str>,
+        thumbnail_url: Option<&str>,
+    ) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE media SET title = COALESCE(?2, title),
+                     description = COALESCE(?3, description),
+                     thumbnail_url = COALESCE(?4, thumbnail_url)
+                 WHERE id = ?1",
+                params![id.0, title, description, thumbnail_url],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Leaves the videos of `source_id` without a source, for a library
     /// whose folder changed: its next scan takes back those still in it.
     /// Returns how many there were.
@@ -1831,6 +1863,27 @@ mod tests {
         assert_eq!(lib.detach_source("nas").unwrap(), 4);
         assert_eq!(lib.get(watched).unwrap().unwrap().source_id, "");
         assert_eq!(lib.get(other).unwrap().unwrap().source_id, "feed");
+    }
+
+    #[test]
+    fn descriptions_are_kept_and_kept_current() {
+        let lib = lib();
+        let mut e = Entry::new("Beach", "http://feed/1", EntryKind::Video);
+        e.description = Some("Sun and sand.".into());
+        let id = lib.upsert_entry("feed", &e).unwrap().id;
+        let get = |id| lib.get(id).unwrap().unwrap();
+        assert_eq!(get(id).description.as_deref(), Some("Sun and sand."));
+        // An entry without one (a listing) keeps what was stored.
+        e.description = None;
+        lib.upsert_entry("feed", &e).unwrap();
+        assert_eq!(get(id).description.as_deref(), Some("Sun and sand."));
+        lib.update_details(id, Some("Beach day"), Some("Sun, sand and sea."), None)
+            .unwrap();
+        let r = get(id);
+        assert_eq!(r.title, "Beach day");
+        assert_eq!(r.description.as_deref(), Some("Sun, sand and sea."));
+        lib.update_details(id, None, None, None).unwrap();
+        assert_eq!(get(id).title, "Beach day", "nothing given, nothing changed");
     }
 
     #[test]

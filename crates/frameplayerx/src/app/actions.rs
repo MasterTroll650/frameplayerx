@@ -9,7 +9,49 @@ impl App {
                 self.queue.clear();
                 self.open_request(req);
             }
-            Action::OpenList(list, pos) => self.open_list(list, pos),
+            Action::OpenList(list, pos) => self.open_list(list, pos, false),
+            Action::PlayAll(list, pos) => self.open_list(list, pos, true),
+            Action::Queue { req, next } => self.queue_video(req, next),
+            Action::QueueJump(i) => {
+                if let Some(req) = self.queue.jump(i).cloned() {
+                    self.show_browser = false;
+                    self.open_request(req);
+                }
+            }
+            Action::QueueRemove(i) => self.queue.remove(i),
+            Action::QueueMove(from, to) => self.queue.move_item(from, to),
+            Action::QueueClear => self.queue.clear_rest(),
+            Action::ShowUpNext => {
+                self.ui.screen = Screen::UpNext;
+                self.ui.details = None;
+                self.ui.picking = None;
+                self.show_browser = true;
+                self.ui_visible = true;
+            }
+            Action::AddToPlaylist {
+                playlist,
+                name,
+                reqs,
+            } => self.add_to_playlist(playlist, &name, &reqs),
+            Action::RenamePlaylist(id, name) => {
+                let r = self.services.library.rename_playlist(id, &name);
+                self.library_changed("the name", r);
+            }
+            Action::DeletePlaylist(id) => {
+                let r = self.services.library.delete_playlist(id);
+                if self.ui.playlist == Some(id) {
+                    self.ui.playlist = None;
+                }
+                self.library_changed("the change", r);
+            }
+            Action::PlaylistRemove(id, at) => {
+                let r = self.services.library.remove_from_playlist(id, at);
+                self.library_changed("the change", r);
+            }
+            Action::PlaylistMove(id, from, to) => {
+                let r = self.services.library.move_playlist_item(id, from, to);
+                self.library_changed("the change", r);
+            }
             Action::TogglePause => self.toggle_pause(),
             Action::Seek(t) => {
                 if let Some(p) = self.player() {
@@ -193,11 +235,59 @@ impl App {
         self.playback.as_ref().map(|p| &p.player)
     }
 
-    fn open_list(&mut self, list: Vec<OpenRequest>, pos: usize) {
+    fn open_list(&mut self, list: Vec<OpenRequest>, pos: usize, plays_through: bool) {
         if let Some(req) = list.get(pos).cloned() {
-            self.queue = list;
-            self.queue_pos = pos;
+            self.queue.set(list, pos, plays_through);
             self.open_request(req);
+        }
+    }
+
+    /// Play next or Add to queue. With nothing playing, either plays it:
+    /// Up next is on the control bar, so a queue started otherwise would
+    /// go unseen.
+    fn queue_video(&mut self, req: OpenRequest, next: bool) {
+        let title = ui::widgets::display_title(&req.shown_title());
+        let Some(playing) = self.playback.as_ref().map(|p| p.request.clone()) else {
+            self.queue.set(vec![req.clone()], 0, true);
+            self.open_request(req);
+            return;
+        };
+        self.queue.add(req, &playing, next);
+        self.ui.toast(if next {
+            format!("{title} plays next")
+        } else {
+            format!("Added {title} to Up next")
+        });
+    }
+
+    /// Adds videos to playlist `id`, or to a new one called `name`. Videos
+    /// not in the library yet get a row, as opening them does.
+    fn add_to_playlist(&mut self, id: Option<PlaylistId>, name: &str, reqs: &[OpenRequest]) {
+        let lib = &self.services.library;
+        let media: Vec<_> = reqs.iter().filter_map(|r| media_of(lib, r)).collect();
+        let result = match id {
+            Some(id) => Ok(id),
+            None => lib.create_playlist(name),
+        }
+        .and_then(|id| lib.add_to_playlist(id, &media).map(|_| id));
+        match result {
+            Ok(id) => {
+                let name = lib
+                    .playlist(id)
+                    .ok()
+                    .flatten()
+                    .map(|p| p.name)
+                    .unwrap_or_default();
+                self.ui.toast(match media.len() {
+                    0 => format!("Made {name}"),
+                    1 => format!("Added to {name}"),
+                    n => format!("Added {n} videos to {name}"),
+                });
+                self.ui.picking = None;
+                self.ui.playlist_name.clear();
+                self.ui.invalidate();
+            }
+            Err(e) => self.ui.toast(format!("Couldn't add to the playlist: {e}")),
         }
     }
 
@@ -286,4 +376,21 @@ impl App {
         log::warn!("saving {what}: {e}");
         self.ui.toast(format!("Couldn't save {what}: {e}"));
     }
+}
+
+/// The library's video for `req`, given a row from its entry when it has
+/// none yet, as opening it does.
+fn media_of(lib: &Library, req: &OpenRequest) -> Option<fp_library::MediaId> {
+    let location = fp_core::volume::stable(&req.location).into_owned();
+    if let Ok(Some(r)) = lib.get_by_location(&location) {
+        return Some(r.id);
+    }
+    let mut e = req.entry.clone().unwrap_or_else(|| {
+        fp_core::Entry::new(req.shown_title(), &location, fp_core::EntryKind::Video)
+    });
+    e.location = location;
+    lib.upsert_entry(req.source_id.as_deref().unwrap_or(""), &e)
+        .inspect_err(|err| log::warn!("adding {} to the library: {err}", e.location))
+        .ok()
+        .map(|o| o.id)
 }

@@ -143,6 +143,15 @@ impl App {
     /// Background work, remote commands and saving the open video's state.
     fn update(&mut self) {
         self.poll_jobs();
+        // Play all, a playlist and what was queued play through.
+        if self
+            .playback
+            .as_ref()
+            .is_some_and(|p| p.player.state() == PlayerState::Ended)
+            && self.queue.up_next().is_some()
+        {
+            self.step_queue(1);
+        }
         self.give_up_slow_open();
         self.services
             .set_worker_busy(self.playback.is_some() || self.ui.opening.is_some());
@@ -400,10 +409,12 @@ impl App {
                 services,
                 thumbs,
                 playback,
+                queue,
                 ..
             } = self;
             let mut view = View {
                 state,
+                queue,
                 settings,
                 services,
                 thumbs,

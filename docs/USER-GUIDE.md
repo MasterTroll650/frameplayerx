@@ -182,12 +182,38 @@ Its title is always the source's name, with where you are in it underneath.
 Sources locked with a PIN stay off Home until unlocked; the padlock on a
 tile locks it (or, without a PIN yet, asks for one).
 
+On a video's card the picture plays it and the title under it opens its
+details: your rating and favorite, its format, *Play next*, *Add to queue*
+and *Add to playlist*, and what its server says about it (Jellyfin's story,
+a DeoVR or HereSphere scene's description), kept with the video and brought
+up to date each time it opens. In a folder, the ⋯ on a video's row offers
+the same.
+
 **Watch history** lists everything you have played, from any source, with
 the same search, format filters and orders (recently watched, title, most
-watched, rating, length). Remove one video with ⋯ › *Remove from history*,
-or everything with *Clear history*; favorites and ratings stay. Browsing a
-network source never adds anything here. Removing a source forgets its
-videos, except those you watched or marked.
+watched, rating, length). Remove one video from its details with *Remove
+from history*, or everything with *Clear history*; favorites and ratings
+stay. Browsing a network source never adds anything here. Removing a source
+forgets its videos, except those you watched, marked or put in a playlist.
+
+### Up next and playlists
+
+**Up next** is the list of videos playing in turn; the button beside
+Browse on the control bar shows it over the video. Opening a video from a
+folder, grid or season makes that list Up next, and X and Y step through
+it. *Play all*, a playlist and what you queue yourself also play through:
+the next video starts when one ends. *Play next* (after the video playing)
+and *Add to queue* (at the end) are on a video's details, a Jellyfin or
+scene page and a folder row's ⋯; with nothing playing, either plays it. On
+the Up next page, pick a video to play it, move videos up or down, take
+them out, *Clear* everything but the video playing, or *Save as playlist*.
+
+**Playlists**, a tab beside Watch history, holds your playlists: make one
+there or with *Add to playlist*, which offers your playlists and a name
+for a new one. A playlist can hold videos from any source. Its page plays
+them all from the top or from the one you pick, moves them up or down,
+takes them out, and renames or deletes the playlist (*Delete* asks again).
+Videos of a source locked with a PIN are left out until it is unlocked.
 
 | Source | What browsing it offers |
 |---|---|

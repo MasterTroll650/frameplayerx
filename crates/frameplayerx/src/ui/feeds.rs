@@ -256,6 +256,22 @@ impl FeedView {
 }
 
 /// Opens `scene`.
+/// Opens a scene whose page has every detail: opening needs no second fetch.
+fn scene_request(
+    source: &str,
+    scene: &FeedScene,
+    info: Option<&SceneInfo>,
+    start_at: Option<f64>,
+) -> OpenRequest {
+    let mut req = request(source, scene, start_at);
+    if let Some(info) = info {
+        let mut e = scene.to_entry();
+        info.apply_to(&mut e);
+        req.entry = Some(e);
+    }
+    req
+}
+
 fn request(source: &str, scene: &FeedScene, start_at: Option<f64>) -> OpenRequest {
     OpenRequest {
         location: scene.url.clone(),
@@ -449,57 +465,55 @@ fn scene_grid(
     haptics: bool,
 ) -> Picked {
     let mut picked = Picked::default();
-    egui::ScrollArea::vertical()
-        .auto_shrink(false)
-        .show(ui, |ui| {
-            if list.is_empty() && !f.loading && f.error.is_none() {
-                let (title, body) = if f.order.is_empty() {
-                    ("No scenes", "The server lists no scenes here.")
-                } else {
-                    (
-                        "Nothing matches",
-                        "Try another search, or clear the filters.",
-                    )
-                };
-                page::empty_state(ui, icons::VIRTUAL_REALITY, title, body, |_| {});
+    page::scroll(ui, |ui| {
+        if list.is_empty() && !f.loading && f.error.is_none() {
+            let (title, body) = if f.order.is_empty() {
+                ("No scenes", "The server lists no scenes here.")
+            } else {
+                (
+                    "Nothing matches",
+                    "Try another search, or clear the filters.",
+                )
+            };
+            page::empty_state(ui, icons::VIRTUAL_REALITY, title, body, |_| {});
+        }
+        page::grid(ui, list.len(), page::LANDSCAPE.x, |ui, i| {
+            let s = &list[i];
+            let title = widgets::display_title(&s.title);
+            let facts = card_facts(s);
+            let badge = s.format.map(|f| widgets::format_short(&f));
+            let c = page::card(
+                ui,
+                thumbs,
+                &Card {
+                    thumb: s.thumbnail_url.as_deref(),
+                    placeholder: icons::VIRTUAL_REALITY,
+                    title: &title,
+                    facts: &facts,
+                    badge: badge.as_deref(),
+                    corner: (haptics && s.scripted).then_some(icons::WAVEFORM),
+                    favorite: s.favorite,
+                    more: true,
+                    ..Card::default()
+                },
+            );
+            if c.visible && !s.detailed {
+                picked.on_screen.push(s.url.clone());
             }
-            page::grid(ui, list.len(), page::LANDSCAPE.x, |ui, i| {
-                let s = &list[i];
-                let title = widgets::display_title(&s.title);
-                let facts = card_facts(s);
-                let badge = s.format.map(|f| widgets::format_short(&f));
-                let c = page::card(
-                    ui,
-                    thumbs,
-                    &Card {
-                        thumb: s.thumbnail_url.as_deref(),
-                        placeholder: icons::VIRTUAL_REALITY,
-                        title: &title,
-                        facts: &facts,
-                        badge: badge.as_deref(),
-                        corner: (haptics && s.scripted).then_some(icons::WAVEFORM),
-                        favorite: s.favorite,
-                        more: true,
-                        ..Card::default()
-                    },
-                );
-                if c.visible && !s.detailed {
-                    picked.on_screen.push(s.url.clone());
-                }
-                if c.open {
-                    picked.play = Some(i);
-                }
-                if c.more {
-                    picked.open = Some(s.url.clone());
-                }
-            });
-            if total > list.len() {
-                ui.vertical_centered(|ui| {
-                    picked.more = widgets::button(ui, None, "Show more", Kind::Secondary).clicked();
-                });
-                ui.add_space(20.0);
+            if c.open {
+                picked.play = Some(i);
+            }
+            if c.more {
+                picked.open = Some(s.url.clone());
             }
         });
+        if total > list.len() {
+            ui.vertical_centered(|ui| {
+                picked.more = widgets::button(ui, None, "Show more", Kind::Secondary).clicked();
+            });
+            ui.add_space(20.0);
+        }
+    });
     picked
 }
 
@@ -553,6 +567,7 @@ fn details(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut Fe
     let writable = info.as_ref().is_some_and(|i| i.write_favorite);
     let (mut play_at, mut search) = (None::<f64>, None::<String>);
     let mut favorite = None::<bool>;
+    let queued = scene_request(source, &scene, info.as_deref(), None);
     egui::ScrollArea::vertical()
         .auto_shrink(false)
         .show(ui, |ui| {
@@ -600,6 +615,10 @@ fn details(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut Fe
                     if widgets::button(ui, Some(icons::PLAY), "Play", Kind::Primary).clicked() {
                         play_at = Some(0.0);
                     }
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 12.0;
+                        super::queue::buttons(ui, v, &queued);
+                    });
                     if writable {
                         let label = if scene.favorite {
                             "Favorite"
@@ -676,13 +695,7 @@ fn details(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut Fe
             ui.add_space(24.0);
         });
     if let Some(t) = play_at {
-        let mut req = request(source, &scene, Some(t));
-        if let Some(info) = &info {
-            // The page has every detail; opening needs no second fetch.
-            let mut e = scene.to_entry();
-            info.apply_to(&mut e);
-            req.entry = Some(e);
-        }
+        let req = scene_request(source, &scene, info.as_deref(), Some(t));
         v.actions.push(Action::Open(req));
     }
     if let Some(on) = favorite {

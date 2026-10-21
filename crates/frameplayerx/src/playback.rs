@@ -143,12 +143,31 @@ pub fn open(
     // again if the video doesn't open, so nothing invisible is left behind).
     let mut record = library.get_by_location(&location).ok().flatten();
     let mut created = None;
-    if record.is_none()
-        && let (Some(e), Some(sid)) = (&entry, &req.source_id)
-        && library.upsert_entry(sid, e).is_ok()
-    {
-        record = library.get_by_location(&location).ok().flatten();
-        created = record.as_ref().map(|r| r.id);
+    if let (Some(e), Some(sid)) = (&entry, &req.source_id) {
+        match &record {
+            None => {
+                if library.upsert_entry(sid, e).is_ok() {
+                    record = library.get_by_location(&location).ok().flatten();
+                    created = record.as_ref().map(|r| r.id);
+                }
+            }
+            // What its own source says now, as titles are kept current; a
+            // video another source has (a library's) is left to it.
+            Some(r) if &r.source_id == sid => {
+                if let Ok(u) = fp_library::MediaUpsert::from_entry(sid, e)
+                    && let Err(err) = library.update_details(
+                        r.id,
+                        Some(&u.title).filter(|t| !t.is_empty()).map(String::as_str),
+                        u.description.as_deref(),
+                        u.thumbnail_url.as_deref(),
+                    )
+                {
+                    log::warn!("updating the details of {location}: {err}");
+                }
+                record = library.get(r.id).ok().flatten();
+            }
+            Some(_) => {}
+        }
     }
     let failed = |e: String| {
         if let Some(id) = created

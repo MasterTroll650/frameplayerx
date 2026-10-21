@@ -15,7 +15,9 @@ pub mod local;
 pub mod page;
 pub mod perf;
 pub mod player;
+pub mod playlists;
 pub mod premium;
+pub mod queue;
 pub mod settings;
 pub mod sources;
 pub mod subtitle_text;
@@ -27,7 +29,7 @@ use crate::playback::OpenRequest;
 use crate::settings::HapticDeviceConfig;
 use fp_core::format::VideoFormat;
 use fp_core::source::Entry;
-use fp_library::{MediaId, Query};
+use fp_library::{MediaId, PlaylistId, Query};
 use fp_sources::SourceConfig;
 
 /// `h:mm:ss` or `m:ss`.
@@ -67,6 +69,32 @@ pub enum Action {
     Open(OpenRequest),
     /// Open item `.1` of a list; grip + thumbstick moves through the list.
     OpenList(Vec<OpenRequest>, usize),
+    /// Plays the list from `.1`, through to its end (Play all, a playlist).
+    PlayAll(Vec<OpenRequest>, usize),
+    /// Queues a video right after the one playing (`next`) or at the end.
+    Queue {
+        req: OpenRequest,
+        next: bool,
+    },
+    /// Plays the one at this place in Up next.
+    QueueJump(usize),
+    QueueRemove(usize),
+    QueueMove(usize, usize),
+    /// Keeps only the video playing in Up next.
+    QueueClear,
+    /// Shows Up next in the browse panel over the video.
+    ShowUpNext,
+    /// Adds videos to a playlist, or to a new one named `name`.
+    AddToPlaylist {
+        playlist: Option<PlaylistId>,
+        name: String,
+        reqs: Vec<OpenRequest>,
+    },
+    RenamePlaylist(PlaylistId, String),
+    DeletePlaylist(PlaylistId),
+    /// Takes out the entry at this position.
+    PlaylistRemove(PlaylistId, usize),
+    PlaylistMove(PlaylistId, usize, usize),
     TogglePause,
     Seek(f64),
     SeekRelative(f64),
@@ -203,6 +231,10 @@ pub enum Screen {
     History,
     Sources,
     Settings,
+    /// Your playlists, and one of them.
+    Playlists,
+    /// The queue, opened from the control bar.
+    UpNext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -499,6 +531,12 @@ pub enum RemapSlot {
     Axis(usize, crate::bindings::Axis),
 }
 
+/// Videos being added to a playlist, and what the picker calls them.
+pub struct Picking {
+    pub reqs: Vec<OpenRequest>,
+    pub title: String,
+}
+
 /// View-local UI state.
 pub struct UiState {
     pub screen: Screen,
@@ -513,6 +551,22 @@ pub struct UiState {
     pub clear_armed: Option<std::time::Instant>,
     pub home: Option<HomeRows>,
     pub details: Option<MediaId>,
+    /// The playlist open on the Playlists screen.
+    pub playlist: Option<PlaylistId>,
+    /// The playlists, and the open one's videos, as last read.
+    pub playlists: Option<Vec<fp_library::Playlist>>,
+    pub playlist_items: Option<(PlaylistId, Vec<fp_library::PlaylistEntry>)>,
+    /// A new playlist's name, or the open one's while it is renamed.
+    pub playlist_name: String,
+    pub renaming: bool,
+    /// Delete was pressed once on the open playlist: pressing again within
+    /// a few seconds deletes it.
+    pub delete_armed: Option<std::time::Instant>,
+    /// Videos being added to a playlist (the picker shows instead of the
+    /// screen).
+    pub picking: Option<Picking>,
+    /// Up next as last shown, with the queue's version it was made from.
+    pub up_next: Option<(u64, Vec<queue::Row>)>,
     /// The source being browsed (shown on the Sources screen).
     pub source: Option<SourceView>,
     /// Counts requests to sources, so answers reach the page that asked.
@@ -568,6 +622,14 @@ impl Default for UiState {
             clear_armed: None,
             home: None,
             details: None,
+            playlist: None,
+            playlists: None,
+            playlist_items: None,
+            playlist_name: String::new(),
+            renaming: false,
+            delete_armed: None,
+            picking: None,
+            up_next: None,
             source: None,
             seq: 0,
             source_form: None,
@@ -601,6 +663,9 @@ impl UiState {
     pub fn invalidate(&mut self) {
         self.history.results = None;
         self.home = None;
+        self.playlists = None;
+        self.playlist_items = None;
+        self.up_next = None;
         if let Some(SourceView {
             page: SourcePage::Library(l),
             ..
@@ -671,6 +736,7 @@ impl UiState {
 /// Everything a panel's UI may read or change.
 pub struct View<'a> {
     pub state: &'a mut UiState,
+    pub queue: &'a crate::queue::Queue,
     pub settings: &'a mut crate::settings::Settings,
     pub services: &'a crate::services::Services,
     pub thumbs: &'a mut thumbs::Thumbs,
