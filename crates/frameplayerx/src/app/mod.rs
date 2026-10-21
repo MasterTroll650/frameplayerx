@@ -95,6 +95,11 @@ const KEYBOARD: usize = 3;
 const PERF_LAYER: u64 = 8;
 /// Where the performance overlay sits from the eyes: low and to the left.
 const PERF_OFFSET: Vec3 = Vec3::new(-0.3, -0.12, -0.85);
+/// How far below where you face the browse panel and a flat player sit,
+/// degrees: what is in front of you is a little below eye level (the
+/// panel's top bar, Quit among it, is then about level with your eyes),
+/// and the two line up.
+const BELOW_DEG: f32 = 12.0;
 
 /// How long a video may take to open before the app gives up on it. A
 /// server that never sends a frame (a live transcode it can't keep up with)

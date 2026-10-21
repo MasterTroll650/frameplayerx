@@ -453,8 +453,11 @@ picture. Play/pause and seeking are under either thumb.
 To recenter, hold the Steam button, as in any game (both grips together, or
 the left Menu button, do it too). The picture and the panels come to where
 you are looking, up or down included. The browse panel and a flat screen
-come back in front of you (a 180° or 360° picture keeps its turn), and the
-adjust panel stays beside the control bar.
+come back in front of you, wherever you had moved them, a little below
+where you look and lined up (a 180° or 360° picture keeps its turn), and
+the adjust panel stays beside the control bar. A flat screen opens where the
+browse panel is: where you move it lasts while you watch, and isn't kept
+with the video.
 
 The picture, the control bar and the adjust panel beside it move as one
 player: drag the picture, or hold grip on the control bar and move it, and

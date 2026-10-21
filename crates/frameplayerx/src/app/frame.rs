@@ -4,16 +4,15 @@
 use super::*;
 
 impl App {
-    /// Forward becomes where the head faces, and the library panel comes
-    /// back in front: moved round to the side or behind, it stayed there
-    /// after recentering. How high it was moved is kept. A flat screen comes
-    /// back in front too (its yaw and pitch only place it; a 180°/360°
-    /// picture keeps its turn). The adjust panel keeps its place beside the
-    /// player.
+    /// Forward becomes where the head faces, and the browse panel comes
+    /// back in front, wherever it was moved. A flat screen comes back in
+    /// front too (its yaw and pitch only place it; a 180°/360° picture keeps
+    /// its turn), so the two line up. The adjust panel keeps its place
+    /// beside the player.
     pub(super) fn recenter(&mut self) {
         self.reanchor = true;
         self.panel_drag = None;
-        self.offsets.main[0] = 0.0;
+        self.offsets.main = [0.0, 0.0];
         self.settings.panel_offsets = self.offsets;
         if let Some(p) = &mut self.playback
             && p.format.projection == Projection::Flat
@@ -206,12 +205,17 @@ impl App {
     /// The player: what the picture's yaw and pitch turn (by dragging it,
     /// or the Position sliders). A flat screen, the control bar, the adjust
     /// panel beside it and the subtitles are placed from it, so they move
-    /// together; a 180°/360° picture turns the same way.
+    /// together; a 180°/360° picture turns the same way. A flat player sits
+    /// as far below where you face as the browse panel.
     fn picture_anchor(&self, anchor: Mat4) -> Mat4 {
         match &self.playback {
             Some(p) => {
                 let s = p.shown_settings(&self.settings.default_view);
-                turned_with_picture(anchor, s.yaw, s.pitch)
+                let below = match p.format.projection {
+                    Projection::Flat => BELOW_DEG,
+                    _ => 0.0,
+                };
+                turned_with_picture(anchor, s.yaw, s.pitch - below)
             }
             None => anchor,
         }
@@ -337,14 +341,14 @@ impl App {
         let beside = -52.0 - (half_angle(bar.size.x) - half_angle(bar.base_size().x));
         let [my, mp] = self.offsets.main;
         let [ay, ap] = self.offsets.adjust;
-        self.panels[MAIN].pose = place_around(anchor, my, mp, 1.5, -0.08);
+        self.panels[MAIN].pose = place_around(anchor, my, mp - BELOW_DEG, 1.5, 0.0);
         self.panels[BAR].pose = place(bar_anchor, 0.0, 1.05, -0.42, 28.0);
         self.panels[ADJUST].pose = place_around(adjust_anchor, beside + ay, ap, 1.15, -0.08);
         // The keyboard sits below the panel it types into, turned with it, so
         // it is where that panel was moved to.
         let (kb_from, [ky, kp]) = match kb_target {
             Some(ADJUST) => (adjust_anchor, [beside + ay, ap]),
-            Some(_) => (anchor, [my, mp]),
+            Some(_) => (anchor, [my, mp - BELOW_DEG]),
             None => (anchor, [0.0, 0.0]),
         };
         let kb_anchor = place_around(kb_from, ky, kp, 0.0, 0.0);

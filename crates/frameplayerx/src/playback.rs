@@ -104,6 +104,16 @@ fn declared_format(
     })
 }
 
+/// What is saved with a video: not where a flat screen was moved to, as it
+/// opens where the browse panel is. A 180°/360° picture keeps its turn.
+fn kept_with_video(mut s: ViewSettings, format: VideoFormat) -> ViewSettings {
+    if format.projection == format::Projection::Flat {
+        s.yaw = 0.0;
+        s.pitch = 0.0;
+    }
+    s
+}
+
 /// Opens media; blocking (network probing), so run it on a job thread.
 pub fn open(
     req: OpenRequest,
@@ -575,6 +585,16 @@ impl Playback {
         }
     }
 
+    /// Puts a flat screen where the browse panel is, `at` its yaw and pitch
+    /// (degrees, left and up positive), as it opens.
+    pub fn place_flat(&mut self, at: [f32; 2]) {
+        if self.format.projection == format::Projection::Flat {
+            for s in [&mut self.settings, &mut self.saved_settings] {
+                [s.yaw, s.pitch] = at;
+            }
+        }
+    }
+
     /// This video's format with its see-through mask turned on or off, when
     /// it is a side-by-side VR video and so could carry one. There is no
     /// screen to show the room around, so this is what the Room button does.
@@ -599,7 +619,7 @@ impl Playback {
             return Ok(false);
         };
         library
-            .set_view_settings(id, Some(&self.settings))
+            .set_view_settings(id, Some(&kept_with_video(self.settings, self.format)))
             .and_then(|_| library.set_keyframes(id, &self.keyframes))
             .inspect_err(|e| log::warn!("saving adjustments: {e}"))?;
         self.settings_dirty = false;
@@ -622,7 +642,7 @@ impl Playback {
         let mut saved = self.saved_settings;
         saved.set_key(&self.settings);
         saved.key_own = self.settings.key_own;
-        match library.set_view_settings(id, Some(&saved)) {
+        match library.set_view_settings(id, Some(&kept_with_video(saved, self.format))) {
             Ok(()) => {
                 self.saved_settings = saved;
                 self.settings_dirty = self.settings != saved;
@@ -882,6 +902,23 @@ mod tests {
             .unwrap();
         let r = lib.get_by_location(local).unwrap();
         assert_eq!(declared_format(None, r.as_ref()), None);
+    }
+
+    #[test]
+    fn where_a_flat_screen_was_moved_is_not_saved() {
+        let turned = ViewSettings {
+            yaw: 30.0,
+            pitch: -10.0,
+            zoom: 1.2,
+            ..ViewSettings::default()
+        };
+        let flat = kept_with_video(turned, VideoFormat::default());
+        assert_eq!((flat.yaw, flat.pitch, flat.zoom), (0.0, 0.0, 1.2));
+        let vr = VideoFormat {
+            projection: format::Projection::EQUIRECT_180,
+            ..VideoFormat::default()
+        };
+        assert_eq!(kept_with_video(turned, vr), turned);
     }
 
     #[test]

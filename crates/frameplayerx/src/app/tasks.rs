@@ -471,6 +471,9 @@ impl App {
                     h.load(o.scripts);
                 }
                 self.playback = Some(o.playback);
+                if let Some(p) = &mut self.playback {
+                    p.place_flat(self.offsets.main);
+                }
                 self.ui.open_error = None;
                 self.ui.adjust_open = false;
                 self.show_browser = false;
