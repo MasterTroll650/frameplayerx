@@ -233,3 +233,198 @@ fn servers_without_ranges_stream_sequentially() {
     assert_eq!(f.read_at(data.len() as u64 - 16, &mut buf).unwrap(), 16);
     assert_eq!(buf[..], data[data.len() - 16..]);
 }
+
+/// Runs `f` on a thread of its own and fails the test if it is still
+/// running after `limit`, so a regression can't hang the suite.
+fn within<T: Send + 'static>(limit: Duration, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(limit).expect("still blocked")
+}
+
+/// A server that answers every request with `head` and `body`, sent
+/// `pause` apart in `chunks` pieces, and then holds the connection open
+/// without sending anything more.
+fn raw_server(head: String, body: Vec<u8>, chunks: usize, pause: Duration) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/x.mp4", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let (head, body) = (head.clone(), body.clone());
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(&stream);
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    line.clear();
+                }
+                let mut stream = &stream;
+                let _ = stream.write_all(head.as_bytes());
+                for piece in body.chunks(body.len().div_ceil(chunks).max(1)) {
+                    std::thread::sleep(pause);
+                    let _ = stream.write_all(piece);
+                }
+                std::thread::sleep(Duration::from_secs(30));
+            });
+        }
+    });
+    url
+}
+
+fn stall_client() -> HttpClient {
+    HttpClient::new(
+        HttpOptions {
+            read_timeout: Duration::from_millis(300),
+            max_retries: 0,
+            cache: CacheOptions {
+                block_size: 4096,
+                read_ahead: false,
+                ..CacheOptions::default()
+            },
+            ..HttpOptions::default()
+        },
+        None,
+    )
+}
+
+#[test]
+fn a_server_that_stops_after_its_headers_fails_the_open() {
+    let ranged = raw_server(
+        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-4095/1000000\r\nContent-Length: 4096\r\n\r\n".into(),
+        vec![1],
+        1,
+        Duration::ZERO,
+    );
+    let plain = raw_server(
+        "HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n".into(),
+        vec![1],
+        1,
+        Duration::ZERO,
+    );
+    for url in [ranged, plain] {
+        let t = Instant::now();
+        let r = within(Duration::from_secs(10), move || {
+            stall_client().open(&url).map(|_| ())
+        });
+        assert!(r.is_err(), "opened a stalled stream");
+        assert!(
+            t.elapsed() < Duration::from_secs(3),
+            "took {:?}",
+            t.elapsed()
+        );
+    }
+}
+
+#[test]
+fn a_stream_that_stops_later_fails_the_read() {
+    let url = raw_server(
+        "HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n".into(),
+        pattern(8192),
+        1,
+        Duration::ZERO,
+    );
+    let f = stall_client().open(&url).unwrap();
+    let t = Instant::now();
+    let r = within(Duration::from_secs(10), move || {
+        let mut buf = [0u8; 100];
+        f.read_at(9000, &mut buf)
+    });
+    assert!(r.is_err(), "read past what the server sent");
+    assert!(
+        t.elapsed() < Duration::from_secs(3),
+        "took {:?}",
+        t.elapsed()
+    );
+}
+
+#[test]
+fn a_slow_stream_that_keeps_coming_plays_on() {
+    // A second in all, longer than the read timeout, but never 300 ms
+    // without data.
+    let data = pattern(40_000);
+    let url = raw_server(
+        format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", data.len()),
+        data.clone(),
+        10,
+        Duration::from_millis(100),
+    );
+    let got = within(Duration::from_secs(10), move || {
+        let f = stall_client().open(&url).unwrap();
+        read_all(&f, 4096)
+    });
+    assert!(got == data);
+}
+
+/// `serve_bytes` from a server that never sends more than `cap` bytes of a
+/// range, saying so in Content-Range as such servers do.
+fn capped(req: &Req, data: &[u8], cap: u64) -> common::Resp {
+    let mut req = req.clone();
+    for (k, v) in req.headers.iter_mut() {
+        if k.eq_ignore_ascii_case("range")
+            && let Some((a, b)) = v.trim_start_matches("bytes=").split_once('-')
+        {
+            let start: u64 = a.parse().unwrap();
+            let end = b.parse::<u64>().unwrap_or(u64::MAX).min(start + cap - 1);
+            *v = format!("bytes={start}-{end}");
+        }
+    }
+    serve_bytes(&req, data, true)
+}
+
+#[test]
+fn servers_that_cap_their_ranges_are_read_in_full() {
+    let data = Arc::new(pattern(20_000));
+    let d = data.clone();
+    let server = TestServer::start(move |req| capped(req, &d, 1024));
+    let client = HttpClient::new(
+        HttpOptions {
+            cache: CacheOptions {
+                block_size: 4096,
+                ..CacheOptions::default()
+            },
+            ..HttpOptions::default()
+        },
+        None,
+    );
+    let f = client.open(&server.url("/x.mp4")).unwrap();
+    assert_eq!(f.size(), Some(20_000));
+    assert!(read_all(&f, 3000) == *data);
+}
+
+#[test]
+fn a_short_first_range_is_no_end_of_file() {
+    // The opening request gets only the first 1024 bytes of its block.
+    let data = Arc::new(pattern(8192));
+    let d = data.clone();
+    let first = Arc::new(AtomicUsize::new(0));
+    let server = TestServer::start(move |req| {
+        if first.fetch_add(1, Ordering::SeqCst) == 0 {
+            return resp(
+                206,
+                d[..1024].to_vec(),
+                &[("Content-Range", "bytes 0-1023/8192")],
+            );
+        }
+        serve_bytes(req, &d, true)
+    });
+    let client = HttpClient::new(
+        HttpOptions {
+            cache: CacheOptions {
+                block_size: 4096,
+                ..CacheOptions::default()
+            },
+            ..HttpOptions::default()
+        },
+        None,
+    );
+    let f = client.open(&server.url("/x.mp4")).unwrap();
+    let mut buf = [0u8; 100];
+    assert_eq!(
+        f.read_at(1024, &mut buf).unwrap(),
+        100,
+        "end of file at 1024"
+    );
+    assert!(read_all(&f, 3000) == *data);
+}

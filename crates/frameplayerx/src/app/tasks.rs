@@ -39,8 +39,10 @@ pub(super) enum Job {
     /// Nothing to show (a server took a change).
     Done,
     Dlna(Result<Vec<fp_sources::DlnaDevice>, String>),
+    /// A device connected, with the haptics generation it was started in.
     Device(
         crate::settings::HapticDeviceConfig,
+        u64,
         Result<Box<dyn fp_haptics::Device>, String>,
     ),
     /// Download and install progress.
@@ -48,8 +50,10 @@ pub(super) enum Job {
     /// The result of update check number `.0`.
     UpdateChecked(u64, UpdateStatus, Option<Box<fp_updater::Update>>),
     Mounted(String, Result<std::path::PathBuf, String>),
-    QuickConnectInitiated(Result<fp_sources::QuickConnectState, String>),
-    QuickConnectPolled(Result<Option<(String, String)>, String>),
+    /// The answer to pairing code request number `.0`.
+    QuickConnectInitiated(u64, Result<fp_sources::QuickConnectState, String>),
+    /// The answer to a poll with secret `.0`.
+    QuickConnectPolled(String, Result<Option<(String, String)>, String>),
     /// The last run crashed: the report the user may send.
     CrashReport(Box<crate::crash::Report>),
     CrashSent(Result<(), String>),
@@ -123,9 +127,10 @@ impl App {
         if !self.settings.haptics_enabled {
             return;
         }
+        let generation = self.services.haptics_generation();
         self.jobs.spawn("haptics", move || {
             let r = Services::connect_device(&cfg);
-            Job::Device(cfg, r)
+            Job::Device(cfg, generation, r)
         });
     }
 
@@ -341,7 +346,15 @@ impl App {
                     Err(e) => self.ui.toast(format!("Network search failed: {e}")),
                 }
             }
-            Job::Device(cfg, r) => {
+            // A device connected before haptics were turned off and on
+            // again, or that was removed or changed meanwhile, is let go.
+            Job::Device(cfg, generation, _)
+                if generation != self.services.haptics_generation()
+                    || !self.settings.haptic_devices.contains(&cfg) =>
+            {
+                log::info!("haptics {}: dropped a late connection", cfg.label());
+            }
+            Job::Device(cfg, _, r) => {
                 if let Err(e) = &r {
                     log::warn!("haptics {}: {e}", cfg.label());
                     self.ui.toast(format!("{}: {e}", cfg.label()));
@@ -370,8 +383,8 @@ impl App {
                     self.ui.update = status;
                 }
             }
-            Job::QuickConnectInitiated(r) => self.quick_connect_code(r),
-            Job::QuickConnectPolled(r) => self.quick_connect_answer(r),
+            Job::QuickConnectInitiated(seq, r) => self.quick_connect_code(seq, r),
+            Job::QuickConnectPolled(secret, r) => self.quick_connect_answer(&secret, r),
             Job::CrashReport(report) => {
                 self.ui.crash = Some(ui::crash::CrashPrompt::new(*report));
                 self.show_browser = true;
@@ -456,13 +469,13 @@ impl App {
     }
 
     // A Quick Connect answer for a form that has moved on (cancelled,
-    // closed) is dropped.
+    // closed, asked again) is dropped.
 
-    fn quick_connect_code(&mut self, r: Result<fp_sources::QuickConnectState, String>) {
+    fn quick_connect_code(&mut self, seq: u64, r: Result<fp_sources::QuickConnectState, String>) {
         let Some(f) = self.ui.source_form.as_mut() else {
             return;
         };
-        if f.quick_connect != QuickConnect::Requesting {
+        if f.quick_connect != QuickConnect::Requesting || seq != self.quick_connect_request {
             return;
         }
         f.quick_connect = match r {
@@ -476,7 +489,7 @@ impl App {
         self.panels[MAIN].request_repaint();
     }
 
-    fn quick_connect_answer(&mut self, r: Result<Option<(String, String)>, String>) {
+    fn quick_connect_answer(&mut self, secret: &str, r: Result<Option<(String, String)>, String>) {
         let (token, user_id) = match r {
             Ok(Some(t)) => t,
             Ok(None) => return,
@@ -490,7 +503,7 @@ impl App {
         let Some(f) = self.ui.source_form.as_mut() else {
             return;
         };
-        if !matches!(f.quick_connect, QuickConnect::Waiting { .. }) {
+        if !matches!(&f.quick_connect, QuickConnect::Waiting { secret: s, .. } if s == secret) {
             return;
         }
         f.quick_connect = QuickConnect::Authorized {

@@ -823,7 +823,7 @@ fn format_tab(
             );
             r.slider(
                 "Width",
-                None,
+                Some("Its longer side: a portrait video's height."),
                 &mut s.screen_width,
                 0.5..=30.0,
                 d.screen_width,
@@ -1411,13 +1411,15 @@ fn haptics_tab(
 /// Subtitle cues, drawn large on a dark plate on a transparent panel. Text
 /// is set by `shaper` once the fonts have loaded, by egui (Latin, Greek and
 /// Cyrillic only) before. With `stereo`, the cues are a 3D video's pictures
-/// (see [`stereo_pictures`]).
+/// (see [`stereo_pictures`]). Pictures are widened by the video's
+/// `pixel_aspect`, as the video is.
 pub fn subtitles(
     ctx: &egui::Context,
     cues: &[fp_media::subtitle::Cue],
     textures: &mut Vec<egui::TextureHandle>,
     shaper: Option<&mut super::subtitle_text::SubtitleText>,
     stereo: Option<&crate::subtitles::StereoSubs>,
+    pixel_aspect: f32,
 ) {
     if let Some(s) = stereo {
         stereo_pictures(ctx, cues, textures, s);
@@ -1450,7 +1452,7 @@ pub fn subtitles(
         }
         ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
             for t in textures.iter() {
-                let size = t.size_vec2();
+                let size = t.size_vec2() * Vec2::new(pixel_aspect, 1.0);
                 let scale = (ui.available_width() / size.x).min(1.0);
                 ui.image((t.id(), size * scale));
             }

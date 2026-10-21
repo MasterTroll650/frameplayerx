@@ -1531,8 +1531,13 @@ mod linux {
         }
 
         /// Receives a frame. `Ok(None)`: send more input. `Ok(Some(false))`:
-        /// fully drained after end of stream.
-        pub(crate) fn receive(&mut self, frame: *mut ff::AVFrame) -> Result<Option<bool>> {
+        /// fully drained after end of stream. Pictures `keep` refuses (by
+        /// pts and duration) go back to the decoder without being copied.
+        pub(crate) fn receive(
+            &mut self,
+            frame: *mut ff::AVFrame,
+            keep: impl Fn(i64, i64) -> bool,
+        ) -> Result<Option<bool>> {
             let mut idle_since: Option<Instant> = None;
             loop {
                 if self.finished {
@@ -1555,12 +1560,13 @@ mod linux {
                 if let Some(d) = self.dequeue_capture()? {
                     idle_since = None;
                     let last = d.flags & BUF_FLAG_LAST != 0;
-                    let timing = self.ts.get(d.id).filter(|&(pts, _)| {
+                    let timing = self.ts.get(d.id).filter(|&(pts, duration)| {
                         d.bytesused > 0
                             && d.flags & BUF_FLAG_ERROR == 0
                             && self
                                 .pts_floor
                                 .is_none_or(|floor| pts == ff::AV_NOPTS_VALUE || pts >= floor)
+                            && keep(pts, duration)
                     });
                     let result = timing.map(|(pts, dur)| self.export(d.index, frame, pts, dur));
                     if last {

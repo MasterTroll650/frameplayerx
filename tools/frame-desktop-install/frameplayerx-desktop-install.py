@@ -15,14 +15,15 @@ the same with --remove; by hand:
   python3 frameplayerx-desktop-install.py --remove --purge    # deletes it too
 
 Steps: find the highest-versioned GitHub release (stable unless --beta),
-download its zip and check the
-SHA-256 GitHub recorded for it, uninstall every other copy of the app (library
+download its zip and check the SHA-256 GitHub recorded for it, unpack it next
+to the install directory, check it and swap it in (putting the installed
+version back if that fails), uninstall every other copy of the app (library
 entries made by other installers, e.g. Frame Control titles, "(test)" copies,
 the folders they start from, and leftovers such as <dir>.old or
 <dir>.release-build3; folders ending in .keep are left alone, and settings,
-profiles and videos live elsewhere), unpack the new one next to the install
-directory and swap it in, then add or update the Steam library entry with its
-artwork. With --name-suffix (a test copy) other copies are left alone.
+profiles and videos live elsewhere), then add or update the Steam library
+entry with its artwork. With --name-suffix (a test copy) other copies are
+left alone.
 
 The library entry is added one of two ways (--steam):
   live  through the Steam client's local DevTools port (127.0.0.1:8080), the
@@ -241,21 +242,54 @@ def running(app, dest, proc='/proc'):
     return False
 
 
-def install_files(app, zip_path, dest):
-    """Unpacks into <dest>.new, checks it, then swaps it in; the previous
-    version stays as <dest>.old."""
-    new, old = dest + '.new', dest + '.old'
-    shutil.rmtree(new, ignore_errors=True)
-    extract(zip_path, new)
-    exe = os.path.join(new, app['exe'])
+def stage(app, zip_path, dest):
+    """Unpacks the zip into <dest>.staged and checks it, changing nothing
+    else. Returns that folder."""
+    staged = dest + '.staged'
+    shutil.rmtree(staged, ignore_errors=True)
+    try:
+        extract(zip_path, staged)
+    except BaseException:
+        shutil.rmtree(staged, ignore_errors=True)
+        raise
+    exe = os.path.join(staged, app['exe'])
     if not os.path.isfile(exe):
-        shutil.rmtree(new, ignore_errors=True)
+        shutil.rmtree(staged, ignore_errors=True)
         raise Fail(f"The download doesn't contain {app['exe']}; nothing was changed.")
     os.chmod(exe, os.stat(exe).st_mode | 0o755)
-    if os.path.exists(dest):
+    return staged
+
+
+def swap_in(staged, dest):
+    """Puts staged in dest's place, keeping the version it replaces as
+    <dest>.old, and puts that one back if the new one can't go in."""
+    old = dest + '.old'
+    had = os.path.exists(dest)
+    if had:
         shutil.rmtree(old, ignore_errors=True)
         os.rename(dest, old)
-    os.rename(new, dest)
+    try:
+        os.rename(staged, dest)
+    except OSError as e:
+        if had:
+            os.rename(old, dest)
+        shutil.rmtree(staged, ignore_errors=True)
+        raise Fail(f"Couldn't put the new version in place ({e}); the installed one was kept.")
+
+
+def recover(app, dest):
+    """Puts back the version a run stopped between swap_in's two renames
+    left as <dest>.old."""
+    old = dest + '.old'
+    if not os.path.exists(dest) and holds_copy(app, old):
+        os.rename(old, dest)
+        say(f'  Put back the version an interrupted install left in {old}')
+
+
+def install_files(app, zip_path, dest):
+    """Unpacks and checks the new version, then swaps it in; the previous
+    one stays as <dest>.old."""
+    swap_in(stage(app, zip_path, dest), dest)
 
 
 # ---------------------------------------------------------------- binary VDF
@@ -713,14 +747,21 @@ def old_versions(app, dest, entries, home=HOME):
     return old, sorted(folders)
 
 
-def remove_old_versions(app, dest, method):
-    """Uninstalls every other copy of app before the new one goes in. Returns
-    how the library was edited ('live', 'file') or None."""
+def old_copies(app, dest, method):
+    """Every other copy of app (see old_versions) and how the library was
+    read. Fails, before anything changes, if one of them is running."""
     entries, how = library_entries() if method != 'none' else ([], None)
     old, folders = old_versions(app, dest, entries)
     for f in folders:
         if running(app, f):
             raise Fail(f'An older copy in {f} is running. Close it, then run this again.')
+    return old, folders, how
+
+
+def retire(copies, method):
+    """Removes the other copies found by old_copies, once the new one is in.
+    Returns how the library was edited ('live', 'file') or None."""
+    old, folders, how = copies
     edited = None
     if old:
         ids = {aid for aid, _, _ in old}
@@ -733,15 +774,16 @@ def remove_old_versions(app, dest, method):
                 if method == 'live':
                     raise Fail("Couldn't reach Steam's DevTools port to remove the old versions.")
         if not edited:
-            if not close_steam():
-                raise Fail('Steam was left open, so the old versions could not be removed; '
-                           'nothing was changed.')
-            for cfg in steam_accounts():
-                write_shortcut_file(cfg, lambda doc: remove_appids(doc, ids))
-            edited = 'file'
-        remove_art(ids)
-        for _, name, exe in old:
-            say(f'  Removed the old library entry "{name}" ({exe or "no launcher"}).')
+            if close_steam():
+                for cfg in steam_accounts():
+                    write_shortcut_file(cfg, lambda doc: remove_appids(doc, ids))
+                edited = 'file'
+            else:
+                say('  Steam was left open, so the old versions stay in your library.')
+        if edited:
+            remove_art(ids)
+            for _, name, exe in old:
+                say(f'  Removed the old library entry "{name}" ({exe or "no launcher"}).')
     for f in folders:
         shutil.rmtree(f, ignore_errors=True)
         say(f'  Deleted the old copy in {f}')
@@ -871,16 +913,20 @@ def main():
 
         if running(app, dest):
             raise Fail(f"{name} is running. Close it, then run this again.")
+        recover(app, dest)
         if args.name_suffix:
             say('  A named copy: other copies of the app are left alone.')
+            copies = None
         else:
-            methods.add(remove_old_versions(app, dest, args.steam))
+            copies = old_copies(app, dest, args.steam)
+        # The new version is checked and in place before anything goes.
         os.makedirs(parent, exist_ok=True)
-        install_files(app, zip_path, dest)
-        if not args.name_suffix:
-            # The swap keeps the replaced version until the new one is in place.
-            shutil.rmtree(dest + '.old', ignore_errors=True)
+        swap_in(stage(app, zip_path, dest), dest)
         say(f'  Installed in {dest}')
+        if copies:
+            methods.add(retire(copies, args.steam))
+            # The swap kept the replaced version until the new one was in.
+            shutil.rmtree(dest + '.old', ignore_errors=True)
 
         if args.steam != 'none':
             icon = next((p for p in (os.path.join(dest, i) for i in app['icons']) if os.path.isfile(p)), '')

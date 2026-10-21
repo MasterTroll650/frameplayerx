@@ -50,6 +50,8 @@ struct Params {
     // xyz: the viewer's offset (height, forward) in the room frame, metres,
     // for spherical video; w: radius of the sphere it is drawn on when offset
     viewer: vec4<f32>,
+    // x: clockwise quarter turns that show the frame upright
+    display: vec4<u32>,
 };
 
 struct PushConstants {
@@ -232,6 +234,16 @@ fn to_eye_rect(uv: vec2<f32>, eye: u32) -> vec2<f32> {
     }
 }
 
+// Where a point of the upright picture is in the stored frame.
+fn stored_uv(uv: vec2<f32>) -> vec2<f32> {
+    switch params.display.x {
+        case 1u: { return vec2<f32>(uv.y, 1.0 - uv.x); }
+        case 2u: { return 1.0 - uv; }
+        case 3u: { return vec2<f32>(1.0 - uv.y, uv.x); }
+        default: { return uv; }
+    }
+}
+
 fn sample_yuv(uv: vec2<f32>) -> vec3<f32> {
     let y = textureSampleLevel(plane0, samp, uv, 0.0).r;
     var c: vec2<f32>;
@@ -326,7 +338,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (uv.x < 0.0) {
         return params.bg_color;
     }
-    let tuv = to_eye_rect(uv, eye);
+    let tuv = stored_uv(to_eye_rect(uv, eye));
     var rgb = sample_yuv(tuv);
 
     // Chroma key (as OBS does it): pixels whose chroma is near the key
@@ -350,7 +362,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let slot = f32(eye ^ params.mode.z);
         let k = params.key2.z;
         let m = fract(vec2<f32>((1.0 - slot) * 0.5 + (uv.x - 0.5) * k * 0.5, (uv.y - 0.5) * k));
-        alpha *= clamp((sample_yuv(m).r - 0.08) / 0.84, 0.0, 1.0);
+        alpha *= clamp((sample_yuv(stored_uv(m)).r - 0.08) / 0.84, 0.0, 1.0);
     }
 
     // Sharpen: unsharp mask on luma.

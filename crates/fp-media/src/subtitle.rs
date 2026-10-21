@@ -171,7 +171,11 @@ pub(crate) fn decode_packet(dec: &mut Decoder, pkt: &Packet) -> Option<Cue> {
         } else {
             0.0
         };
-        let cue = convert(&sub, pts, p.duration as f64 * tb);
+        let cue = convert(&sub, pts, p.duration as f64 * tb).map(|mut c| {
+            c.start -= dec.origin;
+            c.end -= dec.origin;
+            c
+        });
         ff::avsubtitle_free(&mut sub);
         cue
     }
@@ -184,7 +188,7 @@ pub fn load_file(src: Arc<dyn ByteSource>, name: &str) -> Result<Vec<Cue>> {
     let idx = input
         .best_stream(ff::AVMEDIA_TYPE_SUBTITLE)
         .ok_or(crate::Error::NoStream("subtitle"))?;
-    let mut dec = Decoder::open(input.streams()[idx], HwDecode::Off)?;
+    let mut dec = Decoder::open(&input, idx, HwDecode::Off)?;
     let mut cues = Vec::new();
     let mut pkt = Packet::new();
     while input.read(pkt.as_ptr())? {

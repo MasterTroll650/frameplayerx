@@ -264,7 +264,7 @@ impl Player {
 
         // Decoders are opened here so errors surface from open().
         let video_dec = match info.video {
-            Some(i) => Some(Decoder::open(input.streams()[i], config.hw_decode)?),
+            Some(i) => Some(Decoder::open(&input, i, config.hw_decode)?),
             None => None,
         };
         if let Some(d) = &video_dec {
@@ -273,13 +273,9 @@ impl Player {
             st.hardware = d.hardware;
             st.hardware_error = d.hardware_error.clone();
         }
-        let audio_streams: Vec<(usize, *mut ff::AVStream)> = info
-            .audio_streams()
-            .map(|s| (s.index, input.streams()[s.index]))
-            .collect();
         let mut audio_decoders = Vec::new();
-        for (i, st) in audio_streams {
-            match Decoder::open(st, HwDecode::Off) {
+        for i in info.audio_streams().map(|s| s.index) {
+            match Decoder::open(&input, i, HwDecode::Off) {
                 Ok(d) => audio_decoders.push((i, d)),
                 Err(e) => log::warn!("audio stream {i}: {e}"),
             }
@@ -287,7 +283,7 @@ impl Player {
         let subtitle_decoders: Vec<(usize, Decoder)> = info
             .subtitle_streams()
             .filter_map(|s| {
-                Decoder::open(input.streams()[s.index], HwDecode::Off)
+                Decoder::open(&input, s.index, HwDecode::Off)
                     .ok()
                     .map(|d| (s.index, d))
             })
@@ -668,14 +664,19 @@ fn demux_thread(
 ) {
     let mut subs = DemuxPtrs(subtitle_decoders);
     let mut pkt = Packet::new();
-    let streams: Vec<(f64, f64)> = input
+    let time_bases: Vec<f64> = input
         .streams()
         .iter()
         // SAFETY: stream pointers are valid while input lives.
-        .map(|&st| unsafe { (crate::q2d((*st).time_base), (*st).start_time as f64) })
+        .map(|&st| unsafe { crate::q2d((*st).time_base) })
         .collect();
     let mut last_video_ts = 0.0f64;
     let mut first_video_ts: Option<f64> = None;
+    // After a seek, video waits for a keyframe so every decoder starts
+    // clean: MPEG-TS has no keyframe index, and its seeks land between
+    // them. It stops waiting at this media time, in case a stream's
+    // keyframes aren't marked.
+    let mut await_key: Option<f64> = None;
     let mut read_errors = 0;
     while !sh.quit.load(Ordering::Acquire) {
         let (seek, audio_stream, sub_stream) = {
@@ -703,6 +704,7 @@ fn demux_thread(
             sh.clock.pause();
             sh.clock.set(req.target);
             first_video_ts = None;
+            await_key = Some(req.target + 20.0);
             sh.frames_cv.notify_all();
         }
         if sh.demux_eof.load(Ordering::Acquire) {
@@ -734,8 +736,17 @@ fn demux_thread(
                     } else {
                         p.dts
                     };
-                    if ts != ff::AV_NOPTS_VALUE {
-                        let t = ts as f64 * streams[idx].0;
+                    let t = (ts != ff::AV_NOPTS_VALUE)
+                        .then(|| ts as f64 * time_bases[idx] - input.origin());
+                    if let Some(limit) = await_key {
+                        let key = p.flags & ff::AV_PKT_FLAG_KEY as i32 != 0;
+                        if !key && t.is_none_or(|t| t <= limit) {
+                            pkt.unref();
+                            continue;
+                        }
+                        await_key = None;
+                    }
+                    if let Some(t) = t {
                         last_video_ts = t;
                         first_video_ts.get_or_insert(t);
                     }
@@ -795,6 +806,11 @@ fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
         if pkt_serial != serial {
             serial = pkt_serial;
             dec.flush();
+            if let Some((fs, target)) = *lock(&sh.seek_floor)
+                && fs == serial
+            {
+                dec.skip_before(target, default_duration);
+            }
         }
         let pkt_ptr = pkt
             .as_ref()
@@ -825,15 +841,6 @@ fn video_thread(sh: Arc<Shared>, mut dec: Decoder, cap: usize) {
                         let dur = Some(dec.frame_duration(&frame))
                             .filter(|d| *d > 0.0)
                             .unwrap_or(default_duration);
-                        let floor = *lock(&sh.seek_floor);
-                        if let Some((fs, target)) = floor
-                            && fs == serial
-                            && pts + dur * 0.5 < target
-                        {
-                            // SAFETY: valid frame; drop its reference.
-                            unsafe { ff::av_frame_unref(frame.as_ptr()) };
-                            continue;
-                        }
                         let vf = match conv.convert(frame.take_raw(), pts, dur, serial) {
                             Ok(v) => Arc::new(v),
                             Err(e) => {
@@ -1149,6 +1156,34 @@ mod tests {
         assert!((f.pts - 1.2333).abs() < 0.05, "landed at {}", f.pts);
         assert_eq!(p.state(), PlayerState::Paused);
         assert!((p.position() - f.pts).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_late_starting_stream_plays_from_zero() {
+        let p = Player::open(
+            crate::ts_fixture::h264_aac_ts(10.0),
+            "x.ts",
+            PlayerConfig {
+                start_paused: true,
+                ..cfg()
+            },
+            |_| None,
+        )
+        .unwrap();
+        run(&p, 2.0, |p, f| {
+            f.is_some() && p.state() != PlayerState::Buffering
+        });
+        let f = p.current_frame().unwrap();
+        assert!(f.pts.abs() < 0.05, "first frame at {}", f.pts);
+        assert!(p.position() < 0.05, "position {}", p.position());
+        p.play();
+        run(&p, 4.0, |p, _| p.state() == PlayerState::Ended);
+        assert_eq!(p.state(), PlayerState::Ended);
+        assert!(
+            (p.position() - 2.0).abs() < 0.1,
+            "ended at {}",
+            p.position()
+        );
     }
 
     #[test]

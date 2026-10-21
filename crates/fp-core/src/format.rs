@@ -337,12 +337,13 @@ pub fn detect_from_name(name: &str) -> Option<VideoFormat> {
     })
 }
 
-/// Guesses a format from the frame size when nothing else is known. Only
-/// confident cases: 2:1 is mono 360 or (from 4K up) stereo 180, a big 1:1
-/// frame is 360 top/bottom, and a movie's shape (4:3 to 2.76:1, or two
-/// 16:9 pictures side by side or stacked) is a flat screen: no VR format
-/// has those shapes, but for YouTube's 3:2 cubemap (EAC), which is left
-/// alone from 2560 wide.
+/// Guesses a format from the frame size, as shown, when nothing else is
+/// known. Only confident cases: 2:1 is mono 360 or (from 4K up) stereo
+/// 180, a big 1:1 frame is 360 top/bottom, and a movie's shape (4:3 to
+/// 2.76:1, or two 16:9 pictures side by side or stacked) or a phone's
+/// portrait one (4:5 to 9:20, but for 180° top/bottom's 1:2) is a flat
+/// screen: no VR format has those shapes, but for YouTube's 3:2 cubemap
+/// (EAC), which is left alone from 2560 wide.
 pub fn guess_from_aspect(width: u32, height: u32) -> Option<VideoFormat> {
     if width == 0 || height == 0 {
         return None;
@@ -350,7 +351,9 @@ pub fn guess_from_aspect(width: u32, height: u32) -> Option<VideoFormat> {
     let ar = width as f32 / height as f32;
     let near = |target: f32, tolerance: f32| (ar - target).abs() < tolerance;
     let cubemap = near(1.5, 0.02) && width >= 2560;
-    if ((1.25..1.9).contains(&ar) || (2.1..2.8).contains(&ar)) && !cubemap {
+    let movie = (1.25..1.9).contains(&ar) || (2.1..2.8).contains(&ar);
+    let portrait = (0.44..0.49).contains(&ar) || (0.52..0.81).contains(&ar);
+    if (movie && !cubemap) || portrait {
         return Some(VideoFormat::new(Projection::Flat, StereoLayout::Mono));
     }
     // Full side by side (3840x1080) and full over/under (1920x2160) 3D.
@@ -390,6 +393,9 @@ pub fn guess_from_aspect(width: u32, height: u32) -> Option<VideoFormat> {
 pub struct ContainerHints {
     pub projection: Option<Projection>,
     pub stereo: Option<StereoLayout>,
+    /// With `stereo`: the right eye comes first (Matroska's `right_left`
+    /// and `bottom_top`).
+    pub eyes_swapped: bool,
 }
 
 /// For flat screens, refines generic SideBySide or TopBottom into HalfSideBySide
@@ -440,7 +446,10 @@ pub fn resolve(
             .stereo
             .or(from_name.map(|f| f.stereo))
             .unwrap_or_default();
-        let eyes_swapped = from_name.is_some_and(|f| f.eyes_swapped);
+        let eyes_swapped = match hints.stereo {
+            Some(_) => hints.eyes_swapped,
+            None => from_name.is_some_and(|f| f.eyes_swapped),
+        };
         let alpha_packed = from_name.is_some_and(|f| f.alpha_packed);
         let mut format = VideoFormat {
             projection,
@@ -567,6 +576,7 @@ mod tests {
         let hints = ContainerHints {
             projection: Some(P::EQUIRECT_180),
             stereo: Some(S::SideBySide),
+            ..Default::default()
         };
         assert!(
             resolve(None, hints, "x_180_LR_alpha.mp4", 8192, 4096)
@@ -588,6 +598,25 @@ mod tests {
             d("x_360_BT.mp4"),
             Some((P::EQUIRECT_360, S::TopBottom, true))
         );
+    }
+
+    #[test]
+    fn eye_order_from_metadata() {
+        let stereo = |stereo, eyes_swapped| ContainerHints {
+            stereo: Some(stereo),
+            eyes_swapped,
+            ..Default::default()
+        };
+        let swapped = |hints, name| resolve(None, hints, name, 1920, 2160).format.eyes_swapped;
+        assert!(swapped(stereo(S::TopBottom, true), "a.mkv"));
+        // The metadata gives the order along with the layout.
+        assert!(!swapped(stereo(S::TopBottom, false), "a_BT.mkv"));
+        // Projection alone: the name still gives the order.
+        let projection = ContainerHints {
+            projection: Some(P::EQUIRECT_180),
+            ..Default::default()
+        };
+        assert!(swapped(projection, "a_RL.mp4"));
     }
 
     #[test]
@@ -668,6 +697,17 @@ mod tests {
             Some(VideoFormat::new(P::Flat, S::TopBottom))
         );
         assert_eq!(guess_from_aspect(720, 480), flat, "DVD");
+        // Phone clips held upright: 9:16, 3:4, 4:5 and a screen recording.
+        for (w, h) in [
+            (1080, 1920),
+            (2160, 3840),
+            (1440, 1920),
+            (1080, 1350),
+            (1080, 2340),
+        ] {
+            assert_eq!(guess_from_aspect(w, h), flat, "{w}x{h}");
+        }
+        assert_eq!(guess_from_aspect(4096, 8192), None, "180° top/bottom");
         // Nothing to go by: a cubemap's shape, square below 360 sizes, or
         // no size.
         assert_eq!(guess_from_aspect(3072, 2048), None);
@@ -684,7 +724,7 @@ mod tests {
         );
         let meta = ContainerHints {
             projection: Some(P::EQUIRECT_360),
-            stereo: None,
+            ..Default::default()
         };
         let r = resolve(None, meta, "a_TB.mp4", 4096, 4096);
         assert_eq!(

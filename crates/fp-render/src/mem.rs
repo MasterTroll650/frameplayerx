@@ -29,29 +29,40 @@ impl Buffer {
             )
         }
         .ctx("create buffer")?;
+        let mut b = Buffer {
+            buffer,
+            size,
+            alloc: None,
+        };
+        // Out of memory, what was made so far is given back.
+        if let Err(e) = b.back(gpu, location, name) {
+            b.destroy(gpu);
+            return Err(e);
+        }
+        Ok(b)
+    }
+
+    /// Gives the buffer its memory.
+    fn back(&mut self, gpu: &Gpu, location: MemoryLocation, name: &str) -> Result<()> {
         // SAFETY: valid buffer.
-        let requirements = unsafe { gpu.device.get_buffer_memory_requirements(buffer) };
-        let alloc = gpu
-            .alloc()
-            .allocate(&AllocationCreateDesc {
-                name,
-                requirements,
-                location,
-                linear: true,
-                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-            })
-            .map_err(|e| Error::Alloc(e.to_string()))?;
+        let requirements = unsafe { gpu.device.get_buffer_memory_requirements(self.buffer) };
+        let alloc = self.alloc.insert(
+            gpu.alloc()
+                .allocate(&AllocationCreateDesc {
+                    name,
+                    requirements,
+                    location,
+                    linear: true,
+                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                })
+                .map_err(|e| Error::Alloc(e.to_string()))?,
+        );
         // SAFETY: memory from the allocator matches the requirements.
         unsafe {
             gpu.device
-                .bind_buffer_memory(buffer, alloc.memory(), alloc.offset())
+                .bind_buffer_memory(self.buffer, alloc.memory(), alloc.offset())
         }
-        .ctx("bind buffer")?;
-        Ok(Buffer {
-            buffer,
-            size,
-            alloc: Some(alloc),
-        })
+        .ctx("bind buffer")
     }
 
     /// The mapped bytes of a host-visible buffer.
@@ -119,30 +130,7 @@ impl Image {
         }
         // SAFETY: valid create info.
         let image = unsafe { gpu.device.create_image(&info, None) }.ctx("create image")?;
-        // SAFETY: valid image.
-        let requirements = unsafe { gpu.device.get_image_memory_requirements(image) };
-        let alloc = gpu
-            .alloc()
-            .allocate(&AllocationCreateDesc {
-                name,
-                requirements,
-                location: MemoryLocation::GpuOnly,
-                linear: false,
-                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-            })
-            .map_err(|e| Error::Alloc(e.to_string()))?;
-        // SAFETY: memory matches the requirements.
-        unsafe {
-            gpu.device
-                .bind_image_memory(image, alloc.memory(), alloc.offset())
-        }
-        .ctx("bind image")?;
-        let mut views = Vec::new();
-        for &f in view_formats {
-            views.push(view(gpu, image, f, 0, mips.max(1))?);
-        }
-        let level0 = view(gpu, image, format, 0, 1)?;
-        Ok(Image {
+        let mut img = Image {
             image,
             format,
             extent: vk::Extent2D {
@@ -150,12 +138,48 @@ impl Image {
                 height: height.max(1),
             },
             mips: mips.max(1),
-            views,
-            level0,
-            alloc: Some(alloc),
-        })
+            views: Vec::new(),
+            level0: vk::ImageView::null(),
+            alloc: None,
+        };
+        // Out of memory, what was made so far is given back.
+        if let Err(e) = img.back(gpu, view_formats, name) {
+            img.destroy(gpu);
+            return Err(e);
+        }
+        Ok(img)
     }
 
+    /// Gives the image its memory and views.
+    fn back(&mut self, gpu: &Gpu, view_formats: &[vk::Format], name: &str) -> Result<()> {
+        // SAFETY: valid image.
+        let requirements = unsafe { gpu.device.get_image_memory_requirements(self.image) };
+        let alloc = self.alloc.insert(
+            gpu.alloc()
+                .allocate(&AllocationCreateDesc {
+                    name,
+                    requirements,
+                    location: MemoryLocation::GpuOnly,
+                    linear: false,
+                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                })
+                .map_err(|e| Error::Alloc(e.to_string()))?,
+        );
+        // SAFETY: memory matches the requirements.
+        unsafe {
+            gpu.device
+                .bind_image_memory(self.image, alloc.memory(), alloc.offset())
+        }
+        .ctx("bind image")?;
+        for &f in view_formats {
+            self.views.push(view(gpu, self.image, f, 0, self.mips)?);
+        }
+        self.level0 = view(gpu, self.image, self.format, 0, 1)?;
+        Ok(())
+    }
+
+    /// Destroys what the image holds; null handles (an image given up half
+    /// made) are allowed.
     pub fn destroy(&mut self, gpu: &Gpu) {
         // SAFETY: not in use (callers defer destruction past in-flight frames).
         unsafe {

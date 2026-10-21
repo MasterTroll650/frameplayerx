@@ -386,6 +386,45 @@ fn flat_screen_sits_in_front_and_background_surrounds_it() {
 }
 
 #[test]
+fn a_sideways_phone_clip_stands_upright() {
+    let Some((mut r, mut e)) = setup() else {
+        return;
+    };
+    // Stored as a phone does: the picture's top (red) on the frame's left.
+    let f = frame(160, 90, |u, _| {
+        if u < 0.5 {
+            [230, 20, 20]
+        } else {
+            [20, 20, 230]
+        }
+    });
+    let mut p = params(
+        Projection::Flat,
+        StereoLayout::Mono,
+        ViewSettings::default(),
+    );
+    p.screen_pose = Mat4::from_translation(Vec3::new(0.0, 1.6, -4.0));
+    p.background = [0.0, 0.0, 0.0, 1.0];
+    p.rotation = 90;
+    let [l, _] = render(&mut r, &mut e, Some(&f), &p, &[]);
+    // 27° above and below the centre, on a screen 6 m tall at 4 m (±37°).
+    assert!(
+        is_red(px(&l, SIZE / 2, SIZE / 4)),
+        "top {:?}",
+        px(&l, SIZE / 2, SIZE / 4)
+    );
+    assert!(is_blue(px(&l, SIZE / 2, 3 * SIZE / 4)));
+    // 3.4 m wide (±23°): 44° to the side is background.
+    assert_eq!(px(&l, 2, SIZE / 2), [0, 0, 0]);
+
+    p.rotation = 270;
+    let [l, _] = render(&mut r, &mut e, Some(&f), &p, &[]);
+    assert!(is_blue(px(&l, SIZE / 2, SIZE / 4)));
+    assert!(is_red(px(&l, SIZE / 2, 3 * SIZE / 4)));
+    e.destroy(&r);
+}
+
+#[test]
 fn brightness_and_saturation_controls() {
     let Some((mut r, mut e)) = setup() else {
         return;

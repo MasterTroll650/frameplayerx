@@ -26,9 +26,10 @@ use crate::record::{MediaId, MediaRecord, PreviewStrip};
 pub struct ProbeInfo {
     /// Seconds; `None` for live streams or when unknown.
     pub duration: Option<f64>,
-    /// Coded frame width in pixels (whole frame, both eyes).
+    /// Frame width in pixels as shown (whole frame, both eyes): turned
+    /// upright and unsqueezed.
     pub width: u32,
-    /// Coded frame height in pixels.
+    /// Frame height in pixels as shown.
     pub height: u32,
     /// Codec name (`"hevc"`, `"av1"`, `"h264"`...).
     pub video_codec: Option<String>,
@@ -252,13 +253,14 @@ fn make_strip(
 }
 
 /// Probes one video and stores the result. `Err` means the probe itself
-/// failed; thumbnail problems come back as a warning.
+/// failed; thumbnail problems come back as a warning. `None`: the video
+/// changed while it was probed, and is still pending.
 fn process_one(
     library: &Library,
     prober: &dyn MediaProber,
     options: &WorkerOptions,
     rec: &MediaRecord,
-) -> Result<(bool, bool, Option<String>)> {
+) -> Result<Option<(bool, bool, Option<String>)>> {
     let info = prober.probe(&rec.location)?;
     // Detect from the file name only, so a URL's query string cannot add
     // format tokens.
@@ -316,8 +318,8 @@ fn process_one(
     };
 
     let positive = |v: u32| (v > 0).then_some(v);
-    library.store_probe(
-        rec.id,
+    let stored = library.store_probe(
+        rec,
         &StoredProbe {
             duration,
             width: positive(info.width),
@@ -329,8 +331,15 @@ fn process_one(
             error: thumb_error,
         },
     )?;
+    if !stored {
+        return Ok(None);
+    }
     let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
-    Ok((thumbnail.is_some(), preview_strip.is_some(), warning))
+    Ok(Some((
+        thumbnail.is_some(),
+        preview_strip.is_some(),
+        warning,
+    )))
 }
 
 /// Processes every pending video once, on the calling thread, until none is
@@ -360,15 +369,17 @@ pub fn process_pending(
             if stop.load(Ordering::Relaxed) {
                 break 'outer;
             }
-            match process_one(library, prober, options, rec) {
+            let r = match process_one(library, prober, options, rec) {
                 // Left pending for a later pass.
                 Err(Error::Cancelled) => break 'outer,
-                r => {
-                    done += 1;
-                    total = total.max(done);
-                    report(library, rec, done, total, r, &mut stats, on_event)?;
-                }
-            }
+                // Probed again with the next batch.
+                Ok(None) => continue,
+                Ok(Some(r)) => Ok(r),
+                Err(e) => Err(e),
+            };
+            done += 1;
+            total = total.max(done);
+            report(library, rec, done, total, r, &mut stats, on_event)?;
         }
         total = total.max(done + library.pending_metadata_count()?);
     }
@@ -691,6 +702,7 @@ mod tests {
                 ContainerHints {
                     projection: Some(Projection::EQUIRECT_360),
                     stereo: Some(StereoLayout::Mono),
+                    ..Default::default()
                 },
             )
             .with("/v/c.mp4", 5760, 2880, 30.0, ContainerHints::default());
@@ -877,6 +889,68 @@ mod tests {
         assert_eq!(r.duration, Some(10.0));
         assert!(r.thumbnail.is_none());
         assert!(r.probe_error.is_some());
+        assert_eq!(lib.pending_metadata_count().unwrap(), 0);
+    }
+
+    /// Probes like `inner`, but a rescan finds a new file while the first
+    /// probe of each video runs, and that first probe sees the old one.
+    struct RescannedMidProbe {
+        inner: FakeProber,
+        lib: Library,
+        probes: Mutex<usize>,
+    }
+
+    impl MediaProber for RescannedMidProbe {
+        fn probe(&self, location: &str) -> Result<ProbeInfo> {
+            let mut info = self.inner.probe(location)?;
+            let mut probes = self.probes.lock().unwrap();
+            *probes += 1;
+            if *probes == 1 {
+                let mut u = MediaUpsert::new(location, "local");
+                u.size = Some(2);
+                self.lib.upsert(&u).unwrap();
+                info.duration = Some(10.0);
+            }
+            Ok(info)
+        }
+
+        fn thumbnail(
+            &self,
+            location: &str,
+            at: f64,
+            max_w: u32,
+            max_h: u32,
+            crop: ThumbnailCrop,
+        ) -> Result<RgbaImage> {
+            self.inner.thumbnail(location, at, max_w, max_h, crop)
+        }
+    }
+
+    #[test]
+    fn a_file_replaced_while_probed_is_probed_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = Library::open_in_memory().unwrap();
+        let mut u = MediaUpsert::new("/v/x.mp4", "local");
+        u.size = Some(1);
+        let id = lib.upsert(&u).unwrap().id;
+        let prober = RescannedMidProbe {
+            inner: FakeProber::default().with(
+                "/v/x.mp4",
+                1920,
+                1080,
+                120.0,
+                ContainerHints::default(),
+            ),
+            lib: lib.clone(),
+            probes: Mutex::new(0),
+        };
+        let stop = AtomicBool::new(false);
+        let stats = process_pending(&lib, &prober, &opts(tmp.path()), &stop, &mut |_| {}).unwrap();
+        // The old file's 10 s were dropped; the new file was probed.
+        assert_eq!(*prober.probes.lock().unwrap(), 2);
+        assert_eq!(stats.processed, 1);
+        let r = lib.get(id).unwrap().unwrap();
+        assert_eq!((r.size, r.duration, r.probed), (Some(2), Some(120.0), true));
         assert_eq!(lib.pending_metadata_count().unwrap(), 0);
     }
 

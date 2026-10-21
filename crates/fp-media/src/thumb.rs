@@ -37,7 +37,7 @@ pub fn decode_first_frame(src: Arc<dyn ByteSource>, name: &str) -> Result<crate:
     let vi = input
         .best_stream(ff::AVMEDIA_TYPE_VIDEO)
         .ok_or(Error::NoStream("video"))?;
-    let mut dec = Decoder::open(input.streams()[vi], HwDecode::Off)?;
+    let mut dec = Decoder::open(&input, vi, HwDecode::Off)?;
     let mut pkt = Packet::new();
     let mut frame = Frame::new();
     let mut conv = crate::frame::FrameConverter::default();
@@ -94,8 +94,9 @@ pub fn grab(
     let vi = input
         .best_stream(ff::AVMEDIA_TYPE_VIDEO)
         .ok_or(Error::NoStream("video"))?;
+    let shape = crate::info::picture_shape(&input, vi);
     // Software decoding: the hardware decoder is busy with playback.
-    let mut dec = Decoder::open(input.streams()[vi], HwDecode::Off)?;
+    let mut dec = Decoder::open(&input, vi, HwDecode::Off)?;
     if at > 0.0 {
         input.seek(at)?;
     }
@@ -119,7 +120,7 @@ pub fn grab(
             Some(true) => {
                 let t = dec.frame_time(&frame).unwrap_or(at);
                 if t + 0.05 >= at {
-                    return scale(&frame, max_w, max_h, crop);
+                    return scale(&frame, max_w, max_h, crop, shape);
                 }
                 let keep = Frame::new();
                 // SAFETY: both frames valid; keep the latest as a fallback.
@@ -131,12 +132,25 @@ pub fn grab(
         }
     }
     match fallback {
-        Some(f) => scale(&f, max_w, max_h, crop),
+        Some(f) => scale(&f, max_w, max_h, crop, shape),
         None => Err(Error::Unsupported("no frame decoded".into())),
     }
 }
 
-fn scale(frame: &Frame, max_w: u32, max_h: u32, crop: Crop) -> Result<Rgba> {
+/// Crops and scales `frame` as shown: unsqueezed and turned upright by
+/// `(rotation, pixel_aspect)`.
+fn scale(
+    frame: &Frame,
+    max_w: u32,
+    max_h: u32,
+    crop: Crop,
+    (rotation, pixel_aspect): (u32, f64),
+) -> Result<Rgba> {
+    let (max_w, max_h) = if rotation % 180 == 90 {
+        (max_h, max_w)
+    } else {
+        (max_w, max_h)
+    };
     // SAFETY: frame is decoded; swscale reads only the cropped region by
     // limiting the source width/height (pointers start at the top-left).
     unsafe {
@@ -151,6 +165,7 @@ fn scale(frame: &Frame, max_w: u32, max_h: u32, crop: Crop) -> Result<Rgba> {
         if sw <= 0 || sh <= 0 {
             return Err(Error::Unsupported("empty frame".into()));
         }
+        let aspect_w = aspect_w * pixel_aspect;
         let s = (max_w as f64 / aspect_w)
             .min(max_h as f64 / aspect_h)
             .min(1.0);
@@ -192,11 +207,39 @@ fn scale(frame: &Frame, max_w: u32, max_h: u32, crop: Crop) -> Result<Rgba> {
             dst_stride.as_ptr(),
         );
         ff::sws_freeContext(ctx);
-        Ok(Rgba {
+        let img = Rgba {
             width: dw as u32,
             height: dh as u32,
             pixels,
-        })
+        };
+        Ok(turned(img, rotation))
+    }
+}
+
+/// `img` turned clockwise by `degrees`, a multiple of 90.
+fn turned(img: Rgba, degrees: u32) -> Rgba {
+    let (w, h) = (img.width as usize, img.height as usize);
+    let (new_w, new_h) = match degrees % 360 {
+        0 => return img,
+        180 => (w, h),
+        _ => (h, w),
+    };
+    let mut pixels = vec![0u8; img.pixels.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let (nx, ny) = match degrees % 360 {
+                90 => (h - 1 - y, x),
+                180 => (w - 1 - x, h - 1 - y),
+                _ => (y, w - 1 - x),
+            };
+            let (s, d) = ((y * w + x) * 4, (ny * new_w + nx) * 4);
+            pixels[d..d + 4].copy_from_slice(&img.pixels[s..s + 4]);
+        }
+    }
+    Rgba {
+        width: new_w as u32,
+        height: new_h as u32,
+        pixels,
     }
 }
 
@@ -259,6 +302,37 @@ mod tests {
         assert_eq!((img.width, img.height), (256, 128));
         let info = probe(src("av1_opus.webm"), "x.webm", no_interrupt()).unwrap();
         assert_eq!(info.video_stream().unwrap().codec, "av1");
+    }
+
+    #[test]
+    fn portrait_and_anamorphic_thumbnails_look_as_shown() {
+        let grab_full = |src, max| grab(src, "x.mp4", 1.0, max, max, Crop::Full, no_interrupt());
+        let portrait = grab_full(crate::info::tests::portrait_clip(), 160).unwrap();
+        assert_eq!((portrait.width, portrait.height), (80, 160));
+        let wide = grab_full(crate::info::tests::anamorphic_clip(), 640).unwrap();
+        assert_eq!((wide.width, wide.height), (640, 240));
+    }
+
+    #[test]
+    fn turns_pictures_clockwise() {
+        // A red pixel left of a blue one.
+        let (r, b) = ([255, 0, 0, 255], [0, 0, 255, 255]);
+        let img = Rgba {
+            width: 2,
+            height: 1,
+            pixels: [r, b].concat(),
+        };
+        let px = |img: &Rgba| img.pixels.chunks(4).map(<[u8]>::to_vec).collect::<Vec<_>>();
+        let quarter = turned(img.clone(), 90);
+        assert_eq!((quarter.width, quarter.height), (1, 2));
+        assert_eq!(px(&quarter), [r.to_vec(), b.to_vec()], "red on top");
+        assert_eq!(px(&turned(img.clone(), 180)), [b.to_vec(), r.to_vec()]);
+        assert_eq!(
+            px(&turned(img.clone(), 270)),
+            [b.to_vec(), r.to_vec()],
+            "blue on top"
+        );
+        assert_eq!(turned(img.clone(), 0), img);
     }
 
     #[test]

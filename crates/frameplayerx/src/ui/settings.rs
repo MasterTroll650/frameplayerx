@@ -275,7 +275,7 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
         );
         r.slider(
             "Screen width",
-            None,
+            Some("Its longer side: a portrait video's height."),
             &mut d.screen_width,
             0.5..=30.0,
             6.0,

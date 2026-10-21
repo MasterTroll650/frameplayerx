@@ -319,7 +319,7 @@ fn detect_format(
 ) -> (DetectedFormat, DetectedFormat) {
     let (w, h) = info
         .video_stream()
-        .map(|v| (v.width, v.height))
+        .map(StreamInfo::display_size)
         .unwrap_or((0, 0));
     let user = record.and_then(|r| r.user_format);
     let hints = if info.hints.projection.is_some() || info.hints.stereo.is_some() {
@@ -328,6 +328,7 @@ fn detect_format(
         ContainerHints {
             projection: Some(f.projection),
             stereo: Some(f.stereo),
+            eyes_swapped: f.eyes_swapped,
         }
     } else {
         info.hints
@@ -585,23 +586,23 @@ impl Playback {
         )
     }
 
-    pub fn save_settings(&mut self, library: &Library) {
-        if let Some(id) = self.record_id {
-            let r = library
-                .set_view_settings(id, Some(&self.settings))
-                .and_then(|_| library.set_keyframes(id, &self.keyframes));
-            match r {
-                Ok(()) => {
-                    self.settings_dirty = false;
-                    self.saved_settings = self.settings;
-                }
-                Err(e) => log::warn!("saving adjustments: {e}"),
-            }
-        } else {
+    /// Saves the adjustments with the video: true when saved, false when the
+    /// video isn't in the library (its notice says so). A failure keeps them
+    /// unsaved, to save again.
+    pub fn save_settings(&mut self, library: &Library) -> fp_library::Result<bool> {
+        let Some(id) = self.record_id else {
             self.notice = Some(
                 "Adjustments apply until you close this video (it is not in the library).".into(),
             );
-        }
+            return Ok(false);
+        };
+        library
+            .set_view_settings(id, Some(&self.settings))
+            .and_then(|_| library.set_keyframes(id, &self.keyframes))
+            .inspect_err(|e| log::warn!("saving adjustments: {e}"))?;
+        self.settings_dirty = false;
+        self.saved_settings = self.settings;
+        Ok(true)
     }
 
     /// Saves this video's chroma key (the Passthrough tab) without the
@@ -854,6 +855,7 @@ mod tests {
             let hints = declared.map_or_else(ContainerHints::default, |f| ContainerHints {
                 projection: Some(f.projection),
                 stereo: Some(f.stereo),
+                eyes_swapped: f.eyes_swapped,
             });
             format::resolve(None, hints, &last_segment(loc), 2160, 1080).format
         };
@@ -923,7 +925,8 @@ mod tests {
             },
             interlaced: false,
             transfer: Default::default(),
-            rotation: 0.0,
+            rotation: 0,
+            pixel_aspect: 1.0,
             sample_rate: 0,
             channels: 0,
             ambisonic: false,

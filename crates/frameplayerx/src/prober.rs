@@ -41,10 +41,11 @@ impl MediaProber for FfmpegProber {
         let info =
             fp_media::thumb::probe(src, location, self.busy.clone()).map_err(|e| self.err(e))?;
         let v = info.video_stream();
+        let (width, height) = v.map(fp_media::StreamInfo::display_size).unwrap_or((0, 0));
         Ok(ProbeInfo {
             duration: (info.duration > 0.0).then_some(info.duration),
-            width: v.map(|v| v.width).unwrap_or(0),
-            height: v.map(|v| v.height).unwrap_or(0),
+            width,
+            height,
             video_codec: v.map(|v| v.codec.clone()),
             hints: info.hints,
         })

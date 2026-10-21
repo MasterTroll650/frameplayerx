@@ -1,5 +1,7 @@
 //! Thin RAII wrappers over FFmpeg packets, frames and decoders.
 
+use crate::input::Input;
+use crate::nal::NalReader;
 use crate::{Error, Result, check};
 use fp_ffmpeg_sys as ff;
 use std::ffi::{CStr, CString};
@@ -288,6 +290,43 @@ pub struct Decoder {
     /// open failed, or it failed once running.
     pub hardware_error: Option<String>,
     pub time_base: ff::AVRational,
+    /// The input's [`Input::origin`], taken off every time.
+    pub(crate) origin: f64,
+    /// Reads H.264 and HEVC packets' NAL units.
+    nal: Option<NalReader>,
+    skip: Option<Skip>,
+    /// Packets precise seeks left out.
+    pub(crate) left_out: u64,
+}
+
+/// What a precise seek leaves out: frames shown mostly before its target.
+#[derive(Clone, Copy, Debug)]
+struct Skip {
+    /// The target in the stream's time base.
+    target: f64,
+    /// The duration of frames without one, in the same units.
+    frame_duration: f64,
+    /// The media timeline's start in the same units, where frames without
+    /// a timestamp count as shown.
+    start: f64,
+}
+
+impl Skip {
+    /// Whether a frame at `pts` lasting `duration` (0 when unknown), both
+    /// in the stream's time base, shows mostly before the target.
+    fn drops(self, pts: i64, duration: i64) -> bool {
+        let pts = if pts == ff::AV_NOPTS_VALUE {
+            self.start
+        } else {
+            pts as f64
+        };
+        let duration = if duration > 0 {
+            duration as f64
+        } else {
+            self.frame_duration
+        };
+        pts + duration * 0.5 < self.target
+    }
 }
 
 // SAFETY: one thread drives a decoder at a time.
@@ -304,12 +343,26 @@ impl Drop for Decoder {
 }
 
 impl Decoder {
-    /// Opens a decoder for `stream`. Video tries the hardware decoders first
-    /// when `hw` allows, and AV1 uses dav1d in software.
-    pub(crate) fn open(stream: *mut ff::AVStream, hw: HwDecode) -> Result<Decoder> {
+    /// Opens a decoder for stream `index` of `input`. Video tries the
+    /// hardware decoders first when `hw` allows, and AV1 uses dav1d in
+    /// software.
+    pub(crate) fn open(input: &Input, index: usize, hw: HwDecode) -> Result<Decoder> {
+        let stream = input.streams()[index];
         // SAFETY: stream belongs to an open input.
         let (par, time_base) = unsafe { ((*stream).codecpar, (*stream).time_base) };
-        Self::open_with(par, time_base, hw, crate::v4l2::enabled())
+        let mut dec = Self::open_with(par, time_base, hw, crate::v4l2::enabled())?;
+        dec.origin = input.origin();
+        // SAFETY: as above; extradata holds extradata_size bytes.
+        dec.nal = unsafe {
+            let p = &*par;
+            let extradata = if p.extradata.is_null() {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(p.extradata, p.extradata_size.max(0) as usize)
+            };
+            NalReader::new(p.codec_id, extradata)
+        };
+        Ok(dec)
     }
 
     fn open_with(
@@ -396,6 +449,10 @@ impl Decoder {
             hardware: true,
             hardware_error: None,
             time_base,
+            origin: 0.0,
+            nal: None,
+            skip: None,
+            left_out: 0,
         })
     }
 
@@ -430,6 +487,10 @@ impl Decoder {
                 hardware,
                 hardware_error: None,
                 time_base,
+                origin: 0.0,
+                nal: None,
+                skip: None,
+                left_out: 0,
             };
             if hardware {
                 HW_SESSIONS.fetch_add(1, Ordering::Relaxed); // until Drop
@@ -523,6 +584,10 @@ impl Decoder {
     /// Sends a packet (or end of stream when `pkt` is null). Returns false if
     /// the decoder is full and frames must be received first.
     pub(crate) fn send(&mut self, pkt: *const ff::AVPacket) -> Result<bool> {
+        if self.leaves_out(pkt) {
+            self.left_out += 1;
+            return Ok(true);
+        }
         #[cfg(target_os = "linux")]
         if let Some(n) = self.native.as_mut() {
             match n.dec.send(pkt) {
@@ -577,10 +642,14 @@ impl Decoder {
     pub fn receive(&mut self, frame: &mut Frame) -> Result<Option<bool>> {
         #[cfg(target_os = "linux")]
         if let Some(n) = self.native.as_mut() {
-            match n.dec.receive(frame.0) {
+            let skip = self.skip;
+            match n.dec.receive(frame.0, |pts, duration| {
+                skip.is_none_or(|s| !s.drops(pts, duration))
+            }) {
                 Ok(r) => {
                     if r == Some(true) {
                         n.startup = None;
+                        self.skip = None;
                     }
                     return Ok(r);
                 }
@@ -593,19 +662,66 @@ impl Decoder {
         if self.ctx.is_null() {
             return Err(Error::Unsupported("decoder closed after a failure".into()));
         }
-        // SAFETY: ctx is open; frame valid.
-        let r = unsafe { ff::avcodec_receive_frame(self.ctx, frame.0) };
-        if r == ff::AVERROR_EAGAIN {
-            return Ok(None);
+        loop {
+            // SAFETY: ctx is open; frame valid.
+            let r = unsafe { ff::avcodec_receive_frame(self.ctx, frame.0) };
+            if r == ff::AVERROR_EAGAIN {
+                return Ok(None);
+            }
+            if r == ff::AVERROR_EOF_ {
+                return Ok(Some(false));
+            }
+            check(r, "receive frame")?;
+            if let Some(s) = self.skip {
+                // SAFETY: a decoded frame, our reference to it dropped when
+                // it is left out.
+                unsafe {
+                    let f = &*frame.0;
+                    if s.drops(f.best_effort_timestamp, f.duration) {
+                        ff::av_frame_unref(frame.0);
+                        continue;
+                    }
+                }
+                self.skip = None;
+            }
+            if self.hardware {
+                copy_out(frame)?;
+            }
+            return Ok(Some(true));
         }
-        if r == ff::AVERROR_EOF_ {
-            return Ok(Some(false));
+    }
+
+    /// Leaves out what a precise seek to `target` (media seconds) throws
+    /// away: frames shown mostly before it are dropped before they are
+    /// copied, and the pictures among them that no other picture is decoded
+    /// from are not decoded at all. Frames without a duration count as
+    /// lasting `frame_duration`. Ends at the first frame kept, or a flush.
+    pub(crate) fn skip_before(&mut self, target: f64, frame_duration: f64) {
+        let tb = crate::q2d(self.time_base);
+        self.skip = (tb > 0.0).then(|| Skip {
+            target: (target + self.origin) / tb,
+            frame_duration: frame_duration / tb,
+            start: self.origin / tb,
+        });
+    }
+
+    /// Whether `pkt` holds only pictures a precise seek skips that no other
+    /// picture needs.
+    fn leaves_out(&mut self, pkt: *const ff::AVPacket) -> bool {
+        let (Some(skip), Some(nal)) = (self.skip, self.nal.as_mut()) else {
+            return false;
+        };
+        if pkt.is_null() {
+            return false;
         }
-        check(r, "receive frame")?;
-        if self.hardware {
-            copy_out(frame)?;
+        // SAFETY: a valid packet holding `size` bytes at `data`.
+        unsafe {
+            let p = &*pkt;
+            if p.pts == ff::AV_NOPTS_VALUE || p.data.is_null() || !skip.drops(p.pts, p.duration) {
+                return false;
+            }
+            nal.disposable(std::slice::from_raw_parts(p.data, p.size.max(0) as usize))
         }
-        Ok(Some(true))
     }
 
     /// A flag that, once set, cuts the native decoder's waits for the
@@ -620,6 +736,7 @@ impl Decoder {
     }
 
     pub fn flush(&mut self) {
+        self.skip = None;
         #[cfg(target_os = "linux")]
         if let Some(n) = self.native.as_mut() {
             n.dec.flush();
@@ -635,11 +752,12 @@ impl Decoder {
         }
     }
 
-    /// Best-effort presentation time of a decoded frame in seconds.
+    /// Best-effort presentation time of a decoded frame in seconds on the
+    /// media's timeline.
     pub fn frame_time(&self, frame: &Frame) -> Option<f64> {
         // SAFETY: valid frame.
         let ts = unsafe { (*frame.0).best_effort_timestamp };
-        (ts != ff::AV_NOPTS_VALUE).then(|| ts as f64 * crate::q2d(self.time_base))
+        (ts != ff::AV_NOPTS_VALUE).then(|| ts as f64 * crate::q2d(self.time_base) - self.origin)
     }
 
     pub fn frame_duration(&self, frame: &Frame) -> f64 {
@@ -658,6 +776,7 @@ mod tests {
     use super::*;
     use crate::frame::{FrameConverter, PixelLayout};
     use crate::input::Input;
+    use fp_core::ByteSource;
     use fp_core::source::FileSource;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -673,7 +792,7 @@ mod tests {
         )
         .unwrap();
         let vi = input.best_stream(ff::AVMEDIA_TYPE_VIDEO).unwrap();
-        let mut dec = Decoder::open(input.streams()[vi], HwDecode::Auto).unwrap();
+        let mut dec = Decoder::open(&input, vi, HwDecode::Auto).unwrap();
         let mut conv = FrameConverter::default();
         let mut pkt = Packet::new();
         let mut frame = Frame::new();
@@ -705,6 +824,114 @@ mod tests {
             }
         }
         (dec.name.clone(), out)
+    }
+
+    struct Decoded {
+        time: f64,
+        duration: f64,
+        /// A hash of the luma plane.
+        luma: u64,
+    }
+
+    /// Every frame `src` decodes to in software, after skipping to `target`
+    /// as a precise seek does when given, how many packets before the target
+    /// hold pictures nothing else needs, and how many the decoder left out.
+    fn decode_skipping(src: Arc<dyn ByteSource>, target: Option<f64>) -> (Vec<Decoded>, u64, u64) {
+        use std::hash::{DefaultHasher, Hasher};
+        let mut input = Input::open(src, "clip", Arc::new(AtomicBool::new(false))).unwrap();
+        let vi = input.best_stream(ff::AVMEDIA_TYPE_VIDEO).unwrap();
+        let mut dec = Decoder::open(&input, vi, HwDecode::Off).unwrap();
+        let mut nal = dec.nal.unwrap();
+        if let Some(t) = target {
+            dec.skip_before(t, 1.0 / 30.0);
+        }
+        let (mut pkt, mut frame) = (Packet::new(), Frame::new());
+        let (mut out, mut needless, mut eof) = (Vec::new(), 0, false);
+        loop {
+            if !eof {
+                if input.read(pkt.as_ptr()).unwrap() {
+                    if pkt.stream_index() != vi {
+                        pkt.unref();
+                        continue;
+                    }
+                    // SAFETY: a packet just read.
+                    let (pts, data) = unsafe {
+                        let p = &*pkt.as_ptr();
+                        (p.pts, std::slice::from_raw_parts(p.data, p.size as usize))
+                    };
+                    let time = pts as f64 * crate::q2d(dec.time_base) - dec.origin;
+                    if target.is_some_and(|t| time < t) && nal.disposable(data) {
+                        needless += 1;
+                    }
+                    dec.send(pkt.as_ptr()).unwrap();
+                    pkt.unref();
+                } else {
+                    eof = true;
+                    dec.send(std::ptr::null()).unwrap();
+                }
+            }
+            while let Some(more) = dec.receive(&mut frame).unwrap() {
+                if !more {
+                    return (out, needless, dec.left_out);
+                }
+                let mut h = DefaultHasher::new();
+                // SAFETY: a decoded 8- or 10-bit planar picture.
+                unsafe {
+                    let f = &*frame.as_ptr();
+                    let sample = if f.format == ff::AV_PIX_FMT_YUV420P {
+                        1
+                    } else {
+                        2
+                    };
+                    for row in 0..f.height as usize {
+                        let line = f.data[0].add(row * f.linesize[0] as usize);
+                        h.write(std::slice::from_raw_parts(line, f.width as usize * sample));
+                    }
+                }
+                out.push(Decoded {
+                    time: dec.frame_time(&frame).unwrap(),
+                    duration: dec.frame_duration(&frame),
+                    luma: h.finish(),
+                });
+                // SAFETY: our reference.
+                unsafe { ff::av_frame_unref(frame.as_ptr()) };
+            }
+        }
+    }
+
+    #[test]
+    fn a_precise_seek_leaves_out_only_what_it_does_not_show() {
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
+        // MP4 and MPEG-TS (Annex B) H.264, and HEVC in Matroska.
+        for name in ["h264_aac_180_LR.mp4", "x.ts", "hevc10_tb.mkv"] {
+            let src = || -> Arc<dyn ByteSource> {
+                if name == "x.ts" {
+                    crate::ts_fixture::h264_aac_ts(10.0)
+                } else {
+                    Arc::new(FileSource::open(&data.join(name)).unwrap())
+                }
+            };
+            let (all, _, _) = decode_skipping(src(), None);
+            let target = all[all.len() / 2].time - 0.001;
+            let (kept, needless, left_out) = decode_skipping(src(), Some(target));
+            assert!(needless > 0, "{name}: nothing to leave out");
+            assert_eq!(left_out, needless, "{name}");
+            let shown: Vec<_> = all
+                .iter()
+                .filter(|f| {
+                    let duration = if f.duration > 0.0 {
+                        f.duration
+                    } else {
+                        1.0 / 30.0
+                    };
+                    f.time + duration * 0.5 >= target
+                })
+                .collect();
+            assert_eq!(kept.len(), shown.len(), "{name}");
+            for (k, s) in kept.iter().zip(shown) {
+                assert_eq!((k.time, k.luma), (s.time, s.luma), "{name}");
+            }
+        }
     }
 
     #[test]
@@ -816,7 +1043,7 @@ mod tests {
         )
         .unwrap();
         let vi = input.best_stream(ff::AVMEDIA_TYPE_VIDEO).unwrap();
-        let mut dec = Decoder::open(input.streams()[vi], HwDecode::Off).unwrap();
+        let mut dec = Decoder::open(&input, vi, HwDecode::Off).unwrap();
         let mut pkt = Packet::new();
         let mut frame = Frame::new();
         while dec.receive(&mut frame).unwrap() != Some(true) {

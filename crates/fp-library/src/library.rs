@@ -1259,12 +1259,26 @@ impl Library {
         })
     }
 
-    /// Stores probe results and re-resolved format (worker use).
-    pub(crate) fn store_probe(&self, id: MediaId, probe: &StoredProbe) -> Result<()> {
+    /// Stores the results of probing `probed` (worker use), unless the video
+    /// changed while it was probed: a rescan found a new file, or it was
+    /// removed. Then nothing is stored, it stays pending, and this returns
+    /// false.
+    pub(crate) fn store_probe(&self, probed: &MediaRecord, probe: &StoredProbe) -> Result<bool> {
         self.in_tx(|c| {
-            let rec = get_conn(c, id)?.ok_or(Error::MediaNotFound(id))?;
-            let (kind, stereo) =
-                effective_columns(&probe.detected.format, rec.user_format.as_ref());
+            let Some(rec) = get_conn(c, probed.id)? else {
+                return Ok(false);
+            };
+            if (&rec.location, rec.size, rec.mtime) != (&probed.location, probed.size, probed.mtime)
+            {
+                return Ok(false);
+            }
+            // A stronger detection that came meanwhile (a feed's) stays.
+            let detected = if probe.detected.evidence <= rec.detected.evidence {
+                probe.detected
+            } else {
+                rec.detected
+            };
+            let (kind, stereo) = effective_columns(&detected.format, rec.user_format.as_ref());
             c.execute(
                 "UPDATE media SET duration = COALESCE(?2, duration), width = ?3, height = ?4,
                      video_codec = ?5, detected_format = ?6, detected_evidence = ?7,
@@ -1272,13 +1286,13 @@ impl Library {
                      probe_error = ?12, probed = 1
                  WHERE id = ?1",
                 params![
-                    id.0,
+                    probed.id.0,
                     probe.duration,
                     probe.width,
                     probe.height,
                     probe.video_codec,
-                    json(&probe.detected.format)?,
-                    evidence_str(probe.detected.evidence),
+                    json(&detected.format)?,
+                    evidence_str(detected.evidence),
                     kind,
                     stereo,
                     probe
@@ -1289,7 +1303,7 @@ impl Library {
                     probe.error,
                 ],
             )?;
-            Ok(())
+            Ok(true)
         })
     }
 
@@ -1433,20 +1447,22 @@ mod tests {
             format: VideoFormat::new(Projection::EQUIRECT_360, StereoLayout::Mono),
             evidence: Evidence::Metadata,
         };
-        lib.store_probe(
-            id,
-            &StoredProbe {
-                duration: Some(60.0),
-                width: Some(4096),
-                height: Some(2048),
-                video_codec: Some("hevc".into()),
-                detected,
-                thumbnail: Some("/cache/1.jpg".into()),
-                preview_strip: None,
-                error: None,
-            },
-        )
-        .unwrap();
+        let stored = lib
+            .store_probe(
+                &lib.get(id).unwrap().unwrap(),
+                &StoredProbe {
+                    duration: Some(60.0),
+                    width: Some(4096),
+                    height: Some(2048),
+                    video_codec: Some("hevc".into()),
+                    detected,
+                    thumbnail: Some("/cache/1.jpg".into()),
+                    preview_strip: None,
+                    error: None,
+                },
+            )
+            .unwrap();
+        assert!(stored);
         // Rescan with the same size/mtime: name says nothing, metadata kept.
         assert_eq!(lib.upsert(&u).unwrap().status, UpsertStatus::Unchanged);
         let r = lib.get(id).unwrap().unwrap();

@@ -33,6 +33,7 @@ pub(crate) struct SceneParams {
     pub key: Vec4,
     pub key2: Vec4,
     pub viewer: Vec4,
+    pub display: [u32; 4],
 }
 
 /// Everything about the video that the projection pass needs, other than
@@ -51,6 +52,12 @@ pub struct VideoParams {
     /// 180°/360° picture, its per-eye corrections and the viewer's height
     /// and forward turn with it.
     pub anchor: Quat,
+    /// Clockwise turn that shows the video upright: 0, 90, 180 or 270
+    /// degrees.
+    pub rotation: u32,
+    /// Width of a video pixel relative to its height: anamorphic video is
+    /// shown this much wider than it is stored.
+    pub pixel_aspect: f32,
 }
 
 impl Default for VideoParams {
@@ -61,6 +68,8 @@ impl Default for VideoParams {
             screen_pose: Mat4::from_translation(glam::vec3(0.0, 0.0, -4.0)),
             background: [0.008, 0.008, 0.012, 1.0],
             anchor: Quat::IDENTITY,
+            rotation: 0,
+            pixel_aspect: 1.0,
         }
     }
 }
@@ -159,20 +168,29 @@ pub(crate) fn build(
             (1, 1),
         ),
     };
+    // The picture as shown: unsqueezed, then turned upright. Stereo halves
+    // are halves of that.
+    let turns = video.rotation / 90 % 4;
+    let (pw, ph) = (tex.0 as f32 * video.pixel_aspect.max(0.01), tex.1 as f32);
+    let (pw, ph) = if turns % 2 == 1 { (ph, pw) } else { (pw, ph) };
     // Per-eye aspect for flat screens.
     let (ew, eh) = match video.format.stereo {
-        StereoLayout::SideBySide => (tex.0 as f32 / 2.0, tex.1 as f32),
-        StereoLayout::TopBottom => (tex.0 as f32, tex.1 as f32 / 2.0),
-        StereoLayout::HalfSideBySide | StereoLayout::HalfTopBottom | StereoLayout::Mono => {
-            (tex.0 as f32, tex.1 as f32)
-        }
+        StereoLayout::SideBySide => (pw / 2.0, ph),
+        StereoLayout::TopBottom => (pw, ph / 2.0),
+        StereoLayout::HalfSideBySide | StereoLayout::HalfTopBottom | StereoLayout::Mono => (pw, ph),
     };
     // A fisheye's image circle fills the eye image's shorter side, and stays
     // round when the image is not square.
     let circle = Vec4::new((eh / ew).min(1.0), (ew / eh).min(1.0), 0.0, 0.0);
     let [c0, c1] = s.lens_centre;
-    let screen_w = s.screen_width * s.zoom;
-    let screen_h = screen_w * eh / ew.max(1.0);
+    // The screen's width setting is its longer side, so a portrait video
+    // stands as tall as a landscape one is wide.
+    let long = s.screen_width * s.zoom;
+    let (screen_w, screen_h) = if ew >= eh {
+        (long, long * eh / ew.max(1e-3))
+    } else {
+        (long * ew / eh.max(1e-3), long)
+    };
     let arc = s.screen_curvature.clamp(0.0, 1.0) * std::f32::consts::TAU / 3.0;
     let correction =
         Mat4::from_euler(EulerRot::YXZ, deg(s.yaw), deg(s.pitch), deg(s.roll)).inverse();
@@ -225,6 +243,7 @@ pub(crate) fn build(
             0.0,
         ),
         viewer: glam::vec3(0.0, s.height, -s.forward).extend(SPHERE_RADIUS),
+        display: [turns, 0, 0, 0],
     }
 }
 
@@ -346,5 +365,39 @@ mod tests {
         // Half TB restores 16:9 widescreen per eye:
         let ar_htb = sp_htb.screen.x / sp_htb.screen.y;
         assert!((ar_htb - 1920.0 / 1080.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn portrait_and_anamorphic_screens() {
+        let frame = FrameDesc {
+            width: 1920,
+            height: 1080,
+            layout: PixelLayout::Nv12,
+            color: ColorInfo {
+                matrix: Matrix::Bt709,
+                full_range: false,
+                transfer: Transfer::Sdr,
+                wide_gamut: false,
+            },
+        };
+        let screen = |rotation, pixel_aspect| {
+            let video = VideoParams {
+                rotation,
+                pixel_aspect,
+                ..Default::default()
+            };
+            let p = build(&video, Some(&frame), [Mat4::IDENTITY; 2]);
+            (p.screen.x, p.screen.y, p.display[0])
+        };
+        let near = |(w, h, t): (f32, f32, u32), want: (f32, f32, u32)| {
+            (w - want.0).abs() < 1e-3 && (h - want.1).abs() < 1e-3 && t == want.2
+        };
+        // The default 6 m width: a phone clip stored sideways stands 6 m tall.
+        assert!(near(screen(0, 1.0), (6.0, 3.375, 0)));
+        assert!(near(screen(90, 1.0), (3.375, 6.0, 1)));
+        assert!(near(screen(270, 1.0), (3.375, 6.0, 3)));
+        assert!(near(screen(180, 1.0), (6.0, 3.375, 2)));
+        // 4:3 pixels widen a 16:9 frame to 2.37:1.
+        assert!(near(screen(0, 4.0 / 3.0), (6.0, 6.0 * 1080.0 / 2560.0, 0)));
     }
 }

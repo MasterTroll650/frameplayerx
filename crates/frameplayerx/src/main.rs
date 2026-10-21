@@ -273,7 +273,7 @@ fn info(file: &str) -> Result<(), Error> {
     }
     let (w, h) = i
         .video_stream()
-        .map(|v| (v.width, v.height))
+        .map(fp_media::StreamInfo::display_size)
         .unwrap_or((0, 0));
     let d = fp_core::format::resolve(None, i.hints, &name, w, h);
     println!("  format: {} ({})", d.format.label(), d.evidence.label());

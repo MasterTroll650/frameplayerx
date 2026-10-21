@@ -182,7 +182,7 @@ pub fn decode_bench(
     let vi = input
         .best_stream(ff::AVMEDIA_TYPE_VIDEO)
         .ok_or(Error::NoStream("video"))?;
-    let dec = Decoder::open(input.streams()[vi], opts.hw)?;
+    let dec = Decoder::open(&input, vi, opts.hw)?;
     let mut report = BenchReport {
         decoder: dec.name.clone(),
         hardware: dec.hardware,
