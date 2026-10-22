@@ -324,6 +324,47 @@ fn mediabrowser_quick_connect_flow() {
     assert_eq!(uid, "usr_bob");
 }
 
+/// Emby lists its tags at `/Tags` (it has no `/Items/Filters`), gives an
+/// item's tags as `TagItems`, and has no Quick Connect.
+#[test]
+fn emby_tags_and_no_quick_connect() {
+    let json = [("Content-Type", "application/json")];
+    let server = TestServer::start(move |req: &Req| match req.path() {
+        "/Users/AuthenticateByName" => resp(
+            200,
+            r#"{"AccessToken":"t","User":{"Id":"u1","Name":"frame"}}"#,
+            &json,
+        ),
+        "/Tags" => resp(
+            200,
+            r#"{"Items":[{"Name":"Beach"},{"Name":"Sunset"}]}"#,
+            &json,
+        ),
+        "/Users/u1/Items" if req.url.contains("&Tags=Beach") => resp(
+            200,
+            r#"{"Items":[{"Id":"9","Name":"Sunset Walk","Type":"Video",
+                          "TagItems":[{"Name":"Beach","Id":13}]}]}"#,
+            &json,
+        ),
+        "/Users/u1/Items" => resp(200, r#"{"Items":[]}"#, &json),
+        _ => resp(404, "", &[]),
+    });
+    let mb = fp_sources::MediaBrowserSource::new(&mediabrowser_config(
+        server.url(""),
+        Some(Credentials::new("frame", "pw")),
+    ))
+    .unwrap();
+    let found = mb.search("beach", 50).unwrap();
+    let tagged: Vec<(&str, &[String])> = found
+        .iter()
+        .flat_map(|(s, items)| items.iter().map(move |i| (*s, i.tags.as_slice())))
+        .collect();
+    assert_eq!(tagged, [("Tagged", &["Beach".to_string()][..])]);
+
+    let err = mb.quick_connect_initiate().unwrap_err().to_string();
+    assert!(err.contains("Emby has none"), "{err}");
+}
+
 /// A Quick Connect sign-in the server revoked (the password changed, or the
 /// device was signed out) can't be renewed: no password is kept.
 #[test]

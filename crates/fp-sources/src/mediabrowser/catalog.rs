@@ -9,7 +9,7 @@
 use super::{
     MediaBrowserSource, detect_from_name, encode_location, ticks_to_seconds, video_3d_format,
 };
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::json::{array, boolean, get, num, text};
 use crate::timeutil::parse_iso8601;
 use crate::urlutil::encode_form_value;
@@ -557,7 +557,7 @@ pub(crate) fn parse_item(v: &Value, base: &str) -> Option<MbItem> {
             .map(|r| r as f32),
         official_rating: text(v, "OfficialRating"),
         genres: strings(v, "Genres"),
-        tags: strings(v, "Tags"),
+        tags: tag_names(v),
         studios: array(v, "Studios")
             .iter()
             .filter_map(|s| text(s, "Name").or_else(|| s.as_str().map(str::to_string)))
@@ -600,6 +600,21 @@ pub(super) fn strings(v: &Value, key: &str) -> Vec<String> {
         .filter_map(|s| s.as_str())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// An item's tags: Jellyfin's `Tags`, or Emby's `TagItems` (each a name
+/// and an id).
+pub(super) fn tag_names(v: &Value) -> Vec<String> {
+    let tags = strings(v, "Tags");
+    if !tags.is_empty() {
+        return tags;
+    }
+    array(v, "TagItems")
+        .iter()
+        .filter_map(|t| text(t, "Name"))
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
         .collect()
 }
 
@@ -668,7 +683,7 @@ impl MediaBrowserSource {
         );
         let v = self.api_get_json(&path)?;
         parse_item(&v, &self.base_url)
-            .ok_or_else(|| crate::Error::NotFound(format!("item {id} on {}", self.name)))
+            .ok_or_else(|| Error::NotFound(format!("item {id} on {}", self.name)))
     }
 
     /// The titles matching `text`, by section (`SEARCH_SECTIONS`), best
@@ -709,11 +724,23 @@ impl MediaBrowserSource {
             return Ok(tags.clone());
         }
         let user = self.user()?;
-        let v = self.api_get_json(&format!(
-            "/Items/Filters?UserId={user}&Recursive=true&IncludeItemTypes={}",
+        let query = format!(
+            "UserId={user}&Recursive=true&IncludeItemTypes={}",
             TAGGED.join(",")
-        ))?;
-        let tags = strings(&v, "Tags");
+        );
+        // Jellyfin lists them among its filters; Emby has no such call, but
+        // a list of its own.
+        let tags = match self.api_get_json(&format!("/Items/Filters?{query}")) {
+            Ok(v) => strings(&v, "Tags"),
+            Err(Error::NotFound(_)) => {
+                let v = self.api_get_json(&format!("/Tags?{query}"))?;
+                array(&v, "Items")
+                    .iter()
+                    .filter_map(|t| text(t, "Name"))
+                    .collect()
+            }
+            Err(e) => return Err(e),
+        };
         *lock(&self.tags) = Some((std::time::Instant::now(), tags.clone()));
         Ok(tags)
     }

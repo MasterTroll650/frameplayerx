@@ -124,7 +124,7 @@ Usually because it's AV1 or 4:2:2, which the Frame's hardware decoder can't play
 
 ### Does it work with my media server or NAS?
 
-Yes, if it offers one of these: Jellyfin or Emby (sign in with Quick Connect or a password), a DeoVR feed or HereSphere API, SMB, WebDAV or DLNA. Add it under Sources › Add source.
+Yes, if it offers one of these: Jellyfin (sign in with Quick Connect or a password), Emby (a password), a DeoVR feed or HereSphere API, SMB, WebDAV or DLNA. Add it under Sources › Add source.
 
 ---
 
