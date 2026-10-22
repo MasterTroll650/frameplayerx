@@ -5,10 +5,8 @@
 # outside the Steam Linux Runtime container. Uses zig as the cross linker, so
 # no ARM64 sysroot or C toolchain is needed.
 #
-# One-time setup:
-#   rustup target add aarch64-unknown-linux-gnu
-#   pip install ziglang          # or install zig from your package manager
-#   cargo install --locked cargo-zigbuild
+# One-time setup: zig and cargo-zigbuild from tools/requirements.txt (see
+# there); rustup adds the ARM64 target from rust-toolchain.toml.
 #
 # Usage: tools/build-frame.sh [cargo args...]   e.g. tools/build-frame.sh -p frame-probe
 set -euo pipefail

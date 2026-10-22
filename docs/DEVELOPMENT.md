@@ -7,12 +7,12 @@ together. For using the app, see the [user guide](USER-GUIDE.md).
 
 - **Linux** (Ubuntu or Debian), or **Windows with Ubuntu under WSL2**. The
   workspace doesn't build on Windows itself.
-- Rust 1.95 or newer.
-- For FFmpeg: meson 1.12 (1.3 can't use zig's linker; versions in between
-  are untested), ninja, nasm and pkg-config.
-- For builds for the Frame: zig (`pip install ziglang`) and `cargo-zigbuild`
-  (`cargo install --locked cargo-zigbuild`), and
-  `rustup target add aarch64-unknown-linux-gnu`.
+- Rust through rustup, which installs the version in `rust-toolchain.toml`
+  (the one CI uses) with clippy, rustfmt and the ARM64 target.
+- The tools in `tools/requirements.txt`, from a virtualenv (the file says
+  how): zig and cargo-zigbuild for builds for the Frame, meson for FFmpeg
+  (Ubuntu's 1.3 can't use zig's linker), and git-cliff for releases.
+- For FFmpeg: ninja, nasm and pkg-config.
 
 On Ubuntu, `tools/local-xr.sh setup` installs Monado and the tools FFmpeg
 needs with apt, then builds FFmpeg, in one go.
@@ -318,6 +318,17 @@ headset and copies the text and JSON reports into `probe-reports/`.
      update channel only.
    - Pushing a `vX.Y.Z` or `vX.Y.Z-anything` tag releases exactly that
      version (a pre-release if it has a `-`).
+
+   The release starts as a draft: it is published, and becomes the latest
+   unless it's a beta, only once every file is in and downloads back
+   identical to the one built. A run that fails leaves a draft nobody
+   sees, which the next run of that version replaces.
+
+CI runs only GitHub's own Actions. Dependabot opens one pull request a
+month with every update: the crates, Rust (`rust-toolchain.toml`), the
+tools (`tools/requirements.txt`) and the Actions. CI tests it like any
+pull request; when a new Rust's clippy finds something, fix it on that
+branch. Merging it releases, as any merge to `main` does.
 
 The app and `frameplayerx-install` find releases in GitHub's release list:
 the highest version on the Stable channel without a `-` part, on Beta any

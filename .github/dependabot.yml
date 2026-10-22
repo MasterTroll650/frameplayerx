@@ -1,0 +1,31 @@
+# One pull request a month with every update: crates, the Rust version
+# (rust-toolchain.toml), the build tools (tools/requirements.txt) and the
+# Actions. CI tests it like any pull request; merging it releases, as any
+# merge to main does.
+version: 2
+
+multi-ecosystem-groups:
+  monthly:
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: build
+      include: scope
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    patterns: ['*']
+    multi-ecosystem-group: monthly
+  - package-ecosystem: rust-toolchain
+    directory: /
+    patterns: ['*']
+    multi-ecosystem-group: monthly
+  - package-ecosystem: pip
+    directory: /tools
+    patterns: ['*']
+    multi-ecosystem-group: monthly
+  - package-ecosystem: github-actions
+    directory: /
+    patterns: ['*']
+    multi-ecosystem-group: monthly
