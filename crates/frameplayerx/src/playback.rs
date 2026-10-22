@@ -128,9 +128,11 @@ pub fn open(
     let entry = match (&req.entry, &source) {
         (Some(e), Some(src)) => Some(src.details(e).unwrap_or_else(|_| e.clone())),
         // From the library or home: a server's details still carry the
-        // video's subtitle files and chapters.
+        // video's subtitle files and chapters. Its address only names the
+        // server, so it goes by the title the library has until then.
         (None, Some(src)) if src.as_media_browser().is_some() => {
-            let e = Entry::new(name.clone(), req.location.clone(), EntryKind::Video);
+            let title = req.title.clone().unwrap_or_else(|| name.clone());
+            let e = Entry::new(title, req.location.clone(), EntryKind::Video);
             src.details(&e).ok()
         }
         (e, _) => e.clone(),
