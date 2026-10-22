@@ -8,8 +8,19 @@ use super::{Action, SettingsTab, View, icons};
 use crate::settings::HapticDeviceConfig;
 use egui::{Align2, Color32, RichText, Sense, Vec2};
 
-const TABS: [(SettingsTab, &str, &str); 7] = [
+const TABS: [(SettingsTab, &str, &str); 10] = [
+    (SettingsTab::General, icons::GEAR_SIX, "General"),
     (SettingsTab::Playback, icons::PLAY_CIRCLE, "Playback"),
+    (
+        SettingsTab::VideoPosition,
+        icons::FRAME_CORNERS,
+        "Video position",
+    ),
+    (
+        SettingsTab::Sound,
+        icons::SPEAKER_HIGH,
+        "Sound and subtitles",
+    ),
     (SettingsTab::Passthrough, icons::EYEGLASSES, "Passthrough"),
     (
         SettingsTab::Controller,
@@ -24,23 +35,29 @@ const TABS: [(SettingsTab, &str, &str); 7] = [
 
 pub fn settings(ui: &mut egui::Ui, v: &mut View) {
     let haptics_on = v.settings.haptics_enabled;
+    // Haptics is listed only once turned on, in General.
     if v.state.settings_tab == SettingsTab::Haptics && !haptics_on {
-        v.state.settings_tab = SettingsTab::Playback;
+        v.state.settings_tab = SettingsTab::General;
     }
     ui.add_space(12.0);
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 28.0;
         ui.vertical(|ui| {
             ui.set_width(240.0);
-            ui.spacing_mut().item_spacing.y = 4.0;
-            for (t, icon, label) in TABS {
-                if t == SettingsTab::Haptics && !haptics_on {
-                    continue;
-                }
-                if side_tab(ui, icon, label, v.state.settings_tab == t).clicked() {
-                    v.state.settings_tab = t;
-                }
-            }
+            // At a large interface size the tabs outgrow the panel.
+            egui::ScrollArea::vertical()
+                .id_salt("settings-tabs")
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    for (t, icon, label) in TABS {
+                        if t == SettingsTab::Haptics && !haptics_on {
+                            continue;
+                        }
+                        if side_tab(ui, icon, label, v.state.settings_tab == t).clicked() {
+                            v.state.settings_tab = t;
+                        }
+                    }
+                });
         });
         ui.vertical(|ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -57,7 +74,10 @@ pub fn settings(ui: &mut egui::Ui, v: &mut View) {
                         .color(theme::TEXT),
                 );
                 match v.state.settings_tab {
+                    SettingsTab::General => general(ui, v),
                     SettingsTab::Playback => playback(ui, v),
+                    SettingsTab::VideoPosition => video_position(ui, v),
+                    SettingsTab::Sound => sound(ui, v),
                     SettingsTab::Passthrough => passthrough(ui, v),
                     SettingsTab::Controller => controller(ui, v),
                     SettingsTab::Haptics => haptics(ui, v),
@@ -174,19 +194,60 @@ fn controller(ui: &mut egui::Ui, v: &mut View) {
     });
 }
 
+/// App-wide switches, then the ones for finding a problem.
+fn general(ui: &mut egui::Ui, v: &mut View) {
+    let s = &mut *v.settings;
+    ui.add_space(12.0);
+    widgets::rows(ui, |r| {
+        r.slider(
+            "Interface size",
+            Some("Text and buttons on every panel."),
+            &mut s.ui_scale,
+            crate::settings::UI_SCALES,
+            1.0,
+            "×",
+            2,
+        );
+        r.switch(
+            "Screen follows you",
+            Some(
+                "Flat videos and the menus stay in front of you as you \
+                 turn, lie back or roll onto your side.",
+            ),
+            &mut s.follow,
+        );
+        r.switch(
+            "Haptic devices",
+            Some("Sync connected haptic devices with videos that have scripts."),
+            &mut s.haptics_enabled,
+        );
+    });
+    heading(ui, "Diagnostics");
+    widgets::rows(ui, |r| {
+        r.switch(
+            "Hardware video decoding",
+            Some("Recommended: smooth 8K. Turn off only to rule out a decoder problem."),
+            &mut s.hardware_decoding,
+        );
+        r.switch(
+            "Performance overlay",
+            Some(
+                "Frame time, the video's frame rate and decoder, CPU, GPU and memory, \
+                 low in your view.",
+            ),
+            &mut s.perf_overlay,
+        );
+    });
+}
+
 fn playback(ui: &mut egui::Ui, v: &mut View) {
     let s = &mut *v.settings;
-    heading(ui, "Playing");
+    ui.add_space(12.0);
     widgets::rows(ui, |r| {
         r.switch(
             "Resume where I left off",
             Some("Videos start again from the last position."),
             &mut s.resume,
-        );
-        r.switch(
-            "Hardware video decoding",
-            Some("Recommended: smooth 8K. Turn off only to rule out a decoder problem."),
-            &mut s.hardware_decoding,
         );
         let mut step = s.seek_step as f32;
         if r.slider(
@@ -209,11 +270,6 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
             " s",
             0,
         );
-        r.switch(
-            "Haptic devices",
-            Some("Sync connected haptic devices with videos that have scripts."),
-            &mut s.haptics_enabled,
-        );
     });
     heading(ui, "Default format");
     note(
@@ -230,37 +286,16 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
             }
         }
     });
-    heading(ui, "Sound");
-    widgets::rows(ui, |r| {
-        r.slider("Volume", None, &mut s.volume, 0.0..=1.5, 1.0, "", 2);
-        r.row(
-            "Audio device",
-            Some("\"default\" follows the system output."),
-            |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut s.audio_device)
-                        .margin(egui::Margin::symmetric(12, 9))
-                        .font(theme::font(Weight::Regular, 17.0))
-                        .desired_width(260.0),
-                );
-            },
-        );
-    });
-    heading(ui, "180° and 360° videos");
-    widgets::rows(ui, |r| {
-        r.slider(
-            "Height",
-            Some("Raise or lower yourself in videos without their own."),
-            &mut s.default_view.height,
-            -1.0..=1.0,
-            0.0,
-            " m",
-            2,
-        );
-    });
-    subtitles(ui, s, &mut v.state.languages_open);
+}
+
+/// Where videos start: the defaults for a video with no adjustments saved.
+fn video_position(ui: &mut egui::Ui, v: &mut View) {
+    let d = &mut v.settings.default_view;
+    note(
+        ui,
+        "Where videos start. A video you adjust in the player keeps its own.",
+    );
     heading(ui, "Flat videos");
-    let d = &mut s.default_view;
     widgets::rows(ui, |r| {
         r.slider(
             "Screen distance",
@@ -290,26 +325,39 @@ fn playback(ui: &mut egui::Ui, v: &mut View) {
             2,
         );
     });
-    heading(ui, "Comfort");
+    heading(ui, "180° and 360° videos");
     widgets::rows(ui, |r| {
         r.slider(
-            "Interface size",
-            Some("Text and buttons on every panel."),
-            &mut s.ui_scale,
-            crate::settings::UI_SCALES,
-            1.0,
-            "×",
+            "Height",
+            Some("Raise or lower yourself in videos without their own."),
+            &mut d.height,
+            -1.0..=1.0,
+            0.0,
+            " m",
             2,
         );
-        r.switch(
-            "Screen follows you",
-            Some(
-                "Flat videos and the menus stay in front of you as you \
-                 turn, lie back or roll onto your side.",
-            ),
-            &mut s.follow,
+    });
+}
+
+fn sound(ui: &mut egui::Ui, v: &mut View) {
+    let s = &mut *v.settings;
+    heading(ui, "Sound");
+    widgets::rows(ui, |r| {
+        r.slider("Volume", None, &mut s.volume, 0.0..=1.5, 1.0, "", 2);
+        r.row(
+            "Audio device",
+            Some("\"default\" follows the system output."),
+            |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut s.audio_device)
+                        .margin(egui::Margin::symmetric(12, 9))
+                        .font(theme::font(Weight::Regular, 17.0))
+                        .desired_width(260.0),
+                );
+            },
         );
     });
+    subtitles(ui, s, &mut v.state.languages_open);
 }
 
 /// Which subtitles videos start with, in which language, and how far away.
@@ -795,17 +843,6 @@ fn about(ui: &mut egui::Ui, v: &mut View) {
             &crate::settings::Settings::path().display().to_string(),
         );
         r.info("Log", &crate::logger::log_path().display().to_string());
-    });
-    heading(ui, "Diagnostics");
-    widgets::rows(ui, |r| {
-        r.switch(
-            "Performance overlay",
-            Some(
-                "Frame time, the video's frame rate and decoder, CPU, GPU and memory, \
-                 low in your view.",
-            ),
-            &mut v.settings.perf_overlay,
-        );
     });
     ui.add_space(6.0);
     note(

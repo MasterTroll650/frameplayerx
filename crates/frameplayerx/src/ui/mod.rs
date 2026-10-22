@@ -212,7 +212,7 @@ pub enum Action {
     DismissCrashReport,
     Recenter,
     TogglePassthrough,
-    /// Settings › Playback › Screen follows you.
+    /// Settings › General › Screen follows you.
     ToggleFollow,
     /// Show the library/browser panel (during playback).
     ShowBrowser(bool),
@@ -239,7 +239,11 @@ pub enum Screen {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsTab {
+    General,
     Playback,
+    VideoPosition,
+    /// Sound and subtitles.
+    Sound,
     Passthrough,
     Controller,
     Haptics,
@@ -543,7 +547,7 @@ pub struct UiState {
     pub settings_tab: SettingsTab,
     /// The controller input whose choices are open in Settings > Controller.
     pub remap_open: Option<RemapSlot>,
-    /// The subtitle languages are listed in Settings > Playback.
+    /// The subtitle languages are listed in Settings › Sound and subtitles.
     pub languages_open: bool,
     pub history: LibraryGrid,
     /// "Clear history" was pressed once: pressing again within a few
@@ -615,7 +619,7 @@ impl Default for UiState {
     fn default() -> Self {
         UiState {
             screen: Screen::Home,
-            settings_tab: SettingsTab::Playback,
+            settings_tab: SettingsTab::General,
             remap_open: None,
             languages_open: false,
             history: LibraryGrid::history(),

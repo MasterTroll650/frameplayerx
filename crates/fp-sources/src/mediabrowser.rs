@@ -270,6 +270,11 @@ pub(crate) fn apply_item_details(
     item_id: &str,
     max_height: Option<u32>,
 ) {
+    // Named as the server names it: an entry made from the library may
+    // know no more than the address.
+    if let Some(item) = catalog::parse_item(v, base_url).filter(|i| !i.name.trim().is_empty()) {
+        entry.name = item.full_title();
+    }
     if let Some(ticks) = num(v, "RunTimeTicks") {
         entry.duration = Some(ticks_to_seconds(ticks));
     }
@@ -1223,6 +1228,30 @@ mod tests {
         assert_eq!(entry.markers.len(), 2);
         assert_eq!(entry.markers[0], (0.0, "Intro".to_string()));
         assert_eq!(entry.markers[1], (150.0, "Action".to_string()));
+    }
+
+    #[test]
+    fn details_name_the_video_as_the_server_does() {
+        // Opened from the library, where only the address was at hand.
+        let mut entry = Entry::new(
+            "generic-media.example",
+            "mb:https://generic-media.example#item=e7",
+            EntryKind::Video,
+        );
+        let v = json!({
+            "Id": "e7",
+            "Name": "The Original",
+            "Type": "Episode",
+            "SeriesName": "Westworld",
+            "ParentIndexNumber": 1,
+            "IndexNumber": 1
+        });
+        apply_item_details(&mut entry, &v, "https://generic-media.example", "e7", None);
+        assert_eq!(entry.name, "Westworld S1:E1 · The Original");
+        // Without a name the entry keeps its own.
+        let mut entry = Entry::new("Kept", "mb:https://s#item=x", EntryKind::Video);
+        apply_item_details(&mut entry, &json!({"Id": "x"}), "https://s", "x", None);
+        assert_eq!(entry.name, "Kept");
     }
 
     #[test]

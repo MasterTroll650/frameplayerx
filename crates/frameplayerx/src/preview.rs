@@ -242,7 +242,10 @@ impl Sim {
                 ui.pin_form = None;
                 if let Some(tab) = parts.get(2) {
                     ui.settings_tab = match *tab {
+                        "general" => SettingsTab::General,
                         "playback" => SettingsTab::Playback,
+                        "position" => SettingsTab::VideoPosition,
+                        "sound" => SettingsTab::Sound,
                         "passthrough" => SettingsTab::Passthrough,
                         "controller" => SettingsTab::Controller,
                         // The Controller tab with the right A button's choices open.
@@ -325,13 +328,13 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
-            // `haptics on` / `haptics off`, as Settings > Playback does.
+            // `haptics on` / `haptics off`, as Settings › General does.
             Some("haptics") => {
                 self.app.settings.haptics_enabled = parts.get(1) != Some(&"off");
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
-            // `subtitles always ar`, as Settings > Playback does.
+            // `subtitles always ar`, as Settings › Sound and subtitles does.
             Some("subtitles") => {
                 use crate::settings::SubtitleMode;
                 self.app.settings.subtitles = match parts.get(1).copied() {
@@ -360,7 +363,7 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
-            // Lists the subtitle languages in Settings > Playback.
+            // Lists the subtitle languages in Settings › Sound and subtitles.
             Some("languages") => {
                 self.app.ui.languages_open = true;
                 self.app.repaint_all();

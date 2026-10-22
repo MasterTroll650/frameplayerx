@@ -230,7 +230,7 @@ impl App {
         }
     }
 
-    /// The performance overlay while Settings › About turns it on: low and
+    /// The performance overlay while Settings › General turns it on: low and
     /// to the left in the view, repainted twice a second.
     fn perf_overlay(&mut self, renderer: &mut Renderer, input: &FrameInput) {
         if !self.settings.perf_overlay {
