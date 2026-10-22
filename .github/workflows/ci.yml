@@ -109,10 +109,16 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build nasm pkg-config mesa-vulkan-drivers zip
+          sudo apt-get install -y ninja-build nasm pkg-config mesa-vulkan-drivers zip shellcheck
           python3 -m venv "$RUNNER_TEMP/tools"
           "$RUNNER_TEMP/tools/bin/pip" install --quiet -r tools/requirements.txt
           echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
+      - name: Shell scripts
+        run: |
+          for s in packaging/*.sh tools/*.sh; do
+            bash -n "$s"
+          done
+          shellcheck packaging/*.sh tools/*.sh
       # A new zig or meson builds it again.
       - name: Restore FFmpeg builds
         id: ffmpeg-cache

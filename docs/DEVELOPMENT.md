@@ -26,6 +26,7 @@ cargo test --workspace                    # GPU tests use any Vulkan device (lav
 cargo clippy --workspace --all-targets   # lints are in [workspace.lints]
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 (cd tools/frame-desktop-install && python3 -m unittest)   # the Desktop Mode installer
+shellcheck packaging/*.sh tools/*.sh      # as CI does
 ```
 
 Under WSL, keep the Linux build off the Windows drive with

@@ -32,4 +32,5 @@ ssh -t "$host" 'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}";
 echo "==> fetching reports"
 mkdir -p probe-reports
 scp -q "$host:frameplayerx-probe/probe-*" probe-reports/
+# shellcheck disable=SC2012 # the probe names its reports
 ls -1t probe-reports | head -2
