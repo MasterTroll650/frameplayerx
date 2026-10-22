@@ -99,6 +99,11 @@ fn element_from(start: &BytesStart<'_>) -> Element {
     }
 }
 
+/// Deepest nesting [`parse`] takes. The documents read are a few levels
+/// deep; a tree much deeper would overflow the stack when searched or
+/// dropped, both of which recurse.
+const MAX_DEPTH: usize = 256;
+
 /// Parses a document. The returned element is a nameless root whose
 /// children are the document's top-level elements.
 pub(crate) fn parse(xml: &str) -> Result<Element> {
@@ -112,7 +117,16 @@ pub(crate) fn parse(xml: &str) -> Result<Element> {
             .read_event()
             .map_err(|e| Error::parse("XML", format!("{e} at byte {}", reader.error_position())))?;
         match event {
-            Event::Start(s) => stack.push(element_from(&s)),
+            Event::Start(s) => {
+                // The stack holds the nameless root too.
+                if stack.len() > MAX_DEPTH {
+                    return Err(Error::parse(
+                        "XML",
+                        format!("elements nested more than {MAX_DEPTH} deep"),
+                    ));
+                }
+                stack.push(element_from(&s));
+            }
             Event::Empty(s) => {
                 let el = element_from(&s);
                 if let Some(top) = stack.last_mut() {
@@ -215,6 +229,16 @@ mod tests {
         assert_eq!(doc.find("b").unwrap().text, "truncated");
         assert!(parse("").is_err());
         assert!(parse("just text").is_err());
+    }
+
+    #[test]
+    fn deep_nesting_is_an_error_not_a_crash() {
+        let nested = |depth: usize| format!("{}x{}", "<a>".repeat(depth), "</a>".repeat(depth));
+        let doc = parse(&nested(MAX_DEPTH)).unwrap();
+        assert_eq!(doc.find("a").map(|a| a.name.as_str()), Some("a"));
+        assert!(parse(&nested(MAX_DEPTH + 1)).is_err());
+        // Never closed: a truncated document is closed up, not refused.
+        assert!(parse(&"<a>".repeat(1_000_000)).is_err());
     }
 
     #[test]
