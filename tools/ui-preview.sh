@@ -105,8 +105,14 @@ panel main source-unlock-wrong
 unlock private 2468
 pin-form private set
 panel main source-pin
+screen settings general
+panel main settings-general
 screen settings playback
 panel main settings-playback
+screen settings position
+panel main settings-position
+screen settings sound
+panel main settings-sound
 screen settings passthrough
 panel main settings-passthrough-locked
 unlocked
@@ -194,8 +200,8 @@ panel main history
 screen home
 frames 4
 panel main home-watched
-# Subtitles in Settings > Playback, with the languages listed.
-screen settings playback
+# Subtitles in Settings › Sound and subtitles, with the languages listed.
+screen settings sound
 languages
 point main 0.6 0.6
 stick 0 -1 30

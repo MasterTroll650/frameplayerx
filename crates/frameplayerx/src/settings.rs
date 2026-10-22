@@ -84,7 +84,7 @@ pub struct Settings {
     pub ui_scale: f32,
     /// Flat videos and the panels follow the head ([`crate::world::follow`]).
     pub follow: bool,
-    /// The performance overlay (Settings › About › Diagnostics).
+    /// The performance overlay (Settings › General › Diagnostics).
     pub perf_overlay: bool,
     /// What the controller buttons and thumbsticks do.
     pub controls: crate::bindings::Bindings,

@@ -382,7 +382,7 @@ it: `Movie.srt`, `Movie.en.srt`, `Movie.de.forced.ass`. Jellyfin and Emby
 servers offer the subtitle files they keep, and DeoVR feeds and HereSphere
 APIs those they list.
 
-Settings › Playback › **Subtitles** sets what a video starts with:
+Settings › Sound and subtitles › **Subtitles** sets what a video starts with:
 
 - **Automatic** (the default): subtitles in your language when the audio
   is in another one, forced subtitles for the parts in another language
@@ -496,7 +496,7 @@ panel in its place beside the control bar. The format on the control bar
 
 Lie back, look where you want the picture, and hold the Steam button to
 recenter: it comes up to where you look. Or turn on **Screen follows you**
-(the bed button on the control bar, or Settings › Playback): a flat video
+(the bed button on the control bar, or Settings › General): a flat video
 and the menus then follow your head and stay in front of you as you turn,
 lie back or roll onto your side. 180° and 360° videos don't follow, since
 you look around those.
@@ -549,7 +549,7 @@ adjustment), and turning **Own settings for this video** off makes it follow
 Settings again.
 ## Haptics
 
-Haptics are off until you turn on **Settings › Playback › Haptic devices**.
+Haptics are off until you turn on **Settings › General › Haptic devices**.
 Until then FramePlayerX shows nothing about them and loads no scripts.
 
 Scripts (`.funscript`, including multi-axis `video.surge.funscript` etc.)
@@ -568,7 +568,7 @@ protocol. Both only answer devices on your local network.
 
 ## Troubleshooting
 
-- When a video stutters, turn on Settings › About › **Performance
+- When a video stutters, turn on Settings › General › **Performance
   overlay**. Low in your view, it shows how long each frame takes to draw
   (amber when longer than the display allows), the video's frame rate and
   dropped frames, its decoder, how busy the CPU and GPU are, and memory.
