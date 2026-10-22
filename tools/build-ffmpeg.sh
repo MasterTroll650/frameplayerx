@@ -100,7 +100,7 @@ INI
     --prefix="$work/dav1d-prefix" --libdir=lib --buildtype=release \
     --default-library=static -Db_staticpic=true \
     -Denable_tools=false -Denable_tests=false -Denable_examples=false "${x86asm[@]}" \
-    >"$work/dav1d-setup.log" 2>&1 || { tail -40 "$work/dav1d-setup.log"; cat "$work/dav1d-build/meson-logs/meson-log.txt" 2>/dev/null | tail -40; exit 1; }
+    >"$work/dav1d-setup.log" 2>&1 || { tail -40 "$work/dav1d-setup.log"; tail -40 "$work/dav1d-build/meson-logs/meson-log.txt" 2>/dev/null; exit 1; }
   ninja -C "$work/dav1d-build" install >"$work/dav1d-build.log" 2>&1 || { tail -40 "$work/dav1d-build.log"; exit 1; }
 
   echo "== zlib ($arch)"
