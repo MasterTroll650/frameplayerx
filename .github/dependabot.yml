@@ -1,7 +1,7 @@
-# One pull request a month with every update: crates, the Rust version
-# (rust-toolchain.toml), the build tools (tools/requirements.txt) and the
-# Actions. CI tests it like any pull request; merging it releases, as any
-# merge to main does.
+# One pull request a month with the crates' compatible updates, the Rust
+# version (rust-toolchain.toml), the build tools (tools/requirements.txt)
+# and the Actions. CI tests it like any pull request; merging it releases,
+# as any merge to main does.
 version: 2
 
 multi-ecosystem-groups:
@@ -17,6 +17,10 @@ updates:
     directory: /
     patterns: ['*']
     multi-ecosystem-group: monthly
+    # Cargo.lock only, within what Cargo.toml allows: its pins stay, and a
+    # breaking upgrade (a new egui, zip 9) needs code changes, so it is
+    # made by hand.
+    versioning-strategy: lockfile-only
   - package-ecosystem: rust-toolchain
     directory: /
     patterns: ['*']

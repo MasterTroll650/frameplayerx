@@ -326,10 +326,12 @@ headset and copies the text and JSON reports into `probe-reports/`.
    sees, which the next run of that version replaces.
 
 CI runs only GitHub's own Actions. Dependabot opens one pull request a
-month with every update: the crates, Rust (`rust-toolchain.toml`), the
-tools (`tools/requirements.txt`) and the Actions. CI tests it like any
-pull request; when a new Rust's clippy finds something, fix it on that
-branch. Merging it releases, as any merge to `main` does.
+month with the crates' compatible updates (`Cargo.lock` only, within what
+`Cargo.toml` allows), Rust (`rust-toolchain.toml`), the tools
+(`tools/requirements.txt`) and the Actions. CI tests it like any pull
+request; when a new Rust's clippy finds something, fix it on that branch.
+Merging it releases, as any merge to `main` does. A breaking crate upgrade
+(a new egui, say) needs code changes, so it's made by hand.
 
 The app and `frameplayerx-install` find releases in GitHub's release list:
 the highest version on the Stable channel without a `-` part, on Beta any
