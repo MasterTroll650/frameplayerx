@@ -1,7 +1,8 @@
 //! Headless preview: renders the app offscreen with a simulated head and
 //! right controller, driven by a small script, and saves screenshots.
 //!
-//! Script commands (one per line, `#` comments):
+//! Script commands (one per line; `#` starts a comment at the start of a
+//! line or after a space, so a Jellyfin address's `#item=` stays):
 //!
 //! | command | effect |
 //! |---|---|
@@ -734,7 +735,7 @@ pub fn run(args: &Args, out: &Path) -> Result<(), Error> {
     };
     sim.hand.aim = Some((sim.hand_pos(), Quat::IDENTITY));
     for (n, line) in script.lines().enumerate() {
-        let line = line.split('#').next().unwrap_or("").trim();
+        let line = without_comment(line);
         if line.is_empty() {
             continue;
         }
@@ -761,4 +762,28 @@ pub fn run(args: &Args, out: &Path) -> Result<(), Error> {
     renderer.wait_idle();
     drop(renderer);
     Ok(())
+}
+
+/// `line` trimmed, without its comment.
+fn without_comment(line: &str) -> &str {
+    let line = line.trim();
+    if line.starts_with('#') {
+        return "";
+    }
+    line.find(" #").map_or(line, |i| line[..i].trim_end())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_comment;
+
+    #[test]
+    fn comments_leave_addresses_whole() {
+        assert_eq!(without_comment("# a comment"), "");
+        assert_eq!(without_comment("  frames 8   # settle"), "frames 8");
+        assert_eq!(
+            without_comment("open-in emby mb:http://emby:8096#item=12"),
+            "open-in emby mb:http://emby:8096#item=12"
+        );
+    }
 }
