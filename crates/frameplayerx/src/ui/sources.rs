@@ -854,7 +854,7 @@ fn server_form(
         if is_mb {
             r.row(
                 "Sign in with",
-                Some("Quick Connect pairs using a 6-digit code on another device."),
+                Some("Jellyfin's Quick Connect pairs using a 6-digit code on another device."),
                 |ui| {
                     if widgets::chip(ui, "Password", !f.use_quick_connect).clicked() {
                         f.use_quick_connect = false;

@@ -167,7 +167,7 @@ that pairing, you can also delete `~/.ssh/id_rsa_frame_devkit` and
 | Any server with a DeoVR feed or HereSphere API | Sources › Add source › DeoVR feed or HereSphere API |
 | NAS / Windows share | Sources › Add source › SMB share (`smb://nas/videos`) |
 | Nextcloud and other WebDAV | Sources › Add source › WebDAV |
-| Jellyfin, Emby | Sources › Add source › Jellyfin / Emby (Quick Connect or password) |
+| Jellyfin, Emby | Sources › Add source › Jellyfin / Emby (a password, or Quick Connect on Jellyfin) |
 | Plex, Serviio and other DLNA servers | Sources › Add source › DLNA › Search the network |
 | A web server folder listing | Sources › Add source › HTTP |
 
@@ -244,7 +244,7 @@ own, if it shows the same videos.
 
 The pencil next to a source under **Sources** opens its details: rename it,
 change its address, user name and password, or its PIN. Its type stays; a
-Jellyfin or Emby server signed in with Quick Connect keeps that sign-in
+Jellyfin server signed in with Quick Connect keeps that sign-in
 unless you clear it.
 
 ### Watch sync with Jellyfin, Emby and HereSphere
@@ -587,7 +587,7 @@ protocol. Both only answer devices on your local network.
   (readable only by you)
 - "Is SteamVR running?": FramePlayerX needs the headset's OpenXR runtime;
   start it from the Steam library, not a desktop terminal.
-- "… has signed this headset out": a Jellyfin or Emby server ends a Quick
+- "… has signed this headset out": a Jellyfin server ends a Quick
   Connect sign-in when the account's password changes or the device is
   signed out on the server. Pair again: the pencil next to the source under
   **Sources**, *Clear* next to Quick Connect, then *Get pairing code*.

@@ -281,7 +281,7 @@ pub(crate) fn apply_item_details(
     if let Some(overview) = text(v, "Overview").filter(|o| !o.trim().is_empty()) {
         entry.description = Some(overview);
     }
-    let tags = catalog::strings(v, "Tags");
+    let tags = catalog::tag_names(v);
     if !tags.is_empty() {
         entry.tags = tags;
     }
@@ -601,20 +601,26 @@ impl MediaBrowserSource {
         let client = HttpClient::new(opts, None);
         let url = format!("{}/QuickConnect/Initiate", self.base_url);
         let auth_header = mediabrowser_header(None);
-        let reply = client
-            .request(
-                "POST",
-                &url,
-                &[
-                    ("Authorization", &auth_header),
-                    ("X-Emby-Authorization", &auth_header),
-                    ("Accept", "application/json"),
-                    ("Content-Type", "application/json"),
-                ],
-                Some(b"{}"),
-                JSON_LIMIT,
-            )?
-            .error_for_status(&url)?;
+        let reply = client.request(
+            "POST",
+            &url,
+            &[
+                ("Authorization", &auth_header),
+                ("X-Emby-Authorization", &auth_header),
+                ("Accept", "application/json"),
+                ("Content-Type", "application/json"),
+            ],
+            Some(b"{}"),
+            JSON_LIMIT,
+        )?;
+        if reply.status == 404 {
+            return Err(Error::Unsupported(
+                "Quick Connect on this server (Emby has none): sign in with your \
+                 user name and password"
+                    .into(),
+            ));
+        }
+        let reply = reply.error_for_status(&url)?;
         let v: Value = serde_json::from_slice(&reply.body)
             .map_err(|e| Error::invalid(&url, format!("invalid JSON: {e}")))?;
         parse_quick_connect_initiate(&v, &url)
