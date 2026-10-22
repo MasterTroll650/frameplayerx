@@ -36,7 +36,7 @@ fetch "https://archive.ubuntu.com/ubuntu/pool/universe/f/ffmpeg/ffmpeg_${FFMPEG_
 fetch "https://archive.ubuntu.com/ubuntu/pool/main/d/dav1d/dav1d_${DAV1D_VER}.orig.tar.xz" "$src/dav1d-$DAV1D_VER.tar.xz" "$DAV1D_SHA256"
 fetch "https://zlib.net/fossils/zlib-${ZLIB_VER}.tar.gz" "$src/zlib-$ZLIB_VER.tar.gz" "$ZLIB_SHA256"
 
-# zig from PATH, else the pip package (`pip install ziglang`).
+# zig from PATH, else the pip package (tools/requirements.txt).
 if command -v zig >/dev/null; then zig="$(command -v zig)"; else zig="python3 -m ziglang"; fi
 
 zig_wrappers() { # dir
@@ -58,7 +58,7 @@ WRAP
   printf '#!/bin/sh\nexec %s ranlib "$@"\n' "$zig" > "$1/ranlib"
   printf '#!/bin/sh\nexec %s nm "$@"\n' "$zig" > "$1/nm"
   chmod +x "$1"/*
-  "$1/cc" --version >/dev/null || { echo "zig does not work: install it or run: pip install ziglang" >&2; exit 1; }
+  "$1/cc" --version >/dev/null || { echo "zig does not work: install it or the tools in tools/requirements.txt" >&2; exit 1; }
 }
 
 build_arch() {
@@ -100,7 +100,7 @@ INI
     --prefix="$work/dav1d-prefix" --libdir=lib --buildtype=release \
     --default-library=static -Db_staticpic=true \
     -Denable_tools=false -Denable_tests=false -Denable_examples=false "${x86asm[@]}" \
-    >"$work/dav1d-setup.log" 2>&1 || { tail -40 "$work/dav1d-setup.log"; cat "$work/dav1d-build/meson-logs/meson-log.txt" 2>/dev/null | tail -40; exit 1; }
+    >"$work/dav1d-setup.log" 2>&1 || { tail -40 "$work/dav1d-setup.log"; tail -40 "$work/dav1d-build/meson-logs/meson-log.txt" 2>/dev/null; exit 1; }
   ninja -C "$work/dav1d-build" install >"$work/dav1d-build.log" 2>&1 || { tail -40 "$work/dav1d-build.log"; exit 1; }
 
   echo "== zlib ($arch)"

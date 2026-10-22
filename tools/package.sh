@@ -103,6 +103,7 @@ file "$stage/frameplayerx" | grep -q "ARM aarch64" || { echo "not an aarch64 bin
 max_glibc="$(objdump -T "$stage/frameplayerx" "$stage"/lib/*.so* 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
 echo "highest glibc symbol version: $max_glibc"
 case "$max_glibc" in GLIBC_2.2[0-8]|GLIBC_2.1*|GLIBC_2.[0-9]) ;; *) echo "needs newer glibc than 2.28" >&2; exit 1 ;; esac
+# shellcheck disable=SC2016 # $ORIGIN is literal in an rpath
 readelf -d "$stage/frameplayerx" | grep -qE '(RPATH|RUNPATH).*\$ORIGIN/lib' || { echo "missing \$ORIGIN/lib rpath" >&2; exit 1; }
 
 zip="frameplayerx-$version-aarch64.zip"
