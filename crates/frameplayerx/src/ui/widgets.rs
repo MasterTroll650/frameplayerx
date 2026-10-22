@@ -817,7 +817,10 @@ pub fn slider_control(
                 .color(theme::TEXT_2),
         ),
     );
-    let resp = slider(ui, value, range.clone(), 240.0);
+    // What the row leaves it, so at a large interface size it doesn't run
+    // over the text beside it.
+    let width = ui.available_width().clamp(120.0, 240.0);
+    let resp = slider(ui, value, range.clone(), width);
     changed |= resp.changed();
     if resp.hovered() {
         let ctx = ui.ctx().clone();
