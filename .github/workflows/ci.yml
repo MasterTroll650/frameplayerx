@@ -10,6 +10,10 @@ on:
   # either way.
   workflow_dispatch:
 
+# Read-only for every job but the release, which publishes.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   # Nothing to reuse between runs, and it keeps the cache small.
