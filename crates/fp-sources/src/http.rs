@@ -191,9 +191,11 @@ struct Stalling {
 
 impl Stalling {
     fn capped(&self, t: NextTimeout) -> NextTimeout {
+        // The rest (a newer ureq's per-read and per-write limits) is for
+        // the transport doing the I/O to apply, so it passes through.
         NextTimeout {
             after: (*t.after).min(self.limit).into(),
-            reason: t.reason,
+            ..t
         }
     }
 }
