@@ -1168,7 +1168,7 @@ version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
  "fp-core",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "libc",
  "log",
  "qrcode",
@@ -1199,7 +1199,7 @@ dependencies = [
 name = "fp-sources"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "fp-core",
  "log",
  "percent-encoding",
@@ -1219,9 +1219,9 @@ dependencies = [
 name = "fp-updater"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "ed25519-dalek 2.2.0",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "semver",
  "serde",
  "serde_json",

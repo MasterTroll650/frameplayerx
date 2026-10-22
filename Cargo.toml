@@ -35,10 +35,10 @@ fp-xr = { path = "crates/fp-xr" }
 fp-xr-loader = { path = "crates/fp-xr-loader" }
 
 ash = "0.38"
-base64 = "0.22"
+base64 = "0.23"
 crossbeam-channel = "0.5"
 egui = { version = "0.32.3", features = ["bytemuck"] }
-getrandom = "0.3"
+getrandom = "0.4"
 glam = "0.33"
 libc = "0.2.190"
 libloading = "0.8"
