@@ -362,7 +362,7 @@ mod imp {
                 Some(c) => (c.username.clone(), c.password.clone()),
                 None => ("Guest".to_string(), String::new()),
             };
-            log::info!("connecting to {} as {user}", self.root);
+            log::info!("connecting to {}", self.root);
             client
                 .share_connect(&share, &user, pass)
                 .map_err(|e| map_err(e, &self.root))?;
