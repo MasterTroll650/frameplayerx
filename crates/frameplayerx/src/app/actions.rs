@@ -80,7 +80,7 @@ impl App {
                     let was_flat = p.format.projection == Projection::Flat;
                     p.set_format(&self.services.library, f);
                     if !was_flat {
-                        p.place_flat(self.offsets.main);
+                        p.place_flat(self.offsets.main[0]);
                     }
                 }
                 self.ui.invalidate();
@@ -119,6 +119,7 @@ impl App {
                 }
             }
             Action::SelectSubtitleFile(i) => self.select_subtitle_file(i),
+            Action::ResetPlacement => self.reset_placement(),
             Action::SetFavorite(id, f) => {
                 let r = self.services.library.set_favorite(id, f);
                 self.library_changed("the favorite", r);

@@ -10,6 +10,9 @@
 //! fallback is not needed. Build with `--no-default-features` to leave SMB
 //! out; [`SmbSource::new`] then fails with [`Error::SmbUnavailable`].
 //!
+//! A source is one share (`smb://host/share[/folder]`) or a whole server
+//! (`smb://host/`), whose root lists its shares.
+//!
 //! Locations are `smb://host[:port]/share/dir/file` with percent-encoded
 //! segments and no credentials. Files are read through the shared block
 //! cache with read-ahead, in requests no larger than the server's
@@ -21,6 +24,9 @@ use crate::urlutil::{encode_segment, percent_decode};
 use crate::{Source, dir_entry, file_entry, sort_entries};
 use fp_core::source::{ByteSource, Entry};
 use std::sync::Arc;
+
+#[cfg_attr(not(feature = "smb"), allow(dead_code))]
+mod srvsvc;
 
 /// Builds `smb://host[:port]/share/path` with every segment
 /// percent-encoded. `path` is `/`-separated and may be empty.
@@ -50,14 +56,16 @@ pub struct SmbLocation {
     pub host: String,
     /// TCP port, when given.
     pub port: Option<u16>,
+    /// Empty for the server itself (`smb://host/`), which lists its shares.
     pub share: String,
     /// Decoded path segments inside the share.
     pub path: Vec<String>,
 }
 
 impl SmbLocation {
-    /// Parses `smb://host[:port]/share/path`. Credentials in the URL are
-    /// ignored (they belong in the configuration).
+    /// Parses `smb://host[:port]/share/path`, or `smb://host[:port]/` for
+    /// the server. Credentials in the URL are ignored (they belong in the
+    /// configuration).
     pub fn parse(location: &str) -> Result<SmbLocation> {
         let rest = location
             .get(..6)
@@ -89,9 +97,7 @@ impl SmbLocation {
             .split('/')
             .filter(|s| !s.is_empty())
             .map(percent_decode);
-        let share = segs
-            .next()
-            .ok_or_else(|| Error::invalid(location, "no share name"))?;
+        let share = segs.next().unwrap_or_default();
         let path: Vec<String> = segs.collect();
         if host.is_empty() {
             return Err(Error::invalid(location, "no host"));
@@ -107,6 +113,11 @@ impl SmbLocation {
         })
     }
 
+    /// The server itself, not a share on it.
+    pub fn is_server(&self) -> bool {
+        self.share.is_empty()
+    }
+
     /// Back to an `smb://` URL.
     pub fn to_url(&self) -> String {
         smb_url(&self.host, self.port, &self.share, &self.path.join("/"))
@@ -118,7 +129,7 @@ impl SmbLocation {
     }
 }
 
-/// An SMB2/3 share.
+/// An SMB2/3 share, or every share on a server.
 pub struct SmbSource {
     id: String,
     name: String,
@@ -141,8 +152,8 @@ impl std::fmt::Debug for SmbSource {
 impl SmbSource {
     /// Creates the source. No connection is made until it is used.
     pub fn new(config: &SmbConfig) -> Result<SmbSource> {
-        if config.host.trim().is_empty() || config.share.trim().is_empty() {
-            return Err(Error::Config("SMB source needs a host and a share".into()));
+        if config.host.trim().is_empty() {
+            return Err(Error::Config("SMB source needs a host".into()));
         }
         if !cfg!(feature = "smb") {
             return Err(Error::SmbUnavailable(
@@ -165,9 +176,14 @@ impl SmbSource {
         &self.root
     }
 
+    /// A source for the whole server (`smb://host/`).
+    fn whole_server(&self) -> bool {
+        self.config.share.trim().is_empty()
+    }
+
     fn check_same_share(&self, loc: &SmbLocation) -> Result<()> {
         let same = loc.host.eq_ignore_ascii_case(&self.config.host)
-            && loc.share.eq_ignore_ascii_case(&self.config.share)
+            && (self.whole_server() || loc.share.eq_ignore_ascii_case(&self.config.share))
             && loc.port.unwrap_or(445) == self.config.port.unwrap_or(445);
         if same {
             Ok(())
@@ -191,15 +207,33 @@ impl Source for SmbSource {
     }
 
     fn describe(&self) -> String {
+        let what = if self.whole_server() {
+            "SMB server"
+        } else {
+            "SMB share"
+        };
         match &self.config.credentials {
-            Some(c) => format!("SMB share {} as {}", self.root, c.username),
-            None => format!("SMB share {} (guest)", self.root),
+            Some(c) => format!("{what} {} as {}", self.root, c.username),
+            None => format!("{what} {} (guest)", self.root),
         }
     }
 
     fn list(&self, location: Option<&str>) -> Result<Vec<Entry>> {
         let loc = SmbLocation::parse(location.unwrap_or(&self.root))?;
         self.check_same_share(&loc)?;
+        if loc.is_server() {
+            let mut out: Vec<Entry> = self
+                .list_shares()?
+                .into_iter()
+                .filter(|share| self.can_open_share(share))
+                .map(|share| {
+                    let url = smb_url(&loc.host, loc.port, &share, "");
+                    dir_entry(share, format!("{url}/"), None)
+                })
+                .collect();
+            sort_entries(&mut out);
+            return Ok(out);
+        }
         let mut out = Vec::new();
         for item in self.list_dir(&loc)? {
             if item.name.starts_with('.') {
@@ -224,7 +258,7 @@ impl Source for SmbSource {
         if loc.path.is_empty() {
             return Err(Error::invalid(
                 location,
-                "a share cannot be opened as a file",
+                "a share or server cannot be opened as a file",
             ));
         }
         self.open_file(&loc)
@@ -232,7 +266,15 @@ impl Source for SmbSource {
 
     fn parent(&self, location: &str) -> Option<String> {
         let mut loc = SmbLocation::parse(location).ok()?;
-        loc.path.pop()?;
+        if loc.path.pop().is_none() {
+            // A share's root goes up to the server's list of shares, when
+            // the source is the whole server.
+            if loc.is_server() || !self.whole_server() {
+                return None;
+            }
+            loc.share.clear();
+            return Some(loc.to_url());
+        }
         Some(format!("{}/", loc.to_url()))
     }
 }
@@ -246,8 +288,45 @@ struct DirItem {
     modified: Option<i64>,
 }
 
+impl SmbSource {
+    /// Whether `share` takes this source's sign-in (a guest one without a
+    /// login): a server's list holds the shares that need another login,
+    /// or that this one may not open, and those are left out. Tried by
+    /// connecting, and the connection kept for browsing it. A share that
+    /// fails any other way (the server stopped answering) stays, so opening
+    /// it says why.
+    fn can_open_share(&self, share: &str) -> bool {
+        match self.connect_share(share) {
+            Ok(()) => true,
+            Err(e @ (Error::Auth(_) | Error::NotFound(_))) => {
+                log::info!("{}: leaving out share {share}: {e}", self.root);
+                false
+            }
+            Err(e) => {
+                log::warn!("{}: share {share}: {e}", self.root);
+                true
+            }
+        }
+    }
+}
+
+/// Whether a share is one to browse: not the server's own (`IPC$`,
+/// `ADMIN$`, `C$`, `print$`: hidden ones end in `$`).
+#[cfg_attr(not(feature = "smb"), allow(dead_code))]
+fn browsable_share(name: &str) -> bool {
+    !name.is_empty() && !name.ends_with('$')
+}
+
 #[cfg(not(feature = "smb"))]
 impl SmbSource {
+    fn connect_share(&self, _share: &str) -> Result<()> {
+        Err(Error::SmbUnavailable("compiled without SMB support".into()))
+    }
+
+    fn list_shares(&self) -> Result<Vec<String>> {
+        Err(Error::SmbUnavailable("compiled without SMB support".into()))
+    }
+
     fn list_dir(&self, _loc: &SmbLocation) -> Result<Vec<DirItem>> {
         Err(Error::SmbUnavailable("compiled without SMB support".into()))
     }
@@ -269,8 +348,10 @@ mod imp {
     use fp_core::sync::lock;
     use smb::{
         Client, ClientConfig, ConnectionConfig, DirAccessMask, FileAccessMask, FileCreateArgs,
-        FileDirectoryInformation, GetLen, ReadAt, Status, UncPath,
+        FileDirectoryInformation, GetLen, IoctlBuffer, PipeTransceiveRequest,
+        PipeTransceiveResponse, ReadAt, Status, UncPath,
     };
+    use std::collections::HashMap;
     use std::io;
     use std::str::FromStr;
     use std::sync::{Arc, Mutex};
@@ -283,25 +364,36 @@ mod imp {
     /// 2.0.2 limit).
     const DEFAULT_MAX_READ: usize = 64 << 10;
 
-    /// A client connected to the configured share.
+    /// A client connected and signed in to one share (`IPC$` for a whole
+    /// server's list of shares). Each share has its own connection and a
+    /// single sign-in: smb-rs signs in again for every further share on a
+    /// connection, and some servers fail the second sign-in ("session setup
+    /// succeeded before SSPI authentication completed").
     pub(super) struct Session {
         client: Client,
         max_read: usize,
     }
 
-    /// The share's current session, shared by the source and its open
-    /// files, so a file that loses its connection reconnects for everyone.
+    /// Each share's current session (by lowercase name, empty for `IPC$`),
+    /// shared by the source and its open files, so a file that loses its
+    /// connection reconnects for everyone.
     pub(super) struct Sessions {
         config: SmbConfig,
         root: String,
-        current: Mutex<Option<Arc<Session>>>,
+        current: Mutex<HashMap<String, Arc<Session>>>,
     }
 
     /// Maps an smb-rs error, keeping "not found" and "access denied"
     /// distinguishable.
     fn map_err(e: smb::Error, what: &str) -> Error {
-        if let smb::Error::ReceivedErrorMessage(status, _) = &e {
-            match *status {
+        let status = match &e {
+            // An answer with an error, or a sign-in the server turned down.
+            smb::Error::ReceivedErrorMessage(status, _)
+            | smb::Error::UnexpectedMessageStatus(status) => Some(*status),
+            _ => None,
+        };
+        if let Some(status) = status {
+            match status {
                 Status::U32_LOGON_FAILURE | Status::U32_ACCESS_DENIED => {
                     return Error::Auth(what.to_string());
                 }
@@ -331,13 +423,16 @@ mod imp {
             Sessions {
                 config: config.clone(),
                 root: root.to_string(),
-                current: Mutex::new(None),
+                current: Mutex::new(HashMap::new()),
             }
         }
 
-        fn session(&self) -> Result<Arc<Session>> {
+        /// The session for `share` (empty: the server's `IPC$`), connecting
+        /// it if there is none.
+        fn session(&self, share: &str) -> Result<Arc<Session>> {
+            let key = share.to_lowercase();
             let mut guard = lock(&self.current);
-            if let Some(s) = guard.as_ref() {
+            if let Some(s) = guard.get(&key) {
                 return Ok(s.clone());
             }
             let guest = self.config.credentials.is_none();
@@ -351,21 +446,24 @@ mod imp {
                 ..ClientConfig::default()
             };
             let client = Client::new(config);
+            let (user, pass) = self.login();
             let loc = SmbLocation {
                 host: self.config.host.clone(),
                 port: self.config.port,
-                share: self.config.share.clone(),
+                share: share.to_string(),
                 path: Vec::new(),
             };
-            let share = unc(&loc)?;
-            let (user, pass) = match &self.config.credentials {
-                Some(c) => (c.username.clone(), c.password.clone()),
-                None => ("Guest".to_string(), String::new()),
-            };
-            log::info!("connecting to {}", self.root);
-            client
-                .share_connect(&share, &user, pass)
-                .map_err(|e| map_err(e, &self.root))?;
+            let url = loc.to_url();
+            log::info!("connecting to {url}");
+            if share.is_empty() {
+                client
+                    .ipc_connect(&self.config.host, &user, pass)
+                    .map_err(|e| map_err(e, &url))?;
+            } else {
+                client
+                    .share_connect(&unc(&loc)?, &user, pass)
+                    .map_err(|e| map_err(e, &url))?;
+            }
             let max_read = client
                 .get_connection(&self.config.host)
                 .ok()
@@ -373,14 +471,58 @@ mod imp {
                 .filter(|n| *n >= 4096)
                 .unwrap_or(DEFAULT_MAX_READ);
             let session = Arc::new(Session { client, max_read });
-            *guard = Some(session.clone());
+            guard.insert(key, session.clone());
             Ok(session)
         }
 
-        /// Runs `op` with a session; after a connection-level failure the
-        /// session is dropped so the next call reconnects.
-        fn with_session<T>(&self, op: impl Fn(&Arc<Session>) -> Result<T>) -> Result<T> {
-            let session = self.session()?;
+        /// The user name and password to sign in with (guest without).
+        fn login(&self) -> (String, String) {
+            match &self.config.credentials {
+                Some(c) => (c.username.clone(), c.password.clone()),
+                None => ("Guest".to_string(), String::new()),
+            }
+        }
+
+        /// The server's shares worth browsing, by name, asked for on its
+        /// `srvsvc` pipe (see [`super::srvsvc`]).
+        fn list_shares(&self) -> Result<Vec<String>> {
+            use super::srvsvc;
+            self.with_session("", |s| {
+                let pipe = s
+                    .client
+                    .open_pipe(&self.config.host, "srvsvc")
+                    .map_err(|e| map_err(e, &self.root))?;
+                let ask = |pdu: Vec<u8>| -> Result<Vec<u8>> {
+                    pipe.fsctl_with_options(
+                        PipeTransceiveRequest::from(IoctlBuffer::from(pdu)),
+                        u32::from(srvsvc::MAX_FRAG),
+                    )
+                    .map(|reply: PipeTransceiveResponse| reply.to_vec())
+                    .map_err(|e| map_err(e, &self.root))
+                };
+                let listed = ask(srvsvc::bind(1)).and_then(|ack| {
+                    srvsvc::bind_accepted(&ack)?;
+                    srvsvc::shares(&ask(srvsvc::share_enum(2, &self.config.host))?)
+                });
+                if let Err(e) = pipe.close() {
+                    log::debug!("{}: closing the srvsvc pipe: {e}", self.root);
+                }
+                Ok(listed?
+                    .into_iter()
+                    .filter(|share| share.is_disk() && super::browsable_share(&share.name))
+                    .map(|share| share.name)
+                    .collect())
+            })
+        }
+
+        /// Runs `op` with `share`'s session; after a connection-level
+        /// failure the session is dropped so the next call reconnects.
+        fn with_session<T>(
+            &self,
+            share: &str,
+            op: impl Fn(&Arc<Session>) -> Result<T>,
+        ) -> Result<T> {
+            let session = self.session(share)?;
             let r = op(&session);
             if let Err(Error::Smb(_)) = &r {
                 self.discard(&session);
@@ -391,15 +533,12 @@ mod imp {
         /// Forgets `stale` unless it was already replaced, so the next call
         /// connects again.
         fn discard(&self, stale: &Arc<Session>) {
-            let mut guard = lock(&self.current);
-            if guard.as_ref().is_some_and(|s| Arc::ptr_eq(s, stale)) {
-                *guard = None;
-            }
+            lock(&self.current).retain(|_, s| !Arc::ptr_eq(s, stale));
         }
 
         /// Opens a file for reading on the current session.
         fn open_file(&self, path: &UncPath, url: &str) -> Result<OpenFile> {
-            self.with_session(|s| {
+            self.with_session(path.share().unwrap_or_default(), |s| {
                 let args = FileCreateArgs::make_open_existing(
                     FileAccessMask::new().with_generic_read(true),
                 );
@@ -420,14 +559,19 @@ mod imp {
     }
 
     impl SmbSource {
-        fn with_session<T>(&self, op: impl Fn(&Arc<Session>) -> Result<T>) -> Result<T> {
-            self.sessions.with_session(op)
+        pub(super) fn list_shares(&self) -> Result<Vec<String>> {
+            self.sessions.list_shares()
+        }
+
+        /// Connects to `share` (kept for later), or says why it can't.
+        pub(super) fn connect_share(&self, share: &str) -> Result<()> {
+            self.sessions.session(share).map(|_| ())
         }
 
         pub(super) fn list_dir(&self, loc: &SmbLocation) -> Result<Vec<DirItem>> {
             let path = unc(loc)?;
             let url = loc.to_url();
-            self.with_session(|s| {
+            self.sessions.with_session(&loc.share, |s| {
                 let access = DirAccessMask::new()
                     .with_list_directory(true)
                     .with_synchronize(true);
@@ -642,7 +786,13 @@ mod tests {
         let v6 = SmbLocation::parse("SMB://[fe80::1]:139/s/").unwrap();
         assert_eq!((v6.host.as_str(), v6.port), ("fe80::1", Some(139)));
         assert!(v6.path.is_empty());
-        assert!(SmbLocation::parse("smb://nas").is_err());
+        // The server itself.
+        for url in ["smb://nas", "smb://nas/", "smb://192.168.0.10/"] {
+            let server = SmbLocation::parse(url).unwrap();
+            assert!(server.is_server() && server.path.is_empty(), "{url}");
+        }
+        assert_eq!(smb_url("192.168.0.10", None, "", ""), "smb://192.168.0.10/");
+        assert!(SmbLocation::parse("smb:///s").is_err());
         assert!(SmbLocation::parse("http://nas/s").is_err());
         assert!(SmbLocation::parse("smb://nas/s/../x").is_err());
         assert!(SmbLocation::parse("smb://nas:x/s").is_err());
@@ -685,8 +835,52 @@ mod tests {
             Err(Error::InvalidLocation { .. })
         ));
         let mut bad = config();
-        bad.share.clear();
+        bad.host.clear();
         assert!(matches!(SmbSource::new(&bad), Err(Error::Config(_))));
+    }
+
+    #[test]
+    fn a_whole_server_lists_its_shares_and_reaches_into_any() {
+        let mut c = config();
+        c.share.clear();
+        c.path.clear();
+        let s = SmbSource::new(&c);
+        if !cfg!(feature = "smb") {
+            assert!(matches!(s, Err(Error::SmbUnavailable(_))));
+            return;
+        }
+        let s = s.unwrap();
+        assert_eq!(s.root(), "smb://nas.local/");
+        assert!(s.describe().starts_with("SMB server"));
+        // Any share on it is the source's; another server isn't.
+        assert!(
+            s.check_same_share(&SmbLocation::parse("smb://nas.local/tv/a").unwrap())
+                .is_ok()
+        );
+        assert!(
+            s.check_same_share(&SmbLocation::parse("smb://other/tv/a").unwrap())
+                .is_err()
+        );
+        // Up from a share's root is the list of shares; nothing above that.
+        assert_eq!(
+            s.parent("smb://nas.local/tv/").as_deref(),
+            Some("smb://nas.local/")
+        );
+        assert_eq!(
+            s.parent("smb://nas.local/tv/shows/").as_deref(),
+            Some("smb://nas.local/tv/")
+        );
+        assert_eq!(s.parent("smb://nas.local/"), None);
+        assert!(matches!(
+            s.open("smb://nas.local/"),
+            Err(Error::InvalidLocation { .. })
+        ));
+        // The server's own shares are left out.
+        let shown: Vec<&str> = ["media", "IPC$", "ADMIN$", "C$", "print$", "tv"]
+            .into_iter()
+            .filter(|n| browsable_share(n))
+            .collect();
+        assert_eq!(shown, ["media", "tv"]);
     }
 
     #[cfg(feature = "smb")]
