@@ -23,10 +23,10 @@ A clear and concise description of what you expected to happen.
 **Screenshots**
 If applicable, add screenshots to help explain your problem.
 
-**Smartphone (please complete the following information):**
- - Device: [e.g. Pixel 9]
- - OS: [e.g. Android 17]
- - Version [e.g. 0.3.0]
+**Technical details:**
+ - SteamOS Version: [e.g. 3.8.28]
+ - Video Codec: [e.g. HEVC 10 bit]
+ - Version [e.g. 0.12.0]
 
 **Additional context**
 Add any other context about the problem here.
