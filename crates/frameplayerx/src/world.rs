@@ -769,8 +769,8 @@ mod tests {
         assert!(ahead.distance(picture) < 1e-4, "{ahead} vs {picture}");
         assert!(ahead.y < -0.3, "negative pitch moves it down");
         // The bar's spot below the view stays below it, at the same distance.
-        let bar = place(turned, 0.0, 1.05, -0.42, 28.0).transform_point3(Vec3::ZERO);
-        let rest = place(anchor, 0.0, 1.05, -0.42, 28.0).transform_point3(Vec3::ZERO);
+        let bar = place(turned, 0.0, 1.05, -0.32, 22.0).transform_point3(Vec3::ZERO);
+        let rest = place(anchor, 0.0, 1.05, -0.32, 22.0).transform_point3(Vec3::ZERO);
         assert!(((bar - head).length() - (rest - head).length()).abs() < 1e-4);
         assert!((bar - head).dot(picture) > 0.9 * (bar - head).length());
         // No roll: the panel's right edge stays level.
@@ -860,8 +860,8 @@ mod tests {
     fn player(anchor: Mat4, flat: bool, picture: [f32; 2], bar: [f32; 2]) -> (Mat4, Mat4) {
         let from = player_frame(anchor, flat, picture, bar);
         (
-            place(from, 0.0, 1.05, -0.42, 28.0),
-            place_around(from, -52.0, 0.0, 1.15, -0.08),
+            place(from, 0.0, 1.05, -0.32, 22.0),
+            place_around(from, -52.0, 0.0, 1.15, 0.0),
         )
     }
 
@@ -930,16 +930,16 @@ mod tests {
     fn the_browse_panel_starts_upright_a_little_below_where_you_face() {
         let eye = Vec3::new(0.0, 1.2, 0.0);
         let anchor = anchor_from_head(eye, Quat::IDENTITY);
-        let panel = place_below(anchor, 0.0, 0.0, 1.5, 12.0);
+        let panel = place_below(anchor, 0.0, 0.0, 1.5, 7.0);
         assert!(
             panel.transform_vector3(Vec3::Y).abs_diff_eq(Vec3::Y, 1e-5),
             "browse panel tilted"
         );
-        let down = 12f32.to_radians();
+        let down = 7f32.to_radians();
         let expected = eye + Vec3::new(0.0, -down.sin(), -down.cos()) * 1.5;
         assert!(centre(panel).distance(expected) < 1e-4);
         // Moved up and aside, it still faces you.
-        let moved = place_below(anchor, 30.0, 20.0, 1.5, 12.0);
+        let moved = place_below(anchor, 30.0, 20.0, 1.5, 7.0);
         assert!(moved.transform_vector3(Vec3::Z).dot(eye - centre(moved)) > 0.0);
     }
 

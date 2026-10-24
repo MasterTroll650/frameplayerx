@@ -286,7 +286,7 @@ panel bar player-bar-adjust
 adjust 1
 frames 8
 panel adjust adjust-position
-look -21 -6
+look -21 -3
 point bar 0.52 0.65
 frames 4
 shot player

@@ -384,8 +384,8 @@ impl App {
         let [my, mp] = self.offsets.main;
         let [ay, ap] = self.offsets.adjust;
         self.panels[MAIN].pose = place_below(anchor, my, mp, 1.5, BELOW_DEG);
-        self.panels[BAR].pose = place(bar_anchor, 0.0, 1.05, -0.42, 28.0);
-        self.panels[ADJUST].pose = place_around(adjust_anchor, beside + ay, ap, 1.15, -0.08);
+        self.panels[BAR].pose = place(bar_anchor, 0.0, 1.05, -0.32, 22.0);
+        self.panels[ADJUST].pose = place_around(adjust_anchor, beside + ay, ap, 1.15, 0.0);
         // The keyboard sits below the panel it types into, turned with it, so
         // it is where that panel was moved to.
         let (kb_from, [ky, kp]) = match kb_target {
