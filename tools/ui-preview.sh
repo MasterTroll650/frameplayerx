@@ -11,25 +11,124 @@ out="$(mkdir -p "${1:?usage: $0 OUT_DIR}" && cd "$1" && pwd)"
 data=crates/fp-media/tests/data
 
 home="$(mktemp -d)"
-trap 'rm -rf "$home"' EXIT
+jf_port_file="$home/jf.port"
+python3 - "$home" "$jf_port_file" <<'PY' &
+import glob, http.server, json, os, sqlite3, sys
+
+home, port_file = sys.argv[1], sys.argv[2]
+
+def thumb_for(title_prefix):
+    db_path = os.path.join(home, ".local/share/frameplayerx/library.sqlite3")
+    thumb_dir = os.path.join(home, ".cache/frameplayerx/thumbnails")
+    if os.path.exists(db_path):
+        with sqlite3.connect(db_path) as db:
+            row = db.execute(
+                "SELECT id FROM media WHERE title LIKE ? LIMIT 1",
+                (title_prefix + "%",),
+            ).fetchone()
+            if row:
+                p = os.path.join(thumb_dir, f"{row[0]}.jpg")
+                if os.path.exists(p):
+                    return p
+    jpgs = sorted(glob.glob(os.path.join(thumb_dir, "[0-9]*.jpg")))
+    return jpgs[0] if jpgs else None
+
+THUMBS = {
+    "lib_vr": "Sunset Beach Walk",
+    "lib_movies": "City Lights",
+    "lib_nature": "Mountain Lake",
+    "v_aurora": "Aurora Timelapse",
+    "v_mountain": "Mountain Lake",
+    "v_garden": "Garden Party",
+    "v_sunset": "Sunset Beach Walk",
+    "v_city": "City Lights",
+}
+
+VIEWS = {"Items": [
+    {"Id": "lib_vr", "Name": "VR Videos", "Type": "CollectionFolder", "CollectionType": "homevideos", "ChildCount": 5},
+    {"Id": "lib_movies", "Name": "Movies", "Type": "CollectionFolder", "CollectionType": "movies", "ChildCount": 18},
+    {"Id": "lib_nature", "Name": "Nature & Travel", "Type": "CollectionFolder", "CollectionType": "homevideos", "ChildCount": 9},
+]}
+
+RESUME = {"Items": []}
+
+LATEST_VR = [
+    {"Id": "v_sunset", "Name": "Sunset Beach Walk", "Type": "Video", "ProductionYear": 2026,
+     "RunTimeTicks": 14200000000, "Path": "/media/Sunset Beach Walk_180_LR.mp4",
+     "UserData": {"PlaybackPositionTicks": 6500000000}},
+    {"Id": "v_aurora", "Name": "Aurora Timelapse", "Type": "Video", "ProductionYear": 2026,
+     "RunTimeTicks": 8400000000, "Path": "/media/Aurora Timelapse_360_TB.mkv",
+     "UserData": {"IsFavorite": True}},
+    {"Id": "v_city", "Name": "City Lights", "Type": "Video", "ProductionYear": 2026,
+     "RunTimeTicks": 9800000000, "Path": "/media/City Lights_180_SBS.webm",
+     "UserData": {"PlaybackPositionTicks": 3400000000}},
+    {"Id": "v_mountain", "Name": "Mountain Lake", "Type": "Video", "ProductionYear": 2025,
+     "RunTimeTicks": 11600000000, "Path": "/media/Mountain Lake_360.webm"},
+    {"Id": "v_garden", "Name": "Garden Party", "Type": "Video", "ProductionYear": 2026,
+     "RunTimeTicks": 7200000000, "Path": "/media/Garden Party_180_LR.mp4",
+     "UserData": {"Played": True}},
+]
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if path.startswith("/Items/") and "/Images/" in path:
+            item_id = path.split("/")[2]
+            jpg = thumb_for(THUMBS.get(item_id, "Sunset"))
+            if jpg and os.path.exists(jpg):
+                with open(jpg, "rb") as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+        if path.endswith("/Views"):
+            body = VIEWS
+        elif path.endswith("/Items/Resume"):
+            body = RESUME
+        elif path.endswith("/Items/Latest"):
+            body = LATEST_VR if "ParentId=lib_vr" in self.path else []
+        else:
+            body = {"Items": [], "TotalRecordCount": 0}
+        raw = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+with open(port_file, "w") as f:
+    f.write(str(srv.server_port))
+srv.serve_forever()
+PY
+jf_pid=$!
+trap 'kill "$jf_pid" 2>/dev/null || true; rm -rf "$home"' EXIT
+while [ ! -s "$jf_port_file" ]; do sleep 0.05; done
+jf_port="$(cat "$jf_port_file")"
 mkdir -p "$home/Videos" "$home/Downloads"
-cp "$data/h264_aac_180_LR.mp4" "$home/Videos/Sunset Beach Walk_180_LR.mp4"
-cp "$data/camera_clip.mp4" "$home/Videos/Garden Party.mp4"
+cp "$data/camera_clip.mp4" "$home/Videos/Sunset Beach Walk.mp4"
+cp "$data/h264_aac_180_LR.mp4" "$home/Videos/Garden Party.mp4"
 cp "$data/vp9.webm" "$home/Videos/Mountain Lake_360.webm"
 cp "$data/av1_opus.webm" "$home/Videos/City Lights_180_SBS.webm"
 cp "$data/hevc10_tb.mkv" "$home/Videos/Aurora Timelapse_360_TB.mkv"
 # Different dates, and a folder, for the browse shots' sort orders.
 mkdir -p "$home/Videos/Holidays"
-touch -d 2026-03-14 "$home/Videos/Sunset Beach Walk_180_LR.mp4"
+touch -d 2026-03-14 "$home/Videos/Sunset Beach Walk.mp4"
 touch -d 2026-09-02 "$home/Videos/Garden Party.mp4"
 touch -d 2025-11-20 "$home/Videos/Mountain Lake_360.webm"
 touch -d 2026-06-30 "$home/Videos/City Lights_180_SBS.webm"
 touch -d 2026-01-08 "$home/Videos/Aurora Timelapse_360_TB.mkv"
-# The Videos library, and one to lock with a PIN.
+# The Videos library, a Jellyfin server, and a library to lock with a PIN.
 mkdir -p "$home/Private" "$home/.config/frameplayerx"
-cp "$data/camera_clip.mp4" "$home/Private/Rooftop.mp4"
+cp "$data/h264_aac_180_LR.mp4" "$home/Private/Rooftop.mp4"
 (umask 077 && cat >"$home/.config/frameplayerx/sources.json" <<EOF
 [{"type": "library", "id": "videos", "name": "Videos", "folder": "$home/Videos"},
+ {"type": "mediabrowser", "id": "jellyfin", "name": "Jellyfin", "url": "http://127.0.0.1:$jf_port", "access_token": "tok", "user_id": "u1"},
  {"type": "library", "id": "private", "name": "Private videos", "folder": "$home/Private"}]
 EOF
 )
@@ -51,12 +150,13 @@ EOF
 script="$home/ui.fps"
 cat >"$script" <<EOF
 # Library scan and thumbnails. Nothing watched yet: Home offers sources.
-wait 4
+wait 6
 panel main home
 # The first source tile pointed at: lifted whole at the row's edge.
 point main 0.13 0.70
 frames 8
 panel main home-hover-first
+point main 0.5 0.99
 screen history
 panel main history-empty
 # A library: its videos, then its folders. The headset's own folders.
@@ -68,6 +168,9 @@ wait 1
 panel main library-folders
 open-source on-device
 panel main local
+open-source jellyfin
+wait 1
+panel main jellyfin
 # Playlists: none yet, one made of the library, its page; Up next.
 details
 panel main details
@@ -122,6 +225,7 @@ chroma-global
 screen settings passthrough
 frames 8
 panel main settings-passthrough-on
+chroma-global
 screen settings controller
 panel main settings-controller
 screen settings controller-open
@@ -161,7 +265,7 @@ frames 3
 button secondary
 frames 3
 # The player.
-open $home/Videos/Sunset Beach Walk_180_LR.mp4
+open $home/Videos/Sunset Beach Walk.mp4
 wait-playing
 wait 1
 pause
@@ -182,6 +286,11 @@ panel bar player-bar-adjust
 adjust 1
 frames 8
 panel adjust adjust-position
+look -21 -6
+point bar 0.52 0.65
+frames 4
+shot player
+look 0 0
 # The Passthrough tab, with chroma key on (unlocked above).
 adjust 4
 chroma
@@ -202,7 +311,7 @@ screen history
 frames 4
 panel main history
 screen home
-frames 4
+frames 15
 panel main home-watched
 # Subtitles in Settings › Sound and subtitles, with the languages listed.
 screen settings sound

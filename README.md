@@ -149,6 +149,20 @@ If I come across a new idea or receive a suggestion that fits a VR video player 
 
 ---
 
+## Screenshots
+
+| Home | Player & adjustments |
+| :---: | :---: |
+| ![Home screen](assets/screenshots/home-watched.png) | ![Player and adjustments](assets/screenshots/player.png) |
+| **Video library** | **Jellyfin server** |
+| ![Video library](assets/screenshots/library.png) | ![Jellyfin server](assets/screenshots/jellyfin.png) |
+| **Local folders** | **Video details** |
+| ![Local folders](assets/screenshots/library-folders.png) | ![Video details](assets/screenshots/details.png) |
+| **Up next queue** | **Controller settings** |
+| ![Up next queue](assets/screenshots/up-next.png) | ![Controller settings](assets/screenshots/settings-controller.png) |
+
+---
+
 ## A Note on AI
 
 This project was built with extensive help from [Claude Code](https://claude.com/claude-code).
