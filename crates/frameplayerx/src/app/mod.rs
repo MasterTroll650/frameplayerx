@@ -18,8 +18,8 @@ use crate::ui::{
     self, Action, Browse, QuickConnect, Screen, SourcePage, SourceView, UiState, UpdateStatus, View,
 };
 use crate::world::{
-    Panel, Pointer, anchor_facing, anchor_from_head, follow, place, place_around,
-    turned_with_picture,
+    Panel, Pointer, anchor_facing, anchor_from_head, follow, place, place_around, place_below,
+    player_frame, turned_with_picture,
 };
 use fp_core::PlaybackStatus;
 use fp_core::format::Projection;
@@ -95,11 +95,11 @@ const KEYBOARD: usize = 3;
 const PERF_LAYER: u64 = 8;
 /// Where the performance overlay sits from the eyes: low and to the left.
 const PERF_OFFSET: Vec3 = Vec3::new(-0.3, -0.12, -0.85);
-/// How far below where you face the browse panel and a flat player sit,
-/// degrees: what is in front of you is a little below eye level (the
-/// panel's top bar, Quit among it, is then about level with your eyes),
-/// and the two line up.
-const BELOW_DEG: f32 = 12.0;
+/// How far below where you face the browse panel sits, degrees: what is in
+/// front of you is a little below eye level (the panel's top bar, Quit
+/// among it, is then about level with your eyes). It stands upright there,
+/// like a flat screen, rather than tilting back towards your eyes.
+const BELOW_DEG: f32 = 7.0;
 
 /// How long a video may take to open before the app gives up on it. A
 /// server that never sends a frame (a live transcode it can't keep up with)

@@ -120,6 +120,10 @@ pub enum HwDecode {
     #[default]
     Auto,
     Off,
+    /// Software, on one thread, keyframes only and without in-loop
+    /// filtering: stills for thumbnails, cheap in the background while the
+    /// library is browsed.
+    Stills,
 }
 
 /// Hardware (V4L2 stateful) decoder name for a codec, if FFmpeg has one.
@@ -159,6 +163,11 @@ fn candidates(
     ten_bit_hevc: bool,
 ) -> Vec<Candidate> {
     let mut c = Vec::new();
+    let hw = if hw == HwDecode::Stills {
+        HwDecode::Off
+    } else {
+        hw
+    };
     let eight_bit = matches!(
         format,
         ff::AV_PIX_FMT_NONE | ff::AV_PIX_FMT_YUV420P | ff::AV_PIX_FMT_YUVJ420P
@@ -295,13 +304,15 @@ pub struct Decoder {
     /// Reads H.264 and HEVC packets' NAL units.
     nal: Option<NalReader>,
     skip: Option<Skip>,
+    /// 3D Blu-ray video (MVC), decoded by the H.264 decoder it holds.
+    mvc: Option<Box<crate::mvc::MvcDecoder>>,
     /// Packets precise seeks left out.
     pub(crate) left_out: u64,
 }
 
 /// What a precise seek leaves out: frames shown mostly before its target.
 #[derive(Clone, Copy, Debug)]
-struct Skip {
+pub(crate) struct Skip {
     /// The target in the stream's time base.
     target: f64,
     /// The duration of frames without one, in the same units.
@@ -314,7 +325,7 @@ struct Skip {
 impl Skip {
     /// Whether a frame at `pts` lasting `duration` (0 when unknown), both
     /// in the stream's time base, shows mostly before the target.
-    fn drops(self, pts: i64, duration: i64) -> bool {
+    pub(crate) fn drops(self, pts: i64, duration: i64) -> bool {
         let pts = if pts == ff::AV_NOPTS_VALUE {
             self.start
         } else {
@@ -350,6 +361,11 @@ impl Decoder {
         let stream = input.streams()[index];
         // SAFETY: stream belongs to an open input.
         let (par, time_base) = unsafe { ((*stream).codecpar, (*stream).time_base) };
+        if let Some(config) = crate::mvc::stream_config(input, index) {
+            let mut dec = Self::open_mvc(par, time_base, hw, &config)?;
+            dec.origin = input.origin();
+            return Ok(dec);
+        }
         let mut dec = Self::open_with(par, time_base, hw, crate::v4l2::enabled())?;
         dec.origin = input.origin();
         // SAFETY: as above; extradata holds extradata_size bytes.
@@ -365,7 +381,68 @@ impl Decoder {
         Ok(dec)
     }
 
-    fn open_with(
+    /// A decoder of 3D Blu-ray video (MVC): an H.264 decoder of the stream
+    /// [`crate::mvc`] rewrites it into, the same size, without extradata.
+    fn open_mvc(
+        par: *const ff::AVCodecParameters,
+        time_base: ff::AVRational,
+        hw: HwDecode,
+        config: &crate::mvc::Config,
+    ) -> Result<Decoder> {
+        // SAFETY: copies the parameters into a fresh allocation, freed below
+        // (the decoders keep copies of their own).
+        let inner = unsafe {
+            let mut p = ff::avcodec_parameters_alloc();
+            if p.is_null() || ff::avcodec_parameters_copy(p, par) < 0 {
+                ff::avcodec_parameters_free(&mut p);
+                return Err(Error::Unsupported("codec parameters copy".into()));
+            }
+            ff::av_freep((&raw mut (*p).extradata).cast());
+            (*p).extradata_size = 0;
+            (*p).codec_tag = 0;
+            (*p).profile = ff::AV_PROFILE_H264_HIGH as i32;
+            (*p).level = 51;
+            let inner = Self::open_with(p, time_base, hw, crate::v4l2::enabled());
+            ff::avcodec_parameters_free(&mut p);
+            inner?
+        };
+        let mvc = crate::mvc::MvcDecoder::new(inner, config);
+        let mut dec = Decoder {
+            ctx: std::ptr::null_mut(),
+            #[cfg(target_os = "linux")]
+            native: None,
+            replay: Default::default(),
+            name: String::new(),
+            hardware: false,
+            hardware_error: None,
+            time_base,
+            origin: 0.0,
+            nal: None,
+            skip: None,
+            mvc: Some(Box::new(mvc)),
+            left_out: 0,
+        };
+        dec.follow_mvc();
+        Ok(dec)
+    }
+
+    /// Takes the MVC decoder's inner decoder's name and hardware state
+    /// (which change when the hardware decoder fails and software takes
+    /// over).
+    fn follow_mvc(&mut self) {
+        if let Some(m) = &self.mvc {
+            let what = if m.two_d.is_some() {
+                "3D Blu-ray as 2D"
+            } else {
+                "3D Blu-ray"
+            };
+            self.name = format!("{} ({what})", m.inner.name);
+            self.hardware = m.inner.hardware;
+            self.hardware_error = m.inner.hardware_error.clone();
+        }
+    }
+
+    pub(crate) fn open_with(
         par: *const ff::AVCodecParameters,
         time_base: ff::AVRational,
         hw: HwDecode,
@@ -387,7 +464,7 @@ impl Decoder {
                     if c.is_null() {
                         continue;
                     }
-                    Self::try_open(c, par, time_base, hardware)
+                    Self::try_open(c, par, time_base, hardware, hw == HwDecode::Stills)
                 }
                 Candidate::Default => {
                     // SAFETY: as above.
@@ -395,7 +472,7 @@ impl Decoder {
                     if c.is_null() {
                         continue;
                     }
-                    Self::try_open(c, par, time_base, false)
+                    Self::try_open(c, par, time_base, false, hw == HwDecode::Stills)
                 }
             };
             match r {
@@ -452,6 +529,7 @@ impl Decoder {
             origin: 0.0,
             nal: None,
             skip: None,
+            mvc: None,
             left_out: 0,
         })
     }
@@ -470,6 +548,7 @@ impl Decoder {
         par: *const ff::AVCodecParameters,
         time_base: ff::AVRational,
         hardware: bool,
+        stills: bool,
     ) -> Result<Decoder> {
         // SAFETY: standard decoder setup; ctx freed by Decoder::drop or here.
         unsafe {
@@ -490,6 +569,7 @@ impl Decoder {
                 origin: 0.0,
                 nal: None,
                 skip: None,
+                mvc: None,
                 left_out: 0,
             };
             if hardware {
@@ -500,7 +580,17 @@ impl Decoder {
                 "decoder parameters",
             )?;
             (*ctx).pkt_timebase = time_base;
-            if !hardware {
+            if stills {
+                // Only keyframes (the first picture after a seek is one),
+                // skipping the rest unparsed past their headers, and no
+                // deblocking: invisible once scaled down to a thumbnail.
+                // One thread: frame threads would hold back pictures to
+                // decode several at once, for nothing here.
+                (*ctx).thread_count = 1;
+                (*ctx).skip_frame = ff::AVDISCARD_NONINTRA;
+                (*ctx).skip_loop_filter = ff::AVDISCARD_ALL;
+                (*ctx).flags2 |= ff::AV_CODEC_FLAG2_FAST as i32;
+            } else if !hardware {
                 (*ctx).thread_count = 0; // auto
                 (*ctx).thread_type = (ff::FF_THREAD_FRAME | ff::FF_THREAD_SLICE) as i32;
             }
@@ -514,7 +604,7 @@ impl Decoder {
                 ff::av_dict_set(&mut opts, k.as_ptr(), v.as_ptr(), 0);
             }
             let video = (*par).codec_type == ff::AVMEDIA_TYPE_VIDEO;
-            let r = if video && !hardware {
+            let r = if video && !hardware && !stills {
                 on_all_cpus(|| ff::avcodec_open2(ctx, codec, &mut opts))
             } else {
                 ff::avcodec_open2(ctx, codec, &mut opts)
@@ -584,6 +674,11 @@ impl Decoder {
     /// Sends a packet (or end of stream when `pkt` is null). Returns false if
     /// the decoder is full and frames must be received first.
     pub(crate) fn send(&mut self, pkt: *const ff::AVPacket) -> Result<bool> {
+        if let Some(m) = self.mvc.as_mut() {
+            let r = m.send(pkt);
+            self.follow_mvc();
+            return r;
+        }
         if self.leaves_out(pkt) {
             self.left_out += 1;
             return Ok(true);
@@ -640,6 +735,11 @@ impl Decoder {
     /// Receives a frame. `Ok(None)` means more input is needed, `Ok(Some(false))`
     /// means the decoder is fully drained.
     pub fn receive(&mut self, frame: &mut Frame) -> Result<Option<bool>> {
+        if let Some(m) = self.mvc.as_mut() {
+            let r = m.receive(frame);
+            self.follow_mvc();
+            return r;
+        }
         #[cfg(target_os = "linux")]
         if let Some(n) = self.native.as_mut() {
             let skip = self.skip;
@@ -703,6 +803,9 @@ impl Decoder {
             frame_duration: frame_duration / tb,
             start: self.origin / tb,
         });
+        if let Some(m) = self.mvc.as_mut() {
+            m.skip = self.skip.take();
+        }
     }
 
     /// Whether `pkt` holds only pictures a precise seek skips that no other
@@ -727,6 +830,10 @@ impl Decoder {
     /// A flag that, once set, cuts the native decoder's waits for the
     /// device short (the player sets it when closing).
     pub(crate) fn set_interrupt(&mut self, flag: Arc<AtomicBool>) {
+        if let Some(m) = self.mvc.as_mut() {
+            m.inner.set_interrupt(flag);
+            return;
+        }
         #[cfg(target_os = "linux")]
         if let Some(n) = self.native.as_mut() {
             n.dec.set_interrupt(flag);
@@ -737,6 +844,10 @@ impl Decoder {
 
     pub fn flush(&mut self) {
         self.skip = None;
+        if let Some(m) = self.mvc.as_mut() {
+            m.flush();
+            return;
+        }
         #[cfg(target_os = "linux")]
         if let Some(n) = self.native.as_mut() {
             n.dec.flush();
@@ -1016,6 +1127,41 @@ mod tests {
             .iter()
             .fold((255u8, 0u8), |(a, b), &v| (a.min(v), b.max(v)));
         assert!(mx - mn > 100);
+    }
+
+    #[test]
+    fn stills_decode_only_keyframes() {
+        // Keyframes at 0 and 1 s of 60 frames; one of 25 frames.
+        for (name, keyframes) in [("h264_aac_180_LR.mp4", 2), ("hevc10_tb.mkv", 1)] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/data")
+                .join(name);
+            let mut input = Input::open(
+                Arc::new(FileSource::open(&path).unwrap()),
+                name,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            let vi = input.best_stream(ff::AVMEDIA_TYPE_VIDEO).unwrap();
+            let mut dec = Decoder::open(&input, vi, HwDecode::Stills).unwrap();
+            assert!(!dec.hardware);
+            let (mut pkt, mut frame) = (Packet::new(), Frame::new());
+            let mut frames = 0;
+            let mut more = true;
+            while more {
+                more = input.read(pkt.as_ptr()).unwrap();
+                if !more {
+                    dec.send(std::ptr::null()).unwrap();
+                } else if pkt.stream_index() == vi {
+                    dec.send(pkt.as_ptr()).unwrap();
+                }
+                pkt.unref();
+                while let Some(true) = dec.receive(&mut frame).unwrap() {
+                    frames += 1;
+                }
+            }
+            assert_eq!(frames, keyframes, "{name}");
+        }
     }
 
     #[test]

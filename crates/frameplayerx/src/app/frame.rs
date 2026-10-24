@@ -24,6 +24,25 @@ impl App {
         }
     }
 
+    /// A flat screen, the control bar, the adjust panel and the browse panel
+    /// back where they start, wherever they were moved. A 180°/360°
+    /// picture's turn is the video's own adjustment and stays (its Reset
+    /// puts that back).
+    pub(super) fn reset_placement(&mut self) {
+        self.panel_drag = None;
+        self.adjust_hold = None;
+        self.offsets = Default::default();
+        self.settings.panel_offsets = self.offsets;
+        if let Some(p) = &mut self.playback
+            && p.format.projection == Projection::Flat
+            && (p.settings.yaw, p.settings.pitch) != (0.0, 0.0)
+        {
+            p.settings.yaw = 0.0;
+            p.settings.pitch = 0.0;
+            p.settings_dirty = true;
+        }
+    }
+
     /// The panel the keyboard types into: the library or adjust panel with
     /// a text field in focus.
     pub(super) fn keyboard_target(&self) -> Option<usize> {
@@ -32,12 +51,13 @@ impl App {
             .find(|&i| self.panels[i].visible && self.panels[i].wants_keyboard())
     }
 
-    /// Squeezing a grip on the library or adjust panel moves it round the
-    /// viewer with that hand; where it is let go is saved (the adjust
-    /// panel's relative to the player). Squeezing one on the keyboard moves
-    /// the panel it types into, and the keyboard with it. Squeezing one on
-    /// the control bar drags the player: the picture, and with it a flat
-    /// screen, the bar and the adjust panel.
+    /// Squeezing a grip on the library panel, the control bar or the
+    /// adjust panel moves it round the viewer with that hand; where it is
+    /// let go is saved: the bar's relative to a flat screen, the adjust
+    /// panel's relative to the bar, so each goes along when what it is
+    /// placed from moves. Squeezing one on the keyboard moves the panel it
+    /// types into, and the keyboard with it. The picture itself is dragged
+    /// with grip and trigger (see `controls`).
     pub(super) fn move_panels(
         &mut self,
         grab: Option<(usize, usize)>,
@@ -49,11 +69,24 @@ impl App {
         // The adjust panel sits beside the control bar, turned with the
         // picture; the library panel is placed in the room.
         let room = anchor.to_scale_rotation_translation().1;
-        let beside_bar = self
-            .picture_anchor(anchor)
-            .to_scale_rotation_translation()
-            .1;
-        let frame_of = move |panel: usize| if panel == ADJUST { beside_bar } else { room };
+        let rotation = |m: Mat4| m.to_scale_rotation_translation().1;
+        // Each is moved about what it is placed from: the adjust panel
+        // about the control bar, the bar about a flat screen.
+        let beside_bar = rotation(self.player_anchor(anchor));
+        let flat = self
+            .playback
+            .as_ref()
+            .is_some_and(|p| p.format.projection == Projection::Flat);
+        let under = if flat {
+            rotation(self.picture_anchor(anchor))
+        } else {
+            room
+        };
+        let frame_of = move |panel: usize| match panel {
+            ADJUST => beside_bar,
+            BAR => under,
+            _ => room,
+        };
         let grab = grab.and_then(|(panel, hand)| match panel {
             KEYBOARD => self.keyboard_target().map(|t| (t, hand)),
             MAIN | ADJUST => Some((panel, hand)),
@@ -66,10 +99,7 @@ impl App {
             let start = match panel {
                 MAIN => self.offsets.main,
                 ADJUST => self.offsets.adjust,
-                _ => self
-                    .playback
-                    .as_ref()
-                    .map_or([0.0; 2], |p| [p.settings.yaw, p.settings.pitch]),
+                _ => self.offsets.bar,
             };
             self.panel_drag = Some(PanelDrag {
                 panel,
@@ -93,16 +123,11 @@ impl App {
             if let Some((_, rot)) = h.aim {
                 let (y, p) = angles(rot, frame_of(panel));
                 let yaw = wrap(oy + wrap(y - y0));
+                let to = [yaw, (op + p - p0).clamp(-45.0, 45.0)];
                 match panel {
-                    MAIN => self.offsets.main = [yaw, (op + p - p0).clamp(-45.0, 45.0)],
-                    ADJUST => self.offsets.adjust = [yaw, (op + p - p0).clamp(-45.0, 45.0)],
-                    _ => {
-                        if let Some(pb) = &mut self.playback {
-                            pb.settings.yaw = yaw;
-                            pb.settings.pitch = (op + p - p0).clamp(-90.0, 90.0);
-                            pb.settings_dirty = true;
-                        }
-                    }
+                    MAIN => self.offsets.main = to,
+                    ADJUST => self.offsets.adjust = to,
+                    _ => self.offsets.bar = to,
                 }
                 self.last_activity = Instant::now();
             }
@@ -211,22 +236,30 @@ impl App {
                 .is_none_or(|p| p.format.projection == Projection::Flat)
     }
 
-    /// The player: what the picture's yaw and pitch turn (by dragging it,
-    /// or the Position sliders). A flat screen, the control bar, the adjust
-    /// panel beside it and the subtitles are placed from it, so they move
-    /// together; a 180°/360° picture turns the same way. A flat player sits
-    /// as far below where you face as the browse panel.
+    /// The picture: what its yaw and pitch turn (by dragging it, or the
+    /// Position sliders). A flat screen and the subtitles are placed from
+    /// it; a 180°/360° picture turns the same way. A flat screen starts
+    /// upright, straight ahead at eye height.
     fn picture_anchor(&self, anchor: Mat4) -> Mat4 {
         match &self.playback {
             Some(p) => {
                 let s = p.shown_settings(&self.settings.default_view);
-                let below = match p.format.projection {
-                    Projection::Flat => BELOW_DEG,
-                    _ => 0.0,
-                };
-                turned_with_picture(anchor, s.yaw, s.pitch - below)
+                turned_with_picture(anchor, s.yaw, s.pitch)
             }
             None => anchor,
+        }
+    }
+
+    /// The player, which the control bar is placed from (see
+    /// [`player_frame`]).
+    fn player_anchor(&self, anchor: Mat4) -> Mat4 {
+        match &self.playback {
+            Some(p) => {
+                let s = p.shown_settings(&self.settings.default_view);
+                let flat = p.format.projection == Projection::Flat;
+                player_frame(anchor, flat, [s.yaw, s.pitch], self.offsets.bar)
+            }
+            None => player_frame(anchor, false, [0.0; 2], self.offsets.bar),
         }
     }
 
@@ -327,14 +360,14 @@ impl App {
         self.panels[ADJUST].visible = self.panels[BAR].visible && self.ui.adjust_open;
     }
 
-    /// Where each panel goes: the control bar, and the adjust panel at its
-    /// own place beside it, go with the player (see `picture_anchor`), so
-    /// they stay below what you watch.
+    /// Where each panel goes: the control bar from the player (see
+    /// `player_anchor`), and the adjust panel at its own place beside the
+    /// bar, upright, going wherever the bar goes.
     fn place_panels(&mut self, anchor: Mat4, kb_target: Option<usize>) {
-        let bar_anchor = self.picture_anchor(anchor);
+        let bar_anchor = self.player_anchor(anchor);
         // The adjust panel holds still while the trigger is held on it: its
-        // yaw and pitch sliders turn the picture, and would carry the panel
-        // away from the pointer. It catches up when let go.
+        // yaw and pitch sliders move a flat screen, and with it the bar and
+        // this panel, away from the pointer. It catches up when let go.
         let held = self.pointer.pressed() == Some(ADJUST);
         let adjust_anchor = match self.adjust_hold.filter(|_| held) {
             Some(hold) => hold,
@@ -350,9 +383,9 @@ impl App {
         let beside = -52.0 - (half_angle(bar.size.x) - half_angle(bar.base_size().x));
         let [my, mp] = self.offsets.main;
         let [ay, ap] = self.offsets.adjust;
-        self.panels[MAIN].pose = place_around(anchor, my, mp - BELOW_DEG, 1.5, 0.0);
-        self.panels[BAR].pose = place(bar_anchor, 0.0, 1.05, -0.42, 28.0);
-        self.panels[ADJUST].pose = place_around(adjust_anchor, beside + ay, ap, 1.15, -0.08);
+        self.panels[MAIN].pose = place_below(anchor, my, mp, 1.5, BELOW_DEG);
+        self.panels[BAR].pose = place(bar_anchor, 0.0, 1.05, -0.32, 22.0);
+        self.panels[ADJUST].pose = place_around(adjust_anchor, beside + ay, ap, 1.15, 0.0);
         // The keyboard sits below the panel it types into, turned with it, so
         // it is where that panel was moved to.
         let (kb_from, [ky, kp]) = match kb_target {

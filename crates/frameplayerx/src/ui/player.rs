@@ -412,6 +412,12 @@ pub(crate) fn stream_info_labels(
         "vp9" => "VP9",
         c => c,
     };
+    // 3D Blu-ray: H.264 with a second view, decoded side by side.
+    let codec = if v.mvc {
+        format!("{codec} MVC")
+    } else {
+        codec.to_string()
+    };
     let hw = if st.hardware { "HW" } else { "SW" };
     let bits = if v.bit_depth > 8 {
         format!(" {}-bit", v.bit_depth)
@@ -427,9 +433,14 @@ pub(crate) fn stream_info_labels(
     } else {
         format!("{} ({}-bit {chroma})", v.pixel_format, v.bit_depth)
     };
+    let size = if v.mvc {
+        format!("{}×{} per eye", v.width / 2, v.height)
+    } else {
+        format!("{}×{}", v.width, v.height)
+    };
     let tooltip = format!(
-        "Decoder: {decoder}\nFormat: {codec} · {pixel}\nResolution: {}×{} @ {:.2} fps",
-        v.width, v.height, v.fps
+        "Decoder: {decoder}\nFormat: {codec} · {pixel}\nResolution: {size} @ {:.2} fps",
+        v.fps
     );
     (badge_text, tooltip)
 }
@@ -696,7 +707,12 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                 let before = pb.settings;
                 match v.state.adjust_tab {
                     0 => format_tab(ui, pb, v.settings.hardware_decoding, v.actions),
-                    1 => position_tab(ui, &mut pb.settings),
+                    1 => {
+                        let flat = pb.format.projection == Projection::Flat;
+                        let moved = v.settings.panel_offsets != Default::default()
+                            || (flat && (pb.settings.yaw, pb.settings.pitch) != (0.0, 0.0));
+                        position_tab(ui, &mut pb.settings, moved, v.actions);
+                    }
                     2 => stereo_tab(ui, &mut pb.settings),
                     3 => picture_tab(ui, &mut pb.settings),
                     4 => {
@@ -853,13 +869,12 @@ fn format_tab(
         widgets::rows(ui, |r| {
             let st = pb.player.stats();
             let decoder = decoder_text(video, &st, hardware_decoding);
-            r.row("Decoder", None, |ui| {
-                ui.label(RichText::new(decoder).color(if st.hardware {
-                    theme::TEXT
-                } else {
-                    theme::WARN
-                }));
-            });
+            let color = if st.hardware {
+                theme::TEXT
+            } else {
+                theme::WARN
+            };
+            r.info_colored("Decoder", &decoder, color);
             let codec_name = match video.codec.as_str() {
                 "hevc" => "HEVC (H.265)".to_string(),
                 "h264" => "H.264 (AVC)".to_string(),
@@ -893,8 +908,27 @@ fn format_tab(
     }
 }
 
-fn position_tab(ui: &mut egui::Ui, s: &mut ViewSettings) {
+fn position_tab(ui: &mut egui::Ui, s: &mut ViewSettings, moved: bool, actions: &mut Vec<Action>) {
     let d = ViewSettings::default();
+    widgets::rows(ui, |r| {
+        r.row(
+            "Screen and panels",
+            Some("Where a flat screen, the control bar, this panel and the browse panel start."),
+            |ui| {
+                let button = ui.add_enabled_ui(moved, |ui| {
+                    widgets::button(
+                        ui,
+                        Some(icons::ARROW_COUNTER_CLOCKWISE),
+                        "Put back",
+                        Kind::Secondary,
+                    )
+                });
+                if button.inner.clicked() {
+                    actions.push(Action::ResetPlacement);
+                }
+            },
+        );
+    });
     widgets::rows(ui, |r| {
         r.slider("Yaw", None, &mut s.yaw, -180.0..=180.0, 0.0, "°", 0);
         r.slider("Pitch", None, &mut s.pitch, -90.0..=90.0, 0.0, "°", 0);

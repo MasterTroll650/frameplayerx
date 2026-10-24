@@ -165,7 +165,7 @@ that pairing, you can also delete `~/.ssh/id_rsa_frame_devkit` and
 |---|---|
 | Any folder on the headset, a microSD card or a USB drive | Browse it under Home › On this device, or make it a library: Sources › Add source › Library |
 | Any server with a DeoVR feed or HereSphere API | Sources › Add source › DeoVR feed or HereSphere API |
-| NAS / Windows share | Sources › Add source › SMB share (`smb://nas/videos`) |
+| NAS / Windows share | Sources › Add source › SMB share: a whole server (`smb://nas/`, which lists the shares your login, or a guest without one, may open) or one share or folder (`smb://nas/videos`) |
 | Nextcloud and other WebDAV | Sources › Add source › WebDAV |
 | Jellyfin, Emby | Sources › Add source › Jellyfin / Emby (a password, or Quick Connect on Jellyfin) |
 | Plex, Serviio and other DLNA servers | Sources › Add source › DLNA › Search the network |
@@ -220,7 +220,7 @@ Videos of a source locked with a PIN are left out until it is unlocked.
 |---|---|
 | On this device | The home folder and the inserted microSD card and USB drives, as folders: play any video, or *Play all* in a folder |
 | Library | **Videos**: every video in its folder, with thumbnails, search, format filters and sorting (newest, title, length, rating, shuffle). **Folders**: its folder as folders. **Scan now** looks for new and removed videos |
-| Jellyfin / Emby | Your libraries, *Continue watching*, *Next up* and the latest additions; a search of the whole server by title, as Jellyfin's own search shows it: a row each of movies, shows, collections and other videos, best matches first (episodes are found through their show), and a *Tagged* row of what carries a tag with your words in it; poster grids searched, sorted and filtered by the server (unwatched, in progress, favorites); series by season and episode; details with the story, cast, genres and tags (tap a tag to see everything that has it). Watched marks, favorites and resume points are the server's (see [Watch sync](#watch-sync-with-jellyfin-emby-and-heresphere)) |
+| Jellyfin / Emby | Your libraries, *Continue watching*, *Next up* and the latest additions; a search of the whole server by title, as Jellyfin's own search shows it: a row each of movies, shows, collections and other videos, best matches first (episodes are found through their show), and a *Tagged* row of what carries a tag with your words in it; poster grids searched, sorted and filtered by the server (unwatched, in progress, favorites); series by season and episode; details with the story, cast, genres and tags (tap a tag to see everything that has it), and a *Version* row when the server keeps more than one version of a video (4K and 1080p, a director's cut): *Automatic* plays the tallest that fits the source's maximum height; pick another and the video plays from it wherever you open it (subtitles included) until the app closes. Each version keeps its own format and adjustments, as a separate video in your history. Watched marks, favorites and resume points are the server's (see [Watch sync](#watch-sync-with-jellyfin-emby-and-heresphere)) |
 | DeoVR feed / HereSphere API | The server's scene groups as chips over a grid of scenes; search the chosen group (or *All*) across titles, studios, performers and tags (a DeoVR feed's tags and performers come with each scene's details, fetched while you search and kept for next time); order by title, date, rating or length; a *Favorites* filter (and *Scripted*, with haptics on). ⋯ opens a scene's details: description, performers and tags (tap one to see all their scenes), chapters to start from, and ♡ to make it a favourite on a HereSphere API that takes favourites. The page opens with the scenes from last time while the server sends the current list ("updating…" under the title). A HereSphere API can also follow what you watch (see [Watch sync](#watch-sync-with-jellyfin-emby-and-heresphere)) |
 | SMB, WebDAV, HTTP folders, DLNA, local folders | Folders and files: search the folder you are in, order by name, date or size, *Play all* |
 
@@ -285,7 +285,8 @@ inside a library, or holding one, can't be another.
 FramePlayerX looks for new and removed videos in a library when you add
 it, when FramePlayerX starts, when its card is inserted, each time you open
 it, and when you press **Scan now** on its page. Its thumbnails are made in
-the background. The pencil next to it under **Sources** renames it or moves
+the background, on one core at low priority, from the video's keyframes,
+and wait while a video plays. The pencil next to it under **Sources** renames it or moves
 it to another folder, and offers **Rebuild thumbnails** and **Retry**
 (videos that couldn't be read).
 
@@ -343,6 +344,12 @@ upright, and anamorphic video (DVDs, anamorphic lenses) is widened to its
 real shape. A portrait video's screen is as tall as **Screen width**.
 When a 3D file's metadata says the right eye comes first, the eyes are
 swapped to match.
+
+3D Blu-ray rips (MKV from MakeMKV, the disc's H.264 MVC video) play as full
+3D, each eye at full 1080p, on the Frame's hardware decoder. The few
+streams it can't take that way (none of the discs tried) play their left
+eye in 2D; the decoder line in the video's info says "3D Blu-ray as 2D".
+Disc images (`.iso`) and BDMV folders don't play yet: rip them to MKV.
 
 To change it: open the video, press **⚙** on the control bar, **Format**.
 Overrides are remembered per video. The same panel has position, zoom,
@@ -414,9 +421,13 @@ says why ("No hardware decoding for AV1", "… for 4:2:2 HEVC"). Convert them
 to 4:2:0 HEVC once on a PC and they play smoothly.
 
 "Hardware decoder busy" means the file is fine but the decoder had no room
-for it (Steam's own streaming uses it too, and an 8192×4096 H.264 or
-10-bit HEVC video only fits when nothing else is decoding). "The hardware decoder can't play
-this HEVC" means it tried and refused the file; frameplayerx.log says why.
+for it: Steam's own streaming holds a session too, and beside it the
+decoder takes at most about 8192×4080 pixels a frame. 8K UHD (7680×4320),
+5760×5760 and 8-bit 8192×4096 HEVC play in hardware; 10-bit 8192×4096
+HEVC, 8192×4096 H.264, 6144×6144 and larger only fit when nothing else is
+decoding. The pill's tip says how much room was left. "The hardware
+decoder can't play this HEVC" means it tried and refused the file;
+frameplayerx.log says why.
 
 The pill next to the format on the control bar says which decoder plays
 the video: HW, or SW in amber, with the codec and bit depth. Hover it, or
@@ -478,18 +489,25 @@ picture. Play/pause and seeking are under either thumb.
 
 To recenter, hold the Steam button, as in any game (both grips together, or
 the left Menu button, do it too). The picture and the panels come to where
-you are looking, up or down included. The browse panel and a flat screen
-come back in front of you, wherever you had moved them, a little below
-where you look and lined up (a 180° or 360° picture keeps its turn), and
-the adjust panel stays beside the control bar. A flat screen opens where the
-browse panel is: where you move it lasts while you watch, and isn't kept
-with the video.
+you are looking; looking well up or down (lying back, say) counts, a glance
+a little up or down doesn't, so sitting up a flat screen comes back level.
+The browse panel (upright, a little below where you look) and a flat screen
+come back in front of you, wherever you had moved them (a 180° or 360°
+picture keeps its turn). A flat screen opens upright at eye height, the way
+the browse panel faces: where you move it lasts while you watch, and isn't
+kept with the video. Only the control bar is tilted back towards you.
 
-The picture, the control bar and the adjust panel beside it move as one
-player: drag the picture, or hold grip on the control bar and move it, and
-they all go together. Point at the browse or adjust panel (or the keyboard
-under it) and hold grip to move it; it stays where you leave it, the adjust
-panel in its place beside the control bar. The format on the control bar
+Each piece moves on its own and takes what hangs off it along. Drag the
+picture (grip + trigger) or use Yaw and Pitch to move a flat screen: the
+control bar and the adjust panel go with it. Hold grip on the control bar
+to move it about the screen: the adjust panel goes with it. Hold grip on
+the adjust panel to move it about the bar. During a 180° or 360° video,
+Yaw, Pitch and dragging turn only the picture; the control bar and adjust
+panel stay where they are. The browse panel (or the keyboard under it)
+moves the same way, with grip, and stays where you leave it. To put them all back where they start, press **Put back** at the top
+of the adjust panel's Position tab: a flat screen, the control bar, the
+adjust panel and the browse panel return (a 180° or 360° picture keeps
+its turn; the panel's **Reset** puts the picture's own adjustments back). The format on the control bar
 (for example 180° SBS) opens the adjust panel's Format tab.
 
 ### Watching lying down
