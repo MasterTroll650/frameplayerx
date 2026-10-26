@@ -685,6 +685,55 @@ impl Rows<'_> {
         })
     }
 
+    /// A [`row`](Self::row) with more under its text (choices that need the
+    /// width), the control still on the right.
+    pub fn row_with<R>(
+        &mut self,
+        title: &str,
+        desc: Option<&str>,
+        below: impl FnOnce(&mut Ui),
+        control: impl FnOnce(&mut Ui) -> R,
+    ) -> R {
+        self.next_row(|ui| {
+            let w = ui.available_width();
+            let text_w = text_column(w);
+            let top = ui.cursor().min;
+            let mut left = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(Rect::from_min_size(top, Vec2::new(text_w, f32::INFINITY)))
+                    .layout(Layout::top_down(Align::Min)),
+            );
+            left.spacing_mut().item_spacing.y = 3.0;
+            left.label(
+                egui::RichText::new(title)
+                    .font(theme::font(Weight::Medium, 18.0))
+                    .color(theme::TEXT),
+            );
+            if let Some(d) = desc {
+                left.label(
+                    egui::RichText::new(d)
+                        .font(theme::font(Weight::Regular, 15.0))
+                        .color(theme::TEXT_2),
+                );
+            }
+            left.add_space(8.0);
+            below(&mut left);
+            let h = left.min_rect().height().max(ROW_MIN_HEIGHT);
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
+            let control_rect = Rect::from_min_max(
+                Pos2::new(rect.left() + text_w + CONTROL_GAP, rect.top()),
+                rect.max,
+            );
+            let mut c = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(control_rect)
+                    .layout(Layout::right_to_left(Align::Center)),
+            );
+            c.spacing_mut().item_spacing.x = 10.0;
+            control(&mut c)
+        })
+    }
+
     /// A row with a read-only value on the right. A long value (a path, a
     /// list) wraps within its column and the row grows to fit.
     pub fn info(&mut self, title: &str, value: &str) {

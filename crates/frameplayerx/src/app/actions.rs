@@ -131,10 +131,14 @@ impl App {
             Action::SetUserFormat(id, f) => {
                 let r = self.services.library.set_user_format(id, f);
                 self.library_changed("the format", r);
+                // Its pictures show the part of the frame the format picks.
+                self.services.wake_worker();
             }
             Action::RemoveFromHistory(id) => {
                 let r = self.services.library.remove_from_history(id);
                 self.library_changed("the change", r);
+                // Its frame where it was left off goes.
+                self.services.wake_worker();
             }
             Action::Rescan { source, force } => self.rescan(&source, force),
             Action::RetryFailed(source) => {
@@ -147,6 +151,16 @@ impl App {
                 self.ui.toast(format!("Retrying {n} videos"));
             }
             Action::ClearHistory => self.clear_history(),
+            Action::ClearImageCache => {
+                // Pictures on screen load again from their servers.
+                self.thumbs.forget_remote();
+                let images = self.services.images.clone();
+                // A full cache is thousands of files: not on this thread.
+                self.jobs.spawn("clear-images", move || {
+                    let mb = images.clear().div_ceil(1 << 20);
+                    Job::Toast(format!("Image cache cleared: {mb} MB freed"))
+                });
+            }
             Action::AddSource(cfg) => self.add_source(cfg),
             Action::UpdateSource(cfg) => self.update_source(cfg),
             Action::RemoveSource(id) => self.remove_source(&id),
@@ -376,6 +390,8 @@ impl App {
             Err(e) => self.ui.toast(format!("Could not clear the history: {e}")),
         }
         self.ui.invalidate();
+        // The frames where videos were left off go.
+        self.services.wake_worker();
     }
 
     /// After a change to the library: re-query what shows it, and say so

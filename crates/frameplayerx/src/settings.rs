@@ -48,6 +48,9 @@ pub enum SubtitleMode {
 /// Settings › Interface size: the sizes offered.
 pub const UI_SCALES: std::ops::RangeInclusive<f32> = 0.8..=1.5;
 
+/// Settings › Image cache: the sizes offered, in MB.
+pub const IMAGE_CACHE_SIZES: [u32; 5] = [100, 250, 500, 1000, 2000];
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -82,6 +85,13 @@ pub struct Settings {
     pub check_updates: bool,
     /// UI text size multiplier, in [`UI_SCALES`].
     pub ui_scale: f32,
+    /// Room for server pictures kept on the headset, in MB
+    /// ([`crate::image_cache`]).
+    pub image_cache_mb: u32,
+    /// Make thumbnails for videos whose server offers no picture.
+    pub make_thumbnails: bool,
+    /// A partly watched video shows the frame where it was left off.
+    pub resume_frames: bool,
     /// Flat videos and the panels follow the head ([`crate::world::follow`]).
     pub follow: bool,
     /// The performance overlay (Settings › General › Diagnostics).
@@ -140,6 +150,9 @@ impl Default for Settings {
             },
             check_updates: true,
             ui_scale: 1.0,
+            image_cache_mb: 500,
+            make_thumbnails: true,
+            resume_frames: true,
             follow: false,
             perf_overlay: false,
             controls: crate::bindings::Bindings::default(),

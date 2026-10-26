@@ -223,7 +223,7 @@ fn floating_panel(px: [u32; 2], width_m: f32, ppp: f32) -> Panel {
 impl App {
     pub fn new(settings: Settings, library: Library) -> App {
         let services = Services::new(&settings, library);
-        let thumbs = ui::thumbs::Thumbs::new(services.opener.clone());
+        let thumbs = ui::thumbs::Thumbs::new(services.opener.clone(), services.images.clone());
         let mut panels = [
             floating_panel([1600, 1000], 1.8, 1.25),
             growing_panel([1400, 268], 1.2, 1.25),
@@ -411,6 +411,14 @@ impl App {
         }
         if self.settings.ui_scale != self.saved.ui_scale {
             self.apply_ui_scale();
+        }
+        if self.settings.image_cache_mb != self.saved.image_cache_mb {
+            self.services.images.set_limit(self.settings.image_cache_mb);
+        }
+        if (self.settings.make_thumbnails, self.settings.resume_frames)
+            != (self.saved.make_thumbnails, self.saved.resume_frames)
+        {
+            self.services.set_worker_options(&self.settings);
         }
         self.saved = self.settings.clone();
         self.save_settings();

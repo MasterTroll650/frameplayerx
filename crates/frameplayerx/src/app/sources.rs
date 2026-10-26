@@ -112,12 +112,18 @@ impl App {
         let lib = self.services.library.clone();
         self.jobs.spawn("list", move || {
             let result = src.list(location.as_deref()).map(|mut e| {
-                // Thumbnails the library already made for these videos.
-                for entry in e.iter_mut().filter(|e| {
-                    e.thumbnail_url.is_none() && e.kind == fp_core::source::EntryKind::Video
-                }) {
-                    if let Ok(Some(r)) = lib.get_by_location(&entry.location) {
-                        entry.thumbnail_url = r.thumbnail.map(|p| p.display().to_string());
+                // The library's pictures for these videos: where one was
+                // left off, or a thumbnail made for one the server has none
+                // for.
+                for entry in e
+                    .iter_mut()
+                    .filter(|e| e.kind == fp_core::source::EntryKind::Video)
+                {
+                    if let Ok(Some(r)) = lib.get_by_location(&entry.location)
+                        && (r.partly_watched() || entry.thumbnail_url.is_none())
+                        && let Some(p) = r.picture()
+                    {
+                        entry.thumbnail_url = Some(p);
                     }
                 }
                 e

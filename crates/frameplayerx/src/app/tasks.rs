@@ -582,23 +582,52 @@ impl App {
             return;
         };
         for ev in rx.try_iter() {
-            match ev {
-                fp_library::WorkerEvent::Processed { done, total, .. }
-                | fp_library::WorkerEvent::Failed { done, total, .. } => {
-                    self.ui.worker_status = Some(format!("Preparing thumbnails {done}/{total}"));
-                    if done % 12 == 0 || done == total {
-                        self.ui.invalidate();
-                        self.thumbs.retry_failed();
+            use fp_library::WorkerEvent as E;
+            let (done, total) = match ev {
+                E::Processed {
+                    id,
+                    done,
+                    total,
+                    thumbnail,
+                    ..
+                } => {
+                    // Made again under the same name (another format, a
+                    // changed file): the old picture must not stay.
+                    if thumbnail
+                        && let Ok(Some(r)) = self.services.library.get(id)
+                        && let Some(p) = r.thumbnail
+                    {
+                        self.thumbs.forget(&p.display().to_string());
                     }
+                    (done, total)
                 }
-                fp_library::WorkerEvent::Idle { .. } => {
+                E::Failed { done, total, .. } => (done, total),
+                E::ResumeThumbnail { .. } | E::ResumeThumbnailsDeleted(_) => {
+                    self.ui.invalidate();
+                    continue;
+                }
+                E::Idle { .. } => {
                     if self.ui.worker_status.take().is_some() {
                         self.ui.invalidate();
                         self.thumbs.retry_failed();
                     }
+                    continue;
                 }
-                fp_library::WorkerEvent::Error(e) => log::warn!("metadata worker: {e}"),
-                _ => {}
+                E::Error(e) => {
+                    log::warn!("metadata worker: {e}");
+                    continue;
+                }
+                E::Started { .. } | E::Stopped => continue,
+            };
+            let doing = if self.settings.make_thumbnails {
+                "Preparing thumbnails"
+            } else {
+                "Reading videos"
+            };
+            self.ui.worker_status = Some(format!("{doing} {done}/{total}"));
+            if done % 12 == 0 || done == total {
+                self.ui.invalidate();
+                self.thumbs.retry_failed();
             }
         }
     }
