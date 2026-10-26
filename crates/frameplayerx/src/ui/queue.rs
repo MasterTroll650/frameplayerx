@@ -50,7 +50,7 @@ fn row(v: &View, req: &OpenRequest) -> Row {
         return Row {
             title: widgets::display_title(&r.title),
             facts: super::library::facts(&r, v.settings.default_format),
-            thumb: super::library::thumb_key(&r),
+            thumb: r.picture(),
         };
     }
     let e = req.entry.as_ref();

@@ -140,6 +140,23 @@ and forward-only migrations in `fp-library/src/schema.rs`. The scanner
 marks files missing rather than deleting them, so ratings, resume points
 and adjustments survive a card being taken out.
 
+**Pictures.** A card shows `MediaRecord::picture`: the frame where a partly
+watched video was left off, else its server's picture, else a thumbnail the
+metadata worker made (`fp-library/src/worker.rs`; only for videos whose
+server offers none). Each pass of the worker first deletes the files in its
+folder no video points to (thumbnails of videos since removed, interrupted
+writes), then makes the frames for videos left off since the last pass,
+after playback, and deletes those of videos since watched; each new
+position gets a new file name, so the UI never shows an old frame from its
+texture cache. Settings › General › Thumbnails reaches a running worker
+through `MetadataWorker::set_options` (`WorkerOptions::thumbnails`,
+`resume_thumbnails`). Server pictures go through
+`frameplayerx/src/image_cache.rs`: kept on disk up to Settings › General ›
+Image cache, least recently used out first. One its server marks
+`immutable` (Jellyfin's, whose address carries the image's tag) is never
+checked again; any other is checked once a day with `If-None-Match` /
+`If-Modified-Since`, shown from the cache meanwhile.
+
 **Data on the headset.**
 
 | Folder | What's in it |
@@ -148,7 +165,7 @@ and adjustments survive a card being taken out.
 | `~/frameplayerx.old` | The previous version, kept for rollback |
 | `~/.config/frameplayerx` | `settings.json`, `sources.json` (passwords, readable only by the user) and the optional `env` file |
 | `~/.local/share/frameplayerx` | The database, `frameplayerx.log` (and `.log.old`), and `Interactive/`, searched for scripts not next to their video |
-| `~/.cache/frameplayerx` | Thumbnails, scrub previews, and `feeds/`: each scene feed's last listing, shown at once the next time it's opened (readable only by the user: its URLs can carry the server's API key) |
+| `~/.cache/frameplayerx` | `thumbnails/` (made thumbnails and the frames where videos were left off), `images/` (server pictures), and `feeds/`: each scene feed's last listing, shown at once the next time it's opened (readable only by the user: its URLs can carry the server's API key) |
 
 ## Running without a headset
 

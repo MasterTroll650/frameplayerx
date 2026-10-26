@@ -152,7 +152,7 @@ rm -rf ~/.config/frameplayerx ~/.local/share/frameplayerx ~/.cache/frameplayerx
 |---|---|
 | `~/.config/frameplayerx` | Settings, your sources and their passwords |
 | `~/.local/share/frameplayerx` | The watch history, ratings, adjustments, the log, and the `Interactive` folder, including any haptic scripts you put there |
-| `~/.cache/frameplayerx` | Thumbnails |
+| `~/.cache/frameplayerx` | Thumbnails, and pictures from your servers |
 
 If you paired a PC with `frameplayerx-install pair` and nothing else uses
 that pairing, you can also delete `~/.ssh/id_rsa_frame_devkit` and
@@ -196,6 +196,25 @@ watched, rating, length). Remove one video from its details with *Remove
 from history*, or everything with *Clear history*; favorites and ratings
 stay. Browsing a network source never adds anything here. Removing a source
 forgets its videos, except those you watched, marked or put in a playlist.
+
+A video you stopped part way shows the frame where you left off, made
+shortly after it stops. Past 90 % it counts as watched: its card gets a ✓,
+it starts from the beginning next time and shows its usual picture again.
+A video from Jellyfin, Emby, DLNA or a DeoVR or HereSphere server shows the
+server's picture; any other gets a thumbnail made on the headset. Pictures
+from servers are kept on the headset so they aren't downloaded each time.
+
+**Settings › General › Thumbnails** holds these:
+
+- **Make thumbnails**: off, no new thumbnails are made (the ones made stay).
+- **Show where you left off**: off, videos show their usual picture, and the
+  frames already made are deleted.
+- **Image cache**: how much room server pictures take (500 MB unless you
+  pick another size); the ones used longest ago make room for new ones.
+  **Clear** deletes them all, so each is downloaded again.
+
+Thumbnails of videos that leave the library, say when you remove a source,
+are deleted too.
 
 ### Up next and playlists
 

@@ -6,7 +6,7 @@ use super::theme::{self, Weight};
 use super::widgets::{self, Kind};
 use super::{Action, View, icons};
 use egui::RichText;
-use fp_library::{Playlist, PlaylistId};
+use fp_library::{MediaRecord, Playlist, PlaylistId};
 
 /// The Playlists tab: your playlists, or the one open.
 pub fn page(ui: &mut egui::Ui, v: &mut View) {
@@ -55,7 +55,7 @@ fn cards(ui: &mut egui::Ui, v: &mut View, lists: &[Playlist]) -> Option<Playlist
     page::scroll(ui, |ui| {
         page::grid(ui, lists.len(), page::LANDSCAPE.x, |ui, i| {
             let p = &lists[i];
-            let thumb = p.first.as_ref().and_then(super::library::thumb_key);
+            let thumb = p.first.as_ref().and_then(MediaRecord::picture);
             let facts = page::plural(p.item_count, "video", "videos");
             let c = page::card(
                 ui,
@@ -223,7 +223,7 @@ fn playlist(ui: &mut egui::Ui, v: &mut View, id: PlaylistId) {
     page::scroll(ui, |ui| {
         ui.add_space(4.0);
         for (i, e) in entries.iter().enumerate() {
-            let thumb = super::library::thumb_key(&e.record);
+            let thumb = e.record.picture();
             let facts = super::library::facts(&e.record, v.settings.default_format);
             let resp = page::list_row(
                 ui,

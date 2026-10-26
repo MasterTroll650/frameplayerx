@@ -194,7 +194,7 @@ fn controller(ui: &mut egui::Ui, v: &mut View) {
     });
 }
 
-/// App-wide switches, then the ones for finding a problem.
+/// App-wide switches, thumbnails, then the switches for finding a problem.
 fn general(ui: &mut egui::Ui, v: &mut View) {
     let s = &mut *v.settings;
     ui.add_space(12.0);
@@ -220,6 +220,47 @@ fn general(ui: &mut egui::Ui, v: &mut View) {
             "Haptic devices",
             Some("Sync connected haptic devices with videos that have scripts."),
             &mut s.haptics_enabled,
+        );
+    });
+    heading(ui, "Thumbnails");
+    widgets::rows(ui, |r| {
+        r.switch(
+            "Make thumbnails",
+            Some(
+                "For videos whose server has no picture: a frame of the video, made on \
+                 the headset while nothing plays.",
+            ),
+            &mut s.make_thumbnails,
+        );
+        r.switch(
+            "Show where you left off",
+            Some("A video you stopped part way shows the frame where you stopped."),
+            &mut s.resume_frames,
+        );
+        // The sizes under the text, so they fit at any interface size.
+        r.row_with(
+            "Image cache",
+            Some("Pictures from your servers are kept on the headset up to this size."),
+            |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                    for mb in crate::settings::IMAGE_CACHE_SIZES {
+                        let label = if mb >= 1000 {
+                            format!("{} GB", mb / 1000)
+                        } else {
+                            format!("{mb} MB")
+                        };
+                        if widgets::chip(ui, &label, s.image_cache_mb == mb).clicked() {
+                            s.image_cache_mb = mb;
+                        }
+                    }
+                });
+            },
+            |ui| {
+                if widgets::button(ui, Some(icons::TRASH), "Clear", Kind::Secondary).clicked() {
+                    v.actions.push(Action::ClearImageCache);
+                }
+            },
         );
     });
     heading(ui, "Diagnostics");

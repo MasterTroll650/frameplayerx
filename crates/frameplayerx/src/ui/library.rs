@@ -341,13 +341,6 @@ fn status_toast(ctx: &egui::Context, v: &mut View) {
         });
 }
 
-pub(super) fn thumb_key(r: &MediaRecord) -> Option<String> {
-    r.thumbnail
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .or_else(|| r.thumbnail_url.clone())
-}
-
 pub(crate) fn request(r: &MediaRecord) -> OpenRequest {
     OpenRequest {
         location: r.location.clone(),
@@ -392,7 +385,7 @@ pub(super) fn facts(r: &MediaRecord, default: VideoFormat) -> String {
 
 /// A video's card: play on click, details from its "…".
 fn record_card(ui: &mut egui::Ui, v: &mut View, r: &MediaRecord) -> page::CardResponse {
-    let thumb = thumb_key(r);
+    let thumb = r.picture();
     let title = widgets::display_title(&r.title);
     let facts = facts(r, v.settings.default_format);
     let badge = widgets::format_short(&shown_format(r, v.settings.default_format).format);
@@ -406,6 +399,7 @@ fn record_card(ui: &mut egui::Ui, v: &mut View, r: &MediaRecord) -> page::CardRe
             badge: Some(&badge),
             corner: (!r.scripts.is_empty()).then_some(icons::WAVEFORM),
             progress: r.progress().map(|p| p as f32),
+            watched: r.play_count > 0,
             favorite: r.favorite,
             dim: r.missing,
             more: true,
@@ -448,7 +442,7 @@ fn hero(ui: &mut egui::Ui, v: &mut View, rows: &HomeRows) {
         (None, Some(r)) => (r, "Watch again", false),
         _ => return,
     };
-    let key = thumb_key(r);
+    let key = r.picture();
     let resp = page::banner(ui, v.thumbs, key.as_deref(), 300.0, |inner| {
         inner.add_space(22.0);
         widgets::section_label(inner, caption);
@@ -740,7 +734,7 @@ fn details(ui: &mut egui::Ui, v: &mut View, id: fp_library::MediaId) {
                 ui.spacing_mut().item_spacing.x = 28.0;
                 let (rect, _) = ui.allocate_exact_size(Vec2::new(512.0, 288.0), Sense::hover());
                 widgets::shadow(ui.painter(), rect, 16, 0.6);
-                let key = thumb_key(&r);
+                let key = r.picture();
                 page::picture(ui, v.thumbs, key.as_deref(), rect, 16, icons::FILM_STRIP);
                 ui.vertical(|ui| details_side(ui, v, &r));
             });

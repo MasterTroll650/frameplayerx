@@ -2,6 +2,7 @@
 //! worker, haptic devices and the remote-control servers.
 
 use crate::drives::REMOVABLE_ROOT;
+use crate::image_cache::ImageCache;
 use crate::settings::{HapticDeviceConfig, Settings};
 use fp_core::ByteSource;
 use fp_core::source::FileSource;
@@ -217,6 +218,7 @@ pub const LOCAL_HUB: &str = "on-device";
 pub struct Services {
     pub library: Library,
     pub opener: Arc<Opener>,
+    pub images: Arc<ImageCache>,
     pub source_configs: Vec<SourceConfig>,
     pub worker: Option<fp_library::MetadataWorker>,
     pub worker_events: Option<std::sync::mpsc::Receiver<fp_library::WorkerEvent>>,
@@ -244,8 +246,19 @@ pub struct HapticDeviceSlot {
     pub error: Option<String>,
 }
 
+fn worker_options(settings: &Settings) -> fp_library::WorkerOptions {
+    fp_library::WorkerOptions {
+        thumbnails: settings.make_thumbnails,
+        resume_thumbnails: settings.resume_frames,
+        ..Default::default()
+    }
+}
+
 /// Library access for the web remote.
-struct WebLibrary(Library);
+struct WebLibrary {
+    library: Library,
+    images: Arc<ImageCache>,
+}
 
 impl RemoteLibrary for WebLibrary {
     fn search(&self, query: &str, limit: usize, offset: usize) -> Vec<RemoteItem> {
@@ -254,7 +267,7 @@ impl RemoteLibrary for WebLibrary {
             offset,
             ..fp_library::Query::text(query)
         };
-        self.0
+        self.library
             .search(&q)
             .unwrap_or_default()
             .into_iter()
@@ -264,18 +277,24 @@ impl RemoteLibrary for WebLibrary {
                 location: r.location.clone(),
                 duration: r.duration,
                 format_label: r.effective_format().format.label(),
-                has_thumbnail: r.thumbnail.is_some(),
+                has_thumbnail: r.picture().is_some(),
             })
             .collect()
     }
 
     fn thumbnail_path(&self, id: i64) -> Option<PathBuf> {
-        let r = self.0.get(fp_library::MediaId(id)).ok().flatten()?;
+        let r = self.library.get(fp_library::MediaId(id)).ok().flatten()?;
         // Not for videos of a source locked with a PIN.
-        if self.0.hidden().hides(&r.source_id) {
+        if self.library.hidden().hides(&r.source_id) {
             return None;
         }
-        r.thumbnail
+        let picture = r.picture()?;
+        // The page only loads pictures from the headset.
+        if fp_sources::urlutil::is_http_url(&picture) {
+            self.images.file(&picture)
+        } else {
+            Some(PathBuf::from(picture))
+        }
     }
 }
 
@@ -330,6 +349,10 @@ impl Services {
         let mut s = Services {
             library,
             opener,
+            images: Arc::new(ImageCache::new(
+                fp_core::dirs::cache_dir().join("images"),
+                settings.image_cache_mb,
+            )),
             source_configs,
             worker: None,
             worker_events: None,
@@ -342,12 +365,12 @@ impl Services {
             watch: crate::watch::Reports::start(),
         };
         s.set_haptics(settings);
-        s.start_worker();
+        s.start_worker(settings);
         s.apply_remote(&settings.remote);
         s
     }
 
-    pub fn start_worker(&mut self) {
+    pub fn start_worker(&mut self, settings: &Settings) {
         let prober = Arc::new(crate::prober::FfmpegProber::new(
             self.opener.clone(),
             self.worker_busy.clone(),
@@ -355,13 +378,20 @@ impl Services {
         match fp_library::MetadataWorker::spawn(
             self.library.clone(),
             prober,
-            fp_library::WorkerOptions::default(),
+            worker_options(settings),
         ) {
             Ok((w, rx)) => {
                 self.worker = Some(w);
                 self.worker_events = Some(rx);
             }
             Err(e) => log::error!("metadata worker: {e}"),
+        }
+    }
+
+    /// Settings › General › Thumbnails, from the worker's next pass on.
+    pub fn set_worker_options(&self, settings: &Settings) {
+        if let Some(w) = &self.worker {
+            w.set_options(worker_options(settings));
         }
     }
 
@@ -539,8 +569,12 @@ impl Services {
                 {
                     self.remote_error = Some(format!("DeoVR remote API: {e}"));
                 }
+                let web = WebLibrary {
+                    library: self.library.clone(),
+                    images: self.images.clone(),
+                };
                 if cfg.web_enabled
-                    && let Err(e) = hub.start_web(Arc::new(WebLibrary(self.library.clone())))
+                    && let Err(e) = hub.start_web(Arc::new(web))
                 {
                     self.remote_error = Some(format!("web remote: {e}"));
                 }

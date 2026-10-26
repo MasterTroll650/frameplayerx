@@ -128,6 +128,8 @@ pub enum Action {
     /// Tries a library's videos that couldn't be read again.
     RetryFailed(String),
     ClearHistory,
+    /// Deletes the server pictures kept on the headset.
+    ClearImageCache,
     AddSource(SourceConfig),
     /// Saves an edited source (the same id).
     UpdateSource(SourceConfig),

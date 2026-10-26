@@ -20,6 +20,7 @@
 //! | `grip V` / `trigger V` | hold the grip / trigger at V (0..1) until changed |
 //! | `status` | print what is playing and the view settings |
 //! | `open LOCATION` | open a file or URL |
+//! | `close` | close the open video, as its Close button does |
 //! | `shot NAME` | save the left eye as OUT_DIR/NAME.png |
 //! | `sbs NAME` | save both eyes side by side |
 //! | `screen NAME [TAB]` | show a browser screen (`home`, `library`, `sources`, `settings` and its tab) |
@@ -299,6 +300,10 @@ impl Sim {
                     p.player.pause();
                 }
                 self.app.repaint_all();
+                self.run_frames(3)?;
+            }
+            Some("close") => {
+                self.app.apply(crate::ui::Action::ClosePlayback);
                 self.run_frames(3)?;
             }
             // Passthrough videos are fully unlocked.
