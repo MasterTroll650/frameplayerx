@@ -140,6 +140,18 @@ and forward-only migrations in `fp-library/src/schema.rs`. The scanner
 marks files missing rather than deleting them, so ratings, resume points
 and adjustments survive a card being taken out.
 
+**Blu-ray.** `fp-media/src/mvc` rewrites H.264 MVC's second view into
+plain H.264 pictures any decoder takes. In MKV the second view rides in the
+base view's packets. In transport streams (`.ssif`, and `.m2ts` holding
+both views) it has a PID of its own, 0x1012, which FFmpeg's H.264 parser
+holds back whole, so FFmpeg discards it and `second_view.rs` reads it from
+the file, adding each access unit to the base view's packet of the same
+decoding time. `fp-media/src/bluray` opens disc images: a read-only UDF
+reader (`udf.rs`, 2.50 metadata partitions included), the playlists
+(`mpls.rs`) and the main title, its longest playlist. `Input` plays its
+clips one after another, their timestamps moved onto the title's clock;
+3D titles read each clip's SSIF straight out of the image.
+
 **Pictures.** A card shows `MediaRecord::picture`: the frame where a partly
 watched video was left off, else its server's picture, else a thumbnail the
 metadata worker made (`fp-library/src/worker.rs`; only for videos whose

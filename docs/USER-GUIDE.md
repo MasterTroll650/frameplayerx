@@ -364,11 +364,16 @@ real shape. A portrait video's screen is as tall as **Screen width**.
 When a 3D file's metadata says the right eye comes first, the eyes are
 swapped to match.
 
-3D Blu-ray rips (MKV from MakeMKV, the disc's H.264 MVC video) play as full
-3D, each eye at full 1080p, on the Frame's hardware decoder. The few
-streams it can't take that way (none of the discs tried) play their left
-eye in 2D; the decoder line in the video's info says "3D Blu-ray as 2D".
-Disc images (`.iso`) and BDMV folders don't play yet: rip them to MKV.
+3D Blu-rays play as full 3D, each eye at full 1080p, on the Frame's
+hardware decoder: disc images (`.iso`), MKV rips (MakeMKV), and from a
+BDMV folder the film's `.ssif` file in `BDMV/STREAM/SSIF` (the `.m2ts` of
+the same name holds the left eye alone). The few streams it can't take
+that way (none of the discs tried) play their left eye in 2D; the decoder
+line in the video's info says "3D Blu-ray as 2D".
+
+A disc image, 2D or 3D, plays its main title (its longest playlist) with
+its chapters and its audio and subtitle languages. Menus, extras and other
+titles aren't offered.
 
 To change it: open the video, press **⚙** on the control bar, **Format**.
 Overrides are remembered per video. The same panel has position, zoom,
