@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you for helping. If you'd rather fix it yourself, you can edit any message on [Hosted Weblate](https://hosted.weblate.org/projects/frameplayerx/).
+        Thank you for helping. If you'd rather fix it yourself, you can edit any message on [Codeberg Translate](https://translate.codeberg.org/projects/frameplayerx/) (sign in with a Codeberg account).
   - type: dropdown
     id: language
     attributes:

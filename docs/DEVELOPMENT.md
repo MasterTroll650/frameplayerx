@@ -58,8 +58,8 @@ The interface's text is in [Fluent](https://projectfluent.org/) files, one
 per language: `crates/frameplayerx/i18n/<language>/frameplayerx.ftl`.
 English is the source; every other language translates its messages, and a
 message a language lacks shows in English. Translators work on
-[Hosted Weblate](https://hosted.weblate.org/projects/frameplayerx/), which
-sends their changes as pull requests (see [Help translate](../README.md#help-translate)).
+[Codeberg Translate](https://translate.codeberg.org/projects/frameplayerx/),
+which sends their changes as pull requests (see [Help translate](../README.md#help-translate)).
 
 - Text the interface shows goes through `tr!("message-id")`, or
   `tr!("message-id", name = value)` with arguments. Add the message to the

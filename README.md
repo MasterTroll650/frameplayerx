@@ -91,9 +91,9 @@ To update later, open **Settings › Updates** and press **Download and install*
 
 FramePlayerX comes in English, German, Spanish, French, Japanese and Simplified Chinese. All but English started as machine drafts, so some wording is likely to be wrong or awkward, and corrections are welcome.
 
-- **Correct or translate** on [Hosted Weblate](https://hosted.weblate.org/projects/frameplayerx/). No Git needed: sign in, pick a language and edit its messages. A note beside each message says where it shows; "Short" marks a button, chip or tab, which should stay about as long as the English. Changes come back to this repository as pull requests.
+- **Correct or translate** on [Codeberg Translate](https://translate.codeberg.org/projects/frameplayerx/), Codeberg's Weblate. No Git needed: sign in with a Codeberg account, pick a language and edit its messages. A note beside each message says where it shows; "Short" marks a button, chip or tab, which should stay about as long as the English. Changes come back to this repository as pull requests.
 - **Report a mistake** without translating: open a [Translation problem](https://github.com/remotesojourner/frameplayerx/issues/new?template=translation.yml) issue with the language, where it shows and the wording you'd expect.
-- **Add a language**: start it on Weblate, or ask in an issue. Right-to-left languages (Arabic, Hebrew) and scripts that need shaping (Thai, Hindi and other Indic scripts) can't be shown in the interface yet.
+- **Add a language**: start it on Codeberg Translate, or ask in an issue. Right-to-left languages (Arabic, Hebrew) and scripts that need shaping (Thai, Hindi and other Indic scripts) can't be shown in the interface yet.
 
 ---
 
