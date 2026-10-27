@@ -932,6 +932,21 @@ fn grid(
     if items.is_empty() {
         return None;
     }
+    if query.playlist.is_some() {
+        let mut play = None;
+        ui.horizontal(|ui| {
+            if widgets::button(ui, Some(icons::PLAY), "Play", Kind::Primary).clicked() {
+                play = Some(Go::Play(items.to_vec(), 0, false));
+            }
+            if widgets::button(ui, Some(icons::SHUFFLE), "Shuffle", Kind::Secondary).clicked() {
+                play = Some(Go::Play(shuffle(items), 0, false));
+            }
+        });
+        ui.add_space(10.0);
+        if play.is_some() {
+            return play;
+        }
+    }
     let portrait = items.iter().filter(|i| i.kind.portrait()).count() * 2 >= items.len();
     let width = if portrait {
         page::PORTRAIT.x
@@ -956,6 +971,22 @@ fn grid(
         ui.add_space(20.0);
     }
     go
+}
+
+/// Returns the same entries in a new pseudo-random order without changing
+/// the Jellyfin playlist itself.
+fn shuffle(items: &[MbItem]) -> Vec<MbItem> {
+    let mut result = items.to_vec();
+    let mut state = fp_core::playback::now_ms() as u64;
+    for i in (1..result.len()).rev() {
+        // xorshift64: enough for an ephemeral play queue, without adding a
+        // random-number dependency to the app.
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        result.swap(i, (state as usize) % (i + 1));
+    }
+    result
 }
 
 /// Year, rating and other facts about an item.
