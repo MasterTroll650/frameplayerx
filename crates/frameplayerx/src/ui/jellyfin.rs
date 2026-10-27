@@ -60,6 +60,8 @@ pub enum Body {
         total: usize,
         typed: Option<Instant>,
     },
+    /// All video playlists, separate from the server's front page.
+    Playlists { items: Vec<MbItem> },
     Series {
         series: Box<MbItem>,
         seasons: Vec<MbItem>,
@@ -79,6 +81,8 @@ pub enum Load {
     Search(String),
     /// A page of a listing; past the first it adds to what is shown.
     Grid(MbQuery),
+    /// The user's video playlists.
+    Playlists,
     /// A series with its seasons and one season's episodes (`season`, else
     /// the one to watch next).
     Series {
@@ -112,6 +116,7 @@ pub enum Loaded {
         page: MbPage,
         append: bool,
     },
+    Playlists(Vec<MbItem>),
     Series {
         series: Box<MbItem>,
         seasons: Vec<MbItem>,
@@ -135,6 +140,7 @@ pub fn run(src: &MediaBrowserSource, load: &Load) -> fp_sources::Result<Loaded> 
             page: src.items(q)?,
             append: q.start > 0,
         },
+        Load::Playlists => Loaded::Playlists(src.playlists(100)?),
         Load::Series { id, season } => {
             let series = Box::new(src.item(id)?);
             let seasons = src.seasons(id)?;
@@ -206,6 +212,7 @@ impl JellyfinView {
                 }
                 *total = page.total.max(items.len());
             }
+            (Body::Playlists { items }, Loaded::Playlists(result)) => *items = result,
             (
                 Body::Series {
                     series,
@@ -256,6 +263,7 @@ impl JellyfinView {
                 limit: items.len().max(PAGE),
                 ..query.clone()
             }),
+            Body::Playlists { .. } => Load::Playlists,
             Body::Series { series, season, .. } => Load::Series {
                 id: series.id.clone(),
                 season: season.clone(),
@@ -322,6 +330,8 @@ impl JellyfinView {
 enum Go {
     /// Into a library, collection, folder, series or season.
     Open(MbItem),
+    /// From the home page to the dedicated playlist overview.
+    Playlists,
     /// Item `.1` of a list, the rest queued; `.2` from the start.
     Play(Vec<MbItem>, usize, bool),
     /// Play next (`true`) or Add to queue.
@@ -410,6 +420,7 @@ pub fn page(
                 typed,
                 ..
             } => grid(ui, v, query, items, *total, typed),
+            Body::Playlists { items } => playlist_grid(ui, v, items),
             Body::Series {
                 series,
                 seasons,
@@ -510,6 +521,11 @@ fn follow(v: &mut View, source: &str, j: &mut JellyfinView, go: Go) {
             ask(v, seq, load);
             j.open(seq, body);
         }
+        Go::Playlists => {
+            let seq = v.state.next_seq();
+            ask(v, seq, Load::Playlists);
+            j.open(seq, Body::Playlists { items: Vec::new() });
+        }
         Go::Tag(tag) => {
             let seq = v.state.next_seq();
             let query = MbQuery {
@@ -588,6 +604,7 @@ fn trail(pages: &[Page]) -> String {
             Body::Home { .. } => None,
             Body::Search { asked, .. } => Some(format!("Search \"{asked}\"")),
             Body::Grid { title, .. } => Some(title.clone()),
+            Body::Playlists { .. } => Some("Playlists".into()),
             Body::Series { series, .. } => Some(series.name.clone()),
             Body::Item { item } => Some(item.name.clone()),
         })
@@ -604,6 +621,7 @@ fn has_content(body: &Body) -> bool {
         Body::Home { home, .. } => home.is_some(),
         Body::Search { results, .. } => !results.is_empty(),
         Body::Grid { items, .. } => !items.is_empty(),
+        Body::Playlists { items } => !items.is_empty(),
         Body::Series { episodes, .. } => !episodes.is_empty(),
         Body::Item { .. } => true,
     }
@@ -750,7 +768,11 @@ fn item_row(
 fn home_rows(ui: &mut egui::Ui, v: &mut View, h: &MbHome) -> Option<Go> {
     ui.add_space(6.0);
     let mut go = item_row(ui, v, "My media", &h.libraries, true);
-    go = go.or(item_row(ui, v, "Playlists", &h.playlists, true));
+    if !h.playlists.is_empty()
+        && widgets::button(ui, Some(icons::PLAYLIST), "Playlists", Kind::Secondary).clicked()
+    {
+        go = Some(Go::Playlists);
+    }
     go = go.or(item_row(ui, v, "Continue watching", &h.resume, true));
     go = go.or(item_row(ui, v, "Next up", &h.next_up, true));
     for (library, items) in &h.latest {
@@ -805,6 +827,26 @@ fn search_results(
             |_| {},
         );
     }
+    go
+}
+
+/// A dedicated, read-only overview of the user's Jellyfin video playlists.
+fn playlist_grid(ui: &mut egui::Ui, v: &mut View, items: &[MbItem]) -> Option<Go> {
+    if items.is_empty() {
+        page::empty_state(
+            ui,
+            icons::PLAYLIST,
+            "No video playlists",
+            "This account has no video playlists on the server.",
+            |_| {},
+        );
+        return None;
+    }
+    let mut go = None;
+    page::grid(ui, items.len(), page::PORTRAIT.x, |ui, i| {
+        let c = item_card(ui, v, &items[i], true);
+        go = go.take().or_else(|| card_go(c, items, i));
+    });
     go
 }
 
