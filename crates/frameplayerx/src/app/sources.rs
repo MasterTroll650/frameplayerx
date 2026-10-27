@@ -521,7 +521,7 @@ impl App {
                 .post(format!("{url}/active-scene/delete"))
                 .header("X-FunScriptSync-Secret", &secret)
                 .header("Accept", "application/json")
-                .call()
+                .send_empty()
             {
                 Ok(response) if response.status().is_success() => {
                     Job::Toast("Stash scene deleted".into())

@@ -165,9 +165,9 @@ impl Settings {
         !self.funscript_sync_url.trim().is_empty() && !self.funscript_sync_secret.trim().is_empty()
     }
 
+    /// Adjustments for a video that has none saved: the defaults, following
+    /// the global chroma key.
     pub fn new_video_view(&self) -> ViewSettings {
-        /// Adjustments for a video that has none saved: the defaults, following
-        /// the global chroma key.
         ViewSettings {
             key_own: Some(false),
             ..self.default_view
