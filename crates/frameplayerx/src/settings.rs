@@ -78,6 +78,13 @@ pub struct Settings {
     pub haptics_enabled: bool,
     pub haptics: HapticsSettings,
     pub haptic_devices: Vec<HapticDeviceConfig>,
+    /// Optional FunScriptSync endpoint for the confirmed Stash-scene deletion.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub funscript_sync_url: String,
+    /// Shared secret accepted by FunScriptSync; the Stash credential remains
+    /// on that server.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub funscript_sync_secret: String,
     pub update_channel: fp_updater::Channel,
     pub check_updates: bool,
     /// UI text size multiplier, in [`UI_SCALES`].
@@ -132,6 +139,8 @@ impl Default for Settings {
             haptics_enabled: false,
             haptics: HapticsSettings::default(),
             haptic_devices: Vec::new(),
+            funscript_sync_url: String::new(),
+            funscript_sync_secret: String::new(),
             // A beta build keeps getting betas until the user picks Stable.
             update_channel: if env!("CARGO_PKG_VERSION").contains('-') {
                 fp_updater::Channel::Beta
@@ -151,9 +160,14 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Adjustments for a video that has none saved: the defaults, following
-    /// the global chroma key.
+    /// Whether the player may offer the confirmed Stash-scene deletion.
+    pub fn funscript_sync_configured(&self) -> bool {
+        !self.funscript_sync_url.trim().is_empty() && !self.funscript_sync_secret.trim().is_empty()
+    }
+
     pub fn new_video_view(&self) -> ViewSettings {
+        /// Adjustments for a video that has none saved: the defaults, following
+        /// the global chroma key.
         ViewSettings {
             key_own: Some(false),
             ..self.default_view

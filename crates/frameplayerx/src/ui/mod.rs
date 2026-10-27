@@ -177,6 +177,8 @@ pub enum Action {
         location: String,
         version: Option<String>,
     },
+    /// Deletes the scene FunScriptSync currently maps to this playback.
+    DeleteActiveStashScene,
     /// Reads a DeoVR feed's or HereSphere API's groups and scenes.
     FeedLoad {
         source: String,
@@ -576,6 +578,8 @@ pub struct UiState {
     /// Delete was pressed once on the open playlist: pressing again within
     /// a few seconds deletes it.
     pub delete_armed: Option<std::time::Instant>,
+    /// Delete Stash scene was pressed once in the player controls.
+    pub delete_stash_armed: Option<std::time::Instant>,
     /// Videos being added to a playlist (the picker shows instead of the
     /// screen).
     pub picking: Option<Picking>,
@@ -642,6 +646,7 @@ impl Default for UiState {
             playlist_name: String::new(),
             renaming: false,
             delete_armed: None,
+            delete_stash_armed: None,
             picking: None,
             up_next: None,
             source: None,

@@ -495,6 +495,47 @@ impl App {
         });
     }
 
+    /// Requests deletion of the scene FunScriptSync currently associates with
+    /// the player. FunScriptSync keeps the Stash credential; this app only
+    /// holds its scoped shared secret.
+    pub(super) fn delete_active_stash_scene(&mut self) {
+        let url = self
+            .settings
+            .funscript_sync_url
+            .trim()
+            .trim_end_matches('/')
+            .to_owned();
+        let secret = self.settings.funscript_sync_secret.trim().to_owned();
+        if url.is_empty() || secret.is_empty() {
+            self.ui
+                .toast("Set up FunScriptSync in Settings › Haptics first");
+            return;
+        }
+        self.jobs.spawn("stash-delete", move || {
+            let agent = ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_secs(10)))
+                .http_status_as_error(false)
+                .build()
+                .new_agent();
+            match agent
+                .post(format!("{url}/active-scene/delete"))
+                .header("X-FunScriptSync-Secret", &secret)
+                .header("Accept", "application/json")
+                .call()
+            {
+                Ok(response) if response.status().is_success() => {
+                    Job::Toast("Stash scene deleted".into())
+                }
+                Ok(mut response) => {
+                    let status = response.status();
+                    let body = response.body_mut().read_to_string().unwrap_or_default();
+                    Job::Toast(format!("FunScriptSync refused deletion ({status}): {body}"))
+                }
+                Err(e) => Job::Toast(format!("FunScriptSync deletion failed: {e}")),
+            }
+        });
+    }
+
     /// Marks a HereSphere scene as a favourite on the server, or unmarks it.
     pub(super) fn mark_feed_favorite(&mut self, source: &str, url: String, on: bool) {
         let Some(src) = self.services.opener.source(source) else {

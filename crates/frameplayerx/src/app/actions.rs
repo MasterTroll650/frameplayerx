@@ -179,6 +179,7 @@ impl App {
                     mb.set_version(&location, version.as_deref());
                 }
             }
+            Action::DeleteActiveStashScene => self.delete_active_stash_scene(),
             Action::FeedLoad { source } => self.load_feed(source),
             Action::FeedFill {
                 source,

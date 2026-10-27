@@ -94,6 +94,7 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
                 v.settings.passthrough,
                 v.passthrough_available,
                 v.settings.follow,
+                v.settings.funscript_sync_configured(),
                 v.actions,
             );
         });
@@ -300,6 +301,7 @@ fn view_keys(
     passthrough: bool,
     passthrough_available: bool,
     follow: bool,
+    funscript_sync_ready: bool,
     actions: &mut Vec<Action>,
 ) {
     if widgets::key(ui, icons::X, 52.0, false)
@@ -345,6 +347,30 @@ fn view_keys(
         .clicked()
     {
         actions.push(Action::AddBookmark);
+    }
+    if funscript_sync_ready {
+        let armed = state
+            .delete_stash_armed
+            .is_some_and(|t| t.elapsed().as_secs_f32() < 4.0);
+        if widgets::key(ui, icons::TRASH, 52.0, armed)
+            .tip(if armed {
+                "Confirm delete Stash scene"
+            } else {
+                "Delete Stash scene"
+            })
+            .clicked()
+        {
+            if armed {
+                actions.push(Action::DeleteActiveStashScene);
+                state.delete_stash_armed = None;
+            } else {
+                state.delete_stash_armed = Some(std::time::Instant::now());
+            }
+        }
+        if armed {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(500));
+        }
     }
     if widgets::key(ui, icons::SLIDERS_HORIZONTAL, 52.0, state.adjust_open)
         .tip("Adjust")

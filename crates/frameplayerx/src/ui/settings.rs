@@ -546,6 +546,7 @@ fn haptics(ui: &mut egui::Ui, v: &mut View) {
             });
         });
     });
+    haptics_funscript_sync(ui, v);
     if !configs.is_empty()
         && widgets::button(
             ui,
@@ -593,6 +594,37 @@ fn haptics(ui: &mut egui::Ui, v: &mut View) {
             "Scripts are found next to their videos, and in {}",
             fp_core::dirs::interactive_dir().display()
         ),
+    );
+}
+
+/// Settings for the optional service that owns the Stash API credential.
+fn haptics_funscript_sync(ui: &mut egui::Ui, v: &mut View) {
+    heading(ui, "FunScriptSync");
+    widgets::rows(ui, |r| {
+        r.content(|ui| {
+            ui.label(RichText::new("Server URL").color(theme::TEXT_2));
+            ui.add(
+                egui::TextEdit::singleline(&mut v.settings.funscript_sync_url)
+                    .margin(egui::Margin::symmetric(12, 9))
+                    .hint_text("http://192.168.1.20:8000")
+                    .font(theme::font(Weight::Regular, 17.0))
+                    .desired_width(ui.available_width()),
+            );
+            ui.add_space(8.0);
+            ui.label(RichText::new("Shared secret").color(theme::TEXT_2));
+            ui.add(
+                egui::TextEdit::singleline(&mut v.settings.funscript_sync_secret)
+                    .password(true)
+                    .margin(egui::Margin::symmetric(12, 9))
+                    .hint_text("FunScriptSync secret")
+                    .font(theme::font(Weight::Regular, 17.0))
+                    .desired_width(ui.available_width()),
+            );
+        });
+    });
+    note(
+        ui,
+        "Enables the confirmed Delete Stash scene button in the player. The Stash API credential stays on FunScriptSync.",
     );
 }
 
