@@ -57,6 +57,8 @@ pub enum MbKind {
     MusicVideo,
     /// A collection of films.
     BoxSet,
+    /// A user-created server playlist.
+    Playlist,
     Folder,
     /// One of the user's libraries (a view).
     Library,
@@ -75,6 +77,7 @@ impl MbKind {
             "Video" => MbKind::Video,
             "MusicVideo" => MbKind::MusicVideo,
             "BoxSet" => MbKind::BoxSet,
+            "Playlist" => MbKind::Playlist,
             "Folder" => MbKind::Folder,
             "CollectionFolder" | "UserView" => MbKind::Library,
             _ => MbKind::Other,
@@ -93,7 +96,7 @@ impl MbKind {
     pub fn portrait(self) -> bool {
         matches!(
             self,
-            MbKind::Movie | MbKind::Series | MbKind::Season | MbKind::BoxSet
+            MbKind::Movie | MbKind::Series | MbKind::Season | MbKind::BoxSet | MbKind::Playlist
         )
     }
 }
@@ -107,6 +110,8 @@ pub struct MbItem {
     pub kind: MbKind,
     /// Of a library: `movies`, `tvshows`, `boxsets`, `homevideos`...
     pub collection_type: Option<String>,
+    /// Of a playlist: `Video`, `Audio`... The player only shows video playlists on the server's front page.
+    pub media_type: Option<String>,
     /// Plot or description.
     pub overview: Option<String>,
     /// Production year.
@@ -345,6 +350,9 @@ impl MbFilter {
 pub struct MbQuery {
     /// Library, folder or collection to list; `None` for the whole server.
     pub parent: Option<String>,
+    /// A playlist whose ordered items come from `/Playlists/{id}/Items`.
+    /// Jellyfin's generic item endpoint does not promise that order.
+    pub playlist: Option<String>,
     /// Item types to keep (`Movie`, `Series`...); empty keeps every type.
     pub types: Vec<String>,
     /// Look inside sub-folders too.
@@ -368,6 +376,7 @@ impl Default for MbQuery {
     fn default() -> MbQuery {
         MbQuery {
             parent: None,
+            playlist: None,
             types: Vec::new(),
             recursive: false,
             search: String::new(),
@@ -406,6 +415,7 @@ impl MbQuery {
         };
         MbQuery {
             parent: Some(item.id.clone()),
+            playlist: (item.kind == MbKind::Playlist).then(|| item.id.clone()),
             types: types.iter().map(ToString::to_string).collect(),
             recursive: item.kind == MbKind::Library,
             ..MbQuery::default()
@@ -444,6 +454,18 @@ impl MbQuery {
             q += &format!("&Tags={}", encode_form_value(&self.tags.join("|")));
         }
         q
+    }
+
+    /// The ordered contents of a playlist. This endpoint accepts paging but
+    /// not the catalogue's search, filters or sorting controls.
+    pub(crate) fn playlist_path(&self, user: &str) -> Option<String> {
+        let id = self.playlist.as_ref()?;
+        Some(format!(
+            "/Playlists/{}/Items?UserId={user}&StartIndex={}&Limit={}&Fields={LIST_FIELDS}&{IMAGES}",
+            encode_form_value(id),
+            self.start,
+            self.limit.max(1),
+        ))
     }
 }
 
@@ -501,6 +523,8 @@ pub struct MbPage {
 pub struct MbHome {
     /// The user's video libraries.
     pub libraries: Vec<MbItem>,
+    /// The user's video playlists, kept on Jellyfin and read only here.
+    pub playlists: Vec<MbItem>,
     /// Partly watched films and episodes.
     pub resume: Vec<MbItem>,
     /// The next episode of each series being watched.
@@ -626,6 +650,7 @@ pub(crate) fn parse_item(v: &Value, base: &str) -> Option<MbItem> {
         name,
         kind,
         collection_type: text(v, "CollectionType"),
+        media_type: text(v, "MediaType"),
         overview: text(v, "Overview"),
         year,
         runtime: num(v, "RunTimeTicks")
@@ -751,8 +776,29 @@ impl MediaBrowserSource {
     /// One page of a listing.
     pub fn items(&self, query: &MbQuery) -> Result<MbPage> {
         let user = self.user()?;
-        let v = self.api_get_json(&query.path(&user))?;
+        let path = query.playlist_path(&user).unwrap_or_else(|| query.path(&user));
+        let v = self.api_get_json(&path)?;
         Ok(parse_page(&v, &self.base_url))
+    }
+
+    /// The user's video playlists. They are intentionally read-only: opening
+    /// one reads its ordered contents, but this client never changes it.
+    pub fn playlists(&self, limit: usize) -> Result<Vec<MbItem>> {
+        let page = self.items(&MbQuery {
+            types: vec!["Playlist".into()],
+            recursive: true,
+            sort: MbSort::Name,
+            limit,
+            ..MbQuery::default()
+        })?;
+        Ok(page
+            .items
+            .into_iter()
+            .filter(|i| {
+                i.kind == MbKind::Playlist
+                    && i.media_type.as_deref().is_none_or(|t| t.eq_ignore_ascii_case("video"))
+            })
+            .collect())
     }
 
     /// One item with everything a details page shows.
@@ -898,6 +944,7 @@ impl MediaBrowserSource {
         };
         let resume = soft(self.resume(16), "resume");
         let next_up = soft(self.next_up(None, 16), "next up");
+        let playlists = soft(self.playlists(100), "playlists");
         let latest = libraries
             .iter()
             .filter(|l| l.collection_type.as_deref() != Some("boxsets"))
@@ -906,6 +953,7 @@ impl MediaBrowserSource {
             .collect();
         Ok(MbHome {
             libraries,
+            playlists,
             resume,
             next_up,
             latest,
@@ -1117,6 +1165,7 @@ mod tests {
     fn listing_paths() {
         let q = MbQuery {
             parent: Some("lib 1".into()),
+            playlist: None,
             types: vec!["Movie".into()],
             recursive: true,
             search: " blade runner ".into(),
@@ -1143,6 +1192,18 @@ mod tests {
         }
         let all = MbQuery::default().path("u1");
         assert!(!all.contains("ParentId") && !all.contains("Filters") && !all.contains("Search"));
+
+        let playlist = MbItem {
+            id: "playlist 1".into(),
+            kind: MbKind::Playlist,
+            ..MbItem::default()
+        };
+        let playlist_query = MbQuery::children(&playlist);
+        assert_eq!(playlist_query.playlist.as_deref(), Some("playlist 1"));
+        assert_eq!(
+            playlist_query.playlist_path("u1").as_deref(),
+            Some("/Playlists/playlist%201/Items?UserId=u1&StartIndex=0&Limit=60&Fields=Overview,Genres,Path,DateCreated,ChildCount,PremiereDate&EnableImageTypes=Primary,Backdrop,Thumb&ImageTypeLimit=1")
+        );
     }
 
     #[test]

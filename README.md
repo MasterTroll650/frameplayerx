@@ -4,15 +4,20 @@
 
 # FramePlayerX
 
-[![CI](https://github.com/remotesojourner/frameplayerx/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/remotesojourner/frameplayerx/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/remotesojourner/frameplayerx?sort=semver&style=flat&logo=github&label=release)](https://github.com/remotesojourner/frameplayerx/releases/latest)
-[![Latest Beta](https://img.shields.io/github/v/release/remotesojourner/frameplayerx?include_prereleases&sort=date&style=flat&logo=github&label=beta&color=orange)](https://github.com/remotesojourner/frameplayerx/releases)
+[![CI](https://github.com/MasterTroll650/frameplayerx/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/MasterTroll650/frameplayerx/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/MasterTroll650/frameplayerx?sort=semver&style=flat&logo=github&label=release)](https://github.com/MasterTroll650/frameplayerx/releases/latest)
+[![Latest Beta](https://img.shields.io/github/v/release/MasterTroll650/frameplayerx?include_prereleases&sort=date&style=flat&logo=github&label=beta&color=orange)](https://github.com/MasterTroll650/frameplayerx/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat)](LICENSE)
 
 A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fisheye videos, in 2D or 3D, from the headset, a microSD card, a USB drive or a media server. It runs natively on the headset.
 
 > [!NOTE]
 > FramePlayerX is a fork of [FramePlayer](https://github.com/yellkell/frameplayer) by [yellkell](https://github.com/yellkell), who created the original player and released it as open source. Thank you, yellkell, for the work this project is built on.
+
+> [!IMPORTANT]
+> ## MasterTroll650 fork
+>
+> This fork adds read-only Jellyfin video-playlist browsing and playback.
 
 ---
 
@@ -49,9 +54,9 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 ## Quick Start
 
 <p align="center">
-  <a href="https://github.com/remotesojourner/frameplayerx/releases/latest/download/Install-FramePlayerX.desktop"><img src="assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
+  <a href="https://github.com/MasterTroll650/frameplayerx/releases/latest/download/Install-FramePlayerX.desktop"><img src="assets/install-button.svg" alt="Install in Desktop Mode" width="240" /></a>
   <!-- <a href="https://framedropvr.com/install?manifest=https%3A%2F%2Fgithub.com%2Fremotesojourner%2Fframeplayerx%2Freleases%2Flatest%2Fdownload%2Fframedrop.json"><img src="assets/framedrop-button.svg" alt="Install with FrameDrop" width="240" /></a> -->
-  <a href="https://remotesojourner.github.io/frameplayerx/frame-control.html"><img src="assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
+  <a href="https://MasterTroll650.github.io/frameplayerx/frame-control.html"><img src="assets/frame-control-button.svg" alt="Install with Frame Control" width="240" /></a>
 </p>
 
 1. **Install FramePlayerX** with one of the buttons above, or from a terminal:
@@ -62,7 +67,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
    - **Frame Control from a PC**: turn on Developer Mode (Steam Settings › System › Developer Mode) and pair the headset once with [Frame Control](https://github.com/saphid/steam-frame). Then press its button in your PC's browser and it installs the latest release on the headset.
      > **Note:** [FrameDrop](https://framedropvr.com) currently has a bug where it has trouble downloading from GitHub, so it isn't supported yet, but should be once the bug is fixed.
 
-   - **`frameplayerx-install`, from a PC's terminal**: turn on Developer Mode, download `frameplayerx-install` for your PC from the [release page](https://github.com/remotesojourner/frameplayerx/releases/latest), then:
+   - **`frameplayerx-install`, from a PC's terminal**: turn on Developer Mode, download `frameplayerx-install` for your PC from the [release page](https://github.com/MasterTroll650/frameplayerx/releases/latest), then:
 
      ```bash
      frameplayerx-install pair 192.168.0.68    # once, with the headset's IP address

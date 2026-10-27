@@ -645,7 +645,7 @@ fn card_facts(item: &MbItem) -> String {
                 _ => {}
             }
         }
-        MbKind::BoxSet | MbKind::Folder | MbKind::Library => {
+        MbKind::BoxSet | MbKind::Folder | MbKind::Library | MbKind::Playlist => {
             if let Some(n) = item.child_count {
                 f.push(page::plural(n as usize, "item", "items"));
             }
@@ -689,6 +689,7 @@ fn item_card(ui: &mut egui::Ui, v: &mut View, item: &MbItem, portrait: bool) -> 
     let placeholder = match item.kind {
         MbKind::Series | MbKind::Season => icons::MONITOR_PLAY,
         MbKind::Library | MbKind::Folder | MbKind::BoxSet => icons::FOLDERS,
+        MbKind::Playlist => icons::PLAYLIST,
         _ => icons::FILM_STRIP,
     };
     page::card(
@@ -749,6 +750,7 @@ fn item_row(
 fn home_rows(ui: &mut egui::Ui, v: &mut View, h: &MbHome) -> Option<Go> {
     ui.add_space(6.0);
     let mut go = item_row(ui, v, "My media", &h.libraries, true);
+    go = go.or(item_row(ui, v, "Playlists", &h.playlists, true));
     go = go.or(item_row(ui, v, "Continue watching", &h.resume, true));
     go = go.or(item_row(ui, v, "Next up", &h.next_up, true));
     for (library, items) in &h.latest {
@@ -816,6 +818,9 @@ fn grid(
     typed: &mut Option<Instant>,
 ) -> Option<Go> {
     let mut changed = false;
+    // Jellyfin returns playlist items in a deliberate order. Its playlist
+    // endpoint does not support the catalogue controls, so do not offer them.
+    if query.playlist.is_none() {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         if page::search_field(ui, &mut query.search, "Search", 220.0) {
@@ -867,6 +872,7 @@ fn grid(
         }
         page::count_label(ui, &page::plural(total, "item", "items"));
     });
+    }
     ui.add_space(10.0);
     if let Some(t) = *typed {
         if t.elapsed() >= SEARCH_DELAY {
