@@ -413,7 +413,9 @@ lining up towards the edges, open **⚙ › Format** and use the sliders under
   middle of its half of the frame. This is common in footage straight from
   a camera. In 3D, each image has its own.
 
-To fine-tune a slider, point at it and push the thumbstick left or right.
+Pull the trigger on a slider's knob and move the pointer to drag it; pulled
+elsewhere on the slider, the knob jumps there first. To fine-tune a slider,
+point at it and push the thumbstick left or right.
 Each push is one step, and holding repeats. **Save for this video** keeps
 the settings for that file.
 
