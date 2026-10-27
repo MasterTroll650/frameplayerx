@@ -3,6 +3,8 @@
 # desktop preview (no headset; any Vulkan driver, lavapipe on CI).
 #
 # Usage: tools/ui-preview.sh OUT_DIR
+# UI_LANGUAGE=de (or pseudo, a made-up longer language) renders them in
+# another language.
 # Runs against a throwaway home with a small library made from the test
 # clips, so it never touches your own settings or library.
 set -euo pipefail
@@ -11,6 +13,12 @@ out="$(mkdir -p "${1:?usage: $0 OUT_DIR}" && cd "$1" && pwd)"
 data=crates/fp-media/tests/data
 
 home="$(mktemp -d)"
+# Fonts you installed yourself, such as the headset's Noto Sans CJK for
+# UI_LANGUAGE=ja or zh-CN, which the throwaway home would hide.
+if [ -d "$HOME/.local/share/fonts" ]; then
+  mkdir -p "$home/.local/share"
+  ln -s "$HOME/.local/share/fonts" "$home/.local/share/fonts"
+fi
 jf_port_file="$home/jf.port"
 python3 - "$home" "$jf_port_file" <<'PY' &
 import glob, http.server, json, os, random, sqlite3, sys, urllib.parse
@@ -173,6 +181,9 @@ touch -d 2026-01-08 "$home/Videos/Aurora Timelapse_360_TB.mkv"
 # The Videos library, a Jellyfin server, and a library to lock with a PIN.
 mkdir -p "$home/Private" "$home/.config/frameplayerx"
 cp "$data/h264_aac_180_LR.mp4" "$home/Private/Rooftop.mp4"
+if [ -n "${UI_LANGUAGE:-}" ]; then
+  printf '{"language": "%s"}\n' "$UI_LANGUAGE" >"$home/.config/frameplayerx/settings.json"
+fi
 (umask 077 && cat >"$home/.config/frameplayerx/sources.json" <<EOF
 [{"type": "library", "id": "videos", "name": "Videos", "folder": "$home/Videos"},
  {"type": "mediabrowser", "id": "jellyfin", "name": "Jellyfin", "url": "http://127.0.0.1:$jf_port", "access_token": "tok", "user_id": "u1"},
@@ -300,8 +311,10 @@ panel main settings-controller-stick
 haptics on
 screen settings haptics
 panel main settings-haptics
+remote on
 screen settings remote
 panel main settings-remote
+remote off
 screen settings updates
 panel main settings-updates
 screen settings about

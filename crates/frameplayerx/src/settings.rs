@@ -62,6 +62,9 @@ pub struct Settings {
     pub subtitles: SubtitleMode,
     /// The language subtitles are wanted in (ISO 639-1).
     pub subtitle_language: String,
+    /// The interface's language, one of [`crate::i18n::LANGUAGES`]; none
+    /// follows Steam's.
+    pub language: Option<String>,
     /// Defaults for videos without saved adjustments.
     pub default_view: ViewSettings,
     /// Show the real world around flat screens and the UI.
@@ -127,11 +130,11 @@ impl Default for Settings {
             audio_device: "default".into(),
             volume: 1.0,
             subtitles: SubtitleMode::default(),
-            subtitle_language: std::env::var("LANG")
-                .ok()
+            subtitle_language: crate::i18n::system_language()
                 .and_then(|l| fp_core::language::from_locale(&l))
                 .unwrap_or("en")
                 .to_string(),
+            language: None,
             default_view: ViewSettings::default(),
             passthrough: false,
             resume: true,
@@ -179,6 +182,14 @@ impl Settings {
 
     pub fn sources_path() -> PathBuf {
         fp_core::dirs::config_dir().join("sources.json")
+    }
+
+    /// The language the interface is shown in: the one picked, else
+    /// [`crate::i18n::automatic`].
+    pub fn interface_language(&self) -> String {
+        self.language
+            .clone()
+            .unwrap_or_else(|| crate::i18n::automatic().to_string())
     }
 
     /// Loads settings, falling back to defaults (and logging why) when the

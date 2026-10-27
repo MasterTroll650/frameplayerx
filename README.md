@@ -29,8 +29,9 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 - **Passthrough videos**: see your room around the people in passthrough videos, and behind green or blue screens
 - **Subtitles and spatial audio**: subtitles from a file or inside the video, picked in your language and shown in any script, and 360° audio that follows your head
 - **Haptic devices**: optional, off until turned on; syncs supported haptic devices with videos that have scripts
-- **Phone remote**: scan a QR code to control playback and browse from your phone. Apps made for DeoVR's remote work too
+- **Phone remote**: open the address the headset shows on your phone and enter its code, then control the player and type into the headset from the phone. Apps made for DeoVR's remote work too
 - **Custom controls**: choose what each controller button does
+- **Languages**: English, German, Spanish, French, Japanese and Simplified Chinese, following the language Steam is set to; the phone remote follows the headset
 - **Updates**: checks for a new version when it starts, and installs it from Settings when you choose to, on a Stable or a Beta channel
 - **No accounts or tracking**: it only connects to the servers you add, and to GitHub to check for updates. After a crash it asks whether to send a crash report, shows what's in it (no video names, folders or server addresses) and sends nothing unless you choose to
 
@@ -83,6 +84,16 @@ To update later, open **Settings › Updates** and press **Download and install*
 |---|---|
 | [User guide](docs/USER-GUIDE.md) | Installing, updating and uninstalling, sources, browsing, PIN locks, video formats, controls, passthrough, haptics, remote control and troubleshooting |
 | [Development](docs/DEVELOPMENT.md) | Building and testing, how the code is organised, running without a headset (Monado and the preview harness), and releasing |
+
+---
+
+## Help translate
+
+FramePlayerX comes in English, German, Spanish, French, Japanese and Simplified Chinese. All but English started as machine drafts, so some wording is likely to be wrong or awkward, and corrections are welcome.
+
+- **Correct or translate** on [Hosted Weblate](https://hosted.weblate.org/projects/frameplayerx/). No Git needed: sign in, pick a language and edit its messages. A note beside each message says where it shows; "Short" marks a button, chip or tab, which should stay about as long as the English. Changes come back to this repository as pull requests.
+- **Report a mistake** without translating: open a [Translation problem](https://github.com/remotesojourner/frameplayerx/issues/new?template=translation.yml) issue with the language, where it shows and the wording you'd expect.
+- **Add a language**: start it on Weblate, or ask in an issue. Right-to-left languages (Arabic, Hebrew) and scripts that need shaping (Thai, Hindi and other Indic scripts) can't be shown in the interface yet.
 
 ---
 

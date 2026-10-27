@@ -862,7 +862,7 @@ pub fn slider_control(
             theme::icon(20.0),
             mix(theme::TEXT_2, Color32::WHITE, t),
         );
-        if resp.tip("Reset").clicked() {
+        if resp.tip(tr!("adjust-reset")).clicked() {
             *value = default;
             changed = true;
         }
@@ -1254,7 +1254,10 @@ pub fn format_short(f: &fp_core::format::VideoFormat) -> String {
     let p = match f.projection {
         Projection::Flat => return if stereo { "3D".into() } else { "2D".into() },
         Projection::Equirect { h_fov, .. } => format!("{}°", h_fov.round()),
-        Projection::Fisheye { fov } => format!("Fisheye {}°", fov.round()),
+        Projection::Fisheye { fov } => {
+            let fov = format!("{}", fov.round());
+            tr!("format-short-fisheye", fov = fov)
+        }
         Projection::Eac { h_fov } => format!("EAC {}°", h_fov.round()),
     };
     if stereo { format!("{p} 3D") } else { p }

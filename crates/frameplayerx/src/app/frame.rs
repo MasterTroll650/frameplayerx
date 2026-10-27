@@ -191,6 +191,7 @@ impl App {
             p.watch_decoding(self.settings.hardware_decoding);
         }
         self.publish_status();
+        self.publish_details();
     }
 
     /// The room's frame of reference for the panels and the video.

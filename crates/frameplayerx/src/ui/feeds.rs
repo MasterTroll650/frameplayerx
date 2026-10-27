@@ -52,18 +52,15 @@ pub enum Length {
 }
 
 impl Length {
-    const ALL: [(Length, &'static str); 4] = [
-        (Length::Short, "Under 10 min"),
-        (Length::Medium, "10–30 min"),
-        (Length::Long, "30–60 min"),
-        (Length::Longest, "Over an hour"),
-    ];
+    const ALL: [Length; 4] = [Length::Short, Length::Medium, Length::Long, Length::Longest];
 
     fn label(self) -> &'static str {
-        Self::ALL
-            .iter()
-            .find(|(l, _)| *l == self)
-            .map_or("", |(_, label)| label)
+        match self {
+            Length::Short => tr!("feed-length-short"),
+            Length::Medium => tr!("feed-length-medium"),
+            Length::Long => tr!("feed-length-long"),
+            Length::Longest => tr!("feed-length-longest"),
+        }
     }
 
     fn holds(self, seconds: f64) -> bool {
@@ -78,15 +75,23 @@ impl Length {
 }
 
 /// The lowest ratings the drawer offers, in tenths of a star.
-const RATINGS: [(u8, &str); 3] = [(30, "3★ and up"), (40, "4★ and up"), (45, "4.5★ and up")];
+fn ratings() -> [(u8, &'static str); 3] {
+    [
+        (30, tr!("feed-rating-3")),
+        (40, tr!("feed-rating-4")),
+        (45, tr!("feed-rating-45")),
+    ]
+}
 
 /// The shapes the drawer offers, as the library's format chips name them.
-const SHAPES: [(FormatFilter, &str); 4] = [
-    (FormatFilter::Flat, "Flat"),
-    (FormatFilter::Vr180, "180°"),
-    (FormatFilter::Vr360, "360°"),
-    (FormatFilter::Fisheye, "Fisheye"),
-];
+fn shapes() -> [(FormatFilter, &'static str); 4] {
+    [
+        (FormatFilter::Flat, tr!("filter-flat")),
+        (FormatFilter::Vr180, "180°"),
+        (FormatFilter::Vr360, "360°"),
+        (FormatFilter::Fisheye, tr!("filter-fisheye")),
+    ]
+}
 
 /// A scene's shape, as the library's format chips name them.
 fn shape(s: &FeedScene) -> Option<FormatFilter> {
@@ -111,7 +116,7 @@ pub struct FeedFilters {
     /// 3D only.
     pub stereo: bool,
     pub length: Option<Length>,
-    /// Tenths of a star (see [`RATINGS`]).
+    /// Tenths of a star (see [`ratings`]).
     pub rating: Option<u8>,
 }
 
@@ -149,9 +154,9 @@ impl FeedFilters {
         self.on()
             .into_iter()
             .map(|o| match o {
-                On::Studio(s) => format!("Studio · {s}"),
+                On::Studio(s) => tr!("filter-on-studio", studio = s),
                 On::Person(p) => p,
-                On::Tag(t) => format!("Tag · {t}"),
+                On::Tag(t) => tr!("filter-on-tag", tag = t),
                 On::Shape(f) => shape_label(f).to_string(),
                 On::Stereo => "3D".to_string(),
                 On::Length(l) => l.label().to_string(),
@@ -199,14 +204,14 @@ impl FeedFilters {
 }
 
 fn shape_label(f: FormatFilter) -> &'static str {
-    SHAPES
+    shapes()
         .iter()
         .find(|(s, _)| *s == f)
         .map_or("", |(_, label)| label)
 }
 
 fn rating_label(r: u8) -> &'static str {
-    RATINGS
+    ratings()
         .iter()
         .find(|(x, _)| *x == r)
         .map_or("", |(_, label)| label)
@@ -523,7 +528,7 @@ impl FeedView {
         let by_tag = kept_without(|f| f.tags.clear());
         let by_shape = kept_without(|f| f.shapes.clear());
         let by_stereo = kept_without(|f| f.stereo = false);
-        let mut shapes: Vec<(FormatFilter, usize)> = SHAPES
+        let mut shapes: Vec<(FormatFilter, usize)> = shapes()
             .iter()
             .map(|(f, _)| (*f, by_shape.iter().filter(|s| shape(s) == Some(*f)).count()))
             .filter(|(f, n)| *n > 0 || self.filters.shapes.contains(f))
@@ -657,7 +662,7 @@ pub fn page(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut F
     }
     let back = header(ui, v.actions, source, name, f);
     let mut changed = filters(ui, f, haptics);
-    let count = page::plural(f.visible().len(), "scene", "scenes");
+    let count = tr!("count-scenes", count = f.visible().len());
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         let choices = sort_choices(f);
@@ -700,7 +705,7 @@ pub fn page(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut F
     if f.filters_open {
         let facets = f.facets();
         let mut open = true;
-        let count = page::plural(total, "scene", "scenes");
+        let count = tr!("count-scenes", count = total);
         let clear = page::filter_drawer(ui, &mut open, &count, |ui| {
             changed |= drawer(ui, f, &facets);
         });
@@ -749,29 +754,31 @@ fn drawer(ui: &mut egui::Ui, f: &mut FeedView, facets: &Facets) -> bool {
     let mut changed = false;
     if let Some((done, of)) = f.reading() {
         ui.label(
-            RichText::new(format!(
-                "Reading each scene's studio, people and tags · {done} of {of}"
-            ))
-            .color(theme::TEXT_2),
+            RichText::new(tr!("feed-reading-details", done = done, of = of)).color(theme::TEXT_2),
         );
         ui.add(egui::ProgressBar::new(done as f32 / of.max(1) as f32).desired_height(6.0));
     } else if f.scanning {
-        ui.label(RichText::new("Reading the server's scenes…").color(theme::TEXT_2));
+        ui.label(RichText::new(tr!("feed-reading")).color(theme::TEXT_2));
     }
     let sections = [
         (
-            "Studio",
-            "Find a studio",
+            tr!("filter-studio"),
+            tr!("filter-find-studio"),
             &facets.studios,
             &mut f.filters.studios,
         ),
         (
-            "People",
-            "Find a person",
+            tr!("filter-people"),
+            tr!("filter-find-person"),
             &facets.people,
             &mut f.filters.people,
         ),
-        ("Tags", "Find a tag", &facets.tags, &mut f.filters.tags),
+        (
+            tr!("filter-tags"),
+            tr!("filter-find-tag"),
+            &facets.tags,
+            &mut f.filters.tags,
+        ),
     ];
     for (title, hint, items, chosen) in sections {
         if items.is_empty() {
@@ -790,8 +797,8 @@ fn drawer(ui: &mut egui::Ui, f: &mut FeedView, facets: &Facets) -> bool {
         }
     }
     if facets.timed {
-        page::filter_section(ui, "Length", |ui| {
-            for (l, label) in Length::ALL {
+        page::filter_section(ui, tr!("filter-length"), |ui| {
+            for (l, label) in Length::ALL.map(|l| (l, l.label())) {
                 let on = f.filters.length == Some(l);
                 if page::filter_chip(ui, label, None, on) {
                     f.filters.length = (!on).then_some(l);
@@ -801,7 +808,7 @@ fn drawer(ui: &mut egui::Ui, f: &mut FeedView, facets: &Facets) -> bool {
         });
     }
     if !facets.shapes.is_empty() || facets.stereo > 0 {
-        page::filter_section(ui, "Format", |ui| {
+        page::filter_section(ui, tr!("adjust-format"), |ui| {
             for (s, n) in &facets.shapes {
                 let on = f.filters.shapes.contains(s);
                 if page::filter_chip(ui, shape_label(*s), Some(*n), on) {
@@ -822,8 +829,8 @@ fn drawer(ui: &mut egui::Ui, f: &mut FeedView, facets: &Facets) -> bool {
         });
     }
     if facets.rated {
-        page::filter_section(ui, "Rating", |ui| {
-            for (r, label) in RATINGS {
+        page::filter_section(ui, tr!("filter-rating"), |ui| {
+            for (r, label) in ratings() {
                 let on = f.filters.rating == Some(r);
                 if page::filter_chip(ui, label, None, on) {
                     f.filters.rating = (!on).then_some(r);
@@ -838,10 +845,10 @@ fn drawer(ui: &mut egui::Ui, f: &mut FeedView, facets: &Facets) -> bool {
 /// What the direction caret says for `sort`: largest first, smallest first.
 fn direction_tips(sort: FeedSort) -> [&'static str; 2] {
     match sort {
-        FeedSort::Title => ["Z to A", "A to Z"],
-        FeedSort::Newest => ["Newest first", "Oldest first"],
-        FeedSort::Rating => ["Highest first", "Lowest first"],
-        _ => ["Longest first", "Shortest first"],
+        FeedSort::Title => [tr!("sort-z-to-a"), tr!("sort-a-to-z")],
+        FeedSort::Newest => [tr!("sort-newest-first"), tr!("sort-oldest-first")],
+        FeedSort::Rating => [tr!("sort-highest-first"), tr!("sort-lowest-first")],
+        _ => [tr!("sort-longest-first"), tr!("sort-shortest-first")],
     }
 }
 
@@ -856,17 +863,17 @@ fn header(
 ) -> bool {
     let mut subtitle = format!(
         "{} · {}",
-        f.kind.label(),
-        page::plural(f.order.len(), "scene", "scenes")
+        super::sources::kind_label(f.kind),
+        tr!("count-scenes", count = f.order.len())
     );
     // Scenes are shown (last time's, or a listing before its scan) while
     // the rest arrives.
     if !f.order.is_empty() && (f.loading || f.scanning) {
-        subtitle.push_str(" · updating…");
+        subtitle.push_str(&format!(" · {}", tr!("feed-updating")));
     }
     page::header(ui, name, Some(&subtitle), |ui| {
         if widgets::icon_button(ui, icons::ARROWS_CLOCKWISE, 44.0, false)
-            .tip("Refresh")
+            .tip(tr!("feed-refresh"))
             .clicked()
         {
             f.loading = true;
@@ -883,20 +890,32 @@ fn filters(ui: &mut egui::Ui, f: &mut FeedView, haptics: bool) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        changed |= page::search_field(ui, &mut f.search, "Search titles, people, tags", 300.0);
+        changed |= page::search_field(ui, &mut f.search, tr!("feed-search"), 300.0);
         if page::filters_button(ui, f.filters.count()).clicked() {
             f.filters_open = !f.filters_open;
         }
         ui.add_space(10.0);
         if haptics
             && f.any(|s| s.scripted)
-            && widgets::chip_icon(ui, Some(icons::WAVEFORM), "Scripted", f.scripted_only).clicked()
+            && widgets::chip_icon(
+                ui,
+                Some(icons::WAVEFORM),
+                tr!("feed-scripted"),
+                f.scripted_only,
+            )
+            .clicked()
         {
             f.scripted_only = !f.scripted_only;
             changed = true;
         }
         if f.any(|s| s.favorite)
-            && widgets::chip_icon(ui, Some(icons::HEART), "Favorites", f.favorites_only).clicked()
+            && widgets::chip_icon(
+                ui,
+                Some(icons::HEART),
+                tr!("filter-favorites"),
+                f.favorites_only,
+            )
+            .clicked()
         {
             f.favorites_only = !f.favorites_only;
             changed = true;
@@ -910,7 +929,7 @@ fn filters(ui: &mut egui::Ui, f: &mut FeedView, haptics: bool) -> bool {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    if widgets::chip(ui, "All", f.group.is_none()).clicked() {
+                    if widgets::chip(ui, tr!("filter-all"), f.group.is_none()).clicked() {
                         f.group = None;
                         changed = true;
                     }
@@ -929,14 +948,20 @@ fn filters(ui: &mut egui::Ui, f: &mut FeedView, haptics: bool) -> bool {
 
 /// The orders the scenes can be shown in: those the feed has data for.
 fn sort_choices(f: &FeedView) -> Vec<(FeedSort, &'static str)> {
-    let mut sorts = vec![(FeedSort::Feed, "Feed order"), (FeedSort::Title, "Title")];
+    let mut sorts = vec![
+        (FeedSort::Feed, tr!("sort-feed")),
+        (FeedSort::Title, tr!("sort-title")),
+    ];
     if f.any(|s| s.released.or(s.added).is_some()) {
-        sorts.push((FeedSort::Newest, "Newest"));
+        sorts.push((FeedSort::Newest, tr!("sort-newest")));
     }
     if f.any(|s| s.rating.is_some()) {
-        sorts.push((FeedSort::Rating, "Rating"));
+        sorts.push((FeedSort::Rating, tr!("filter-rating")));
     }
-    sorts.extend([(FeedSort::Length, "Length"), (FeedSort::Shuffle, "Shuffle")]);
+    sorts.extend([
+        (FeedSort::Length, tr!("filter-length")),
+        (FeedSort::Shuffle, tr!("sort-shuffle")),
+    ]);
     sorts
 }
 
@@ -965,11 +990,11 @@ fn scene_grid(
     page::scroll_from(ui, top, |ui| {
         if list.is_empty() && !f.loading && f.error.is_none() {
             let (title, body) = if f.order.is_empty() {
-                ("No scenes", "The server lists no scenes here.")
+                (tr!("feed-no-scenes"), tr!("feed-no-scenes-desc"))
             } else {
                 (
-                    "Nothing matches",
-                    "Try another search, or clear the filters.",
+                    tr!("filter-nothing-matches"),
+                    tr!("filter-nothing-matches-desc"),
                 )
             };
             page::empty_state(ui, icons::VIRTUAL_REALITY, title, body, |_| {});
@@ -1098,14 +1123,16 @@ fn details(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut Fe
                         facts.push(page::rating(r));
                     }
                     if scene.favorite && !writable {
-                        facts.push(format!("{}  Favorite", icons::HEART));
+                        facts.push(format!("{}  {}", icons::HEART, tr!("feed-favorite")));
                     }
                     if scene.scripted && v.settings.haptics_enabled {
-                        facts.push(format!("{}  Haptics", icons::WAVEFORM));
+                        facts.push(format!("{}  {}", icons::WAVEFORM, tr!("settings-haptics")));
                     }
                     page::facts(ui, &facts);
                     ui.add_space(10.0);
-                    if widgets::button(ui, Some(icons::PLAY), "Play", Kind::Primary).clicked() {
+                    if widgets::button(ui, Some(icons::PLAY), tr!("player-play"), Kind::Primary)
+                        .clicked()
+                    {
                         play_at = Some(0.0);
                     }
                     ui.horizontal(|ui| {
@@ -1114,9 +1141,9 @@ fn details(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut Fe
                     });
                     if writable {
                         let label = if scene.favorite {
-                            "Favorite"
+                            tr!("feed-favorite")
                         } else {
-                            "Add to favorites"
+                            tr!("feed-add-favorite")
                         };
                         if widgets::chip_icon(ui, Some(icons::HEART), label, scene.favorite)
                             .clicked()
@@ -1140,7 +1167,7 @@ fn details(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut Fe
                         versions.dedup();
                         if !versions.is_empty() {
                             ui.label(
-                                RichText::new(format!("Versions: {}", versions.join(", ")))
+                                RichText::new(tr!("feed-versions", versions = versions.join(", ")))
                                     .font(theme::font(Weight::Regular, 15.0))
                                     .color(theme::TEXT_3),
                             );
@@ -1155,18 +1182,18 @@ fn details(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut Fe
                 ui.add_space(16.0);
             }
             if !scene.actors.is_empty() {
-                widgets::section_label(ui, "Performers");
+                widgets::section_label(ui, tr!("feed-performers"));
                 search = search.take().or(page::pills(ui, &scene.actors));
                 ui.add_space(14.0);
             }
             if !scene.tags.is_empty() {
-                widgets::section_label(ui, "Tags");
+                widgets::section_label(ui, tr!("filter-tags"));
                 search = search.take().or(page::pills(ui, &scene.tags));
                 ui.add_space(14.0);
             }
             let markers = info.as_ref().map(|i| i.markers.as_slice()).unwrap_or(&[]);
             if !markers.is_empty() {
-                widgets::section_label(ui, "Chapters");
+                widgets::section_label(ui, tr!("adjust-chapters"));
                 ui.add_space(2.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
@@ -1177,7 +1204,7 @@ fn details(ui: &mut egui::Ui, v: &mut View, source: &str, name: &str, f: &mut Fe
                             format!("{}  {name}", fmt_time(*t))
                         };
                         if widgets::chip_icon(ui, Some(icons::PLAY), &label, false)
-                            .tip("Play from here")
+                            .tip(tr!("feed-play-from-here"))
                             .clicked()
                         {
                             play_at = Some(*t);

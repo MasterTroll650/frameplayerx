@@ -88,7 +88,11 @@ impl App {
             }
             Cmd::Skip(dir) => {
                 self.apply(Action::SeekRelative(60.0 * dir as f64));
-                self.ui.toast(if dir > 0 { "+1 min" } else { "−1 min" });
+                self.ui.toast(if dir > 0 {
+                    tr!("toast-plus-minute")
+                } else {
+                    tr!("toast-minus-minute")
+                });
                 buzz.push((if dir > 0 { 1 } else { 0 }, 0.2, 14));
             }
             Cmd::Pitch(d) => {
@@ -108,32 +112,20 @@ impl App {
                     let v = (p.player.volume() + d).clamp(0.0, 1.5);
                     self.ui.unmute_volume = None;
                     self.apply(Action::SetVolume(v));
-                    self.ui.toast(format!("Volume {:.0}%", v * 100.0));
+                    let percent = format!("{:.0}", v * 100.0);
+                    self.ui.toast(tr!("toast-volume", percent = percent));
                 }
             }
-            Cmd::ToggleMute => {
-                if let Some(p) = &self.playback {
-                    let vol = p.player.volume();
-                    if vol <= 0.001 {
-                        let v = self.ui.unmute_volume.take().unwrap_or(1.0);
-                        self.apply(Action::SetVolume(v));
-                        self.ui.toast("Sound on");
-                    } else {
-                        self.ui.unmute_volume = Some(vol);
-                        self.apply(Action::SetVolume(0.0));
-                        self.ui.toast("Muted");
-                    }
-                }
-            }
+            Cmd::ToggleMute => self.toggle_mute(),
             Cmd::TogglePassthrough => {
                 if !input.passthrough_available {
-                    self.ui.toast("This headset can't show your room");
+                    self.ui.toast(tr!("toast-no-room"));
                 } else if let Some(f) = self.playback.as_ref().and_then(Playback::mask_toggled) {
                     self.apply(Action::SetFormat(Some(f)));
                     self.ui.toast(if f.alpha_packed {
-                        "Room on: through the video's mask"
+                        tr!("toast-room-mask")
                     } else {
-                        "Room off"
+                        tr!("toast-room-off")
                     });
                 } else {
                     self.apply(Action::TogglePassthrough);
@@ -143,9 +135,9 @@ impl App {
                         .is_none_or(|p| p.format.projection == Projection::Flat);
                     self.ui
                         .toast(match (self.settings.passthrough, flat_or_none) {
-                            (false, _) => "Room off",
-                            (true, true) => "Room on",
-                            (true, false) => "Room on: shows with flat videos",
+                            (false, _) => tr!("toast-room-off"),
+                            (true, true) => tr!("toast-room-on"),
+                            (true, false) => tr!("toast-room-on-flat"),
                         });
                 }
             }
@@ -166,7 +158,8 @@ impl App {
                 if let Some(p) = &mut self.playback {
                     p.settings.height = (p.settings.height + d).clamp(-1.0, 1.0);
                     p.settings_dirty = true;
-                    self.ui.toast(format!("Height {:+.2} m", p.settings.height));
+                    let metres = format!("{:+.2}", p.settings.height);
+                    self.ui.toast(tr!("toast-height", metres = metres));
                 }
             }
             Cmd::Next => self.step_queue(1),
@@ -186,7 +179,7 @@ impl App {
                         p.settings.forward,
                     ) = (d.yaw, d.pitch, d.roll, d.zoom, d.height, d.forward);
                     p.settings_dirty = true;
-                    self.ui.toast("View reset");
+                    self.ui.toast(tr!("toast-view-reset"));
                 }
             }
             Cmd::DragBegin => {
@@ -240,6 +233,23 @@ impl App {
 
     /// Back (B by default), as DeoVR's: closes the innermost thing that is
     /// open.
+    /// Mutes, or turns the sound back on at the volume before.
+    pub(super) fn toggle_mute(&mut self) {
+        let Some(p) = &self.playback else {
+            return;
+        };
+        let vol = p.player.volume();
+        if vol <= 0.001 {
+            let v = self.ui.unmute_volume.take().unwrap_or(1.0);
+            self.apply(Action::SetVolume(v));
+            self.ui.toast(tr!("toast-sound-on"));
+        } else {
+            self.ui.unmute_volume = Some(vol);
+            self.apply(Action::SetVolume(0.0));
+            self.ui.toast(tr!("toast-muted"));
+        }
+    }
+
     pub(super) fn back(&mut self) {
         if self.panels[KEYBOARD].visible {
             if let Some(i) = self.keyboard_target() {
@@ -286,23 +296,24 @@ impl App {
     /// Next/previous video in the list the current one was opened from.
     pub(super) fn step_queue(&mut self, dir: i32) {
         if self.queue.items.is_empty() {
-            self.ui.toast("No other videos in this list");
+            self.ui.toast(tr!("player-no-other-videos"));
             return;
         }
         let n = self.queue.items.len() as i32;
         let next = self.queue.pos as i32 + dir;
         if !(0..n).contains(&next) {
             self.ui.toast(if dir > 0 {
-                "Last video in this list"
+                tr!("player-last-video")
             } else {
-                "First video in this list"
+                tr!("player-first-video")
             });
             return;
         }
         let Some(req) = self.queue.jump(next as usize).cloned() else {
             return;
         };
-        self.ui.toast(format!("{} of {}", next + 1, n));
+        let (at, of) = (next + 1, n);
+        self.ui.toast(tr!("toast-queue-position", at = at, of = of));
         self.open_request(req);
     }
 
@@ -311,7 +322,7 @@ impl App {
     fn step_chapter(&mut self, dir: i32) {
         let Some(p) = &self.playback else { return };
         if p.markers.is_empty() {
-            self.ui.toast("No chapters in this video");
+            self.ui.toast(tr!("toast-no-chapters"));
             return;
         }
         let now = p.player.position();
@@ -330,9 +341,9 @@ impl App {
             }
             None if dir < 0 => {
                 self.apply(Action::Seek(0.0));
-                self.ui.toast("Beginning");
+                self.ui.toast(tr!("toast-beginning"));
             }
-            None => self.ui.toast("Last chapter"),
+            None => self.ui.toast(tr!("toast-last-chapter")),
         }
     }
 
@@ -352,7 +363,7 @@ impl App {
             &p.subtitle_files,
             &name,
         ) else {
-            self.ui.toast("No subtitles in this video");
+            self.ui.toast(tr!("toast-no-subtitles"));
             return;
         };
         let title = crate::subtitles::rows(language, info, &p.subtitle_files)
@@ -364,8 +375,8 @@ impl App {
         }
         self.apply(Action::SelectSubtitles(pick));
         self.ui.toast(match title {
-            Some(t) => format!("Subtitles: {t}"),
-            None => "Subtitles off".to_string(),
+            Some(t) => tr!("toast-subtitles", title = t),
+            None => tr!("toast-subtitles-off").to_string(),
         });
     }
 }

@@ -145,11 +145,11 @@ impl Grid {
         self.on()
             .into_iter()
             .map(|o| match o {
-                On::Genre(g) => format!("Genre · {g}"),
-                On::Decade(d) => format!("{d}s"),
-                On::Width(w) => format!("{} and up", width_label(w)),
-                On::Studio(s) => format!("Studio · {s}"),
-                On::Tag(t) => format!("Tag · {t}"),
+                On::Genre(g) => tr!("filter-on-genre", genre = g),
+                On::Decade(d) => tr!("filter-decade", decade = d),
+                On::Width(w) => tr!("filter-width-and-up", width = width_label(w)),
+                On::Studio(s) => tr!("filter-on-studio", studio = s),
+                On::Tag(t) => tr!("filter-on-tag", tag = t),
             })
             .collect()
     }
@@ -329,7 +329,7 @@ pub fn run(src: &MediaBrowserSource, load: &Load) -> fp_sources::Result<Loaded> 
             order: None,
             by_id: false,
         },
-        Load::Facets(q) => Loaded::Facets(src.facets(q).map_err(|e| e.to_string())),
+        Load::Facets(q) => Loaded::Facets(src.facets(q).map_err(|e| super::errors::source(&e))),
         Load::Series { id, season } => {
             let series = Box::new(src.item(id)?);
             let seasons = src.seasons(id)?;
@@ -596,10 +596,10 @@ pub fn page(
     let mut refresh = false;
     let back = page::header(ui, name, Some(&subtitle), |ui| {
         refresh = widgets::icon_button(ui, icons::ARROWS_CLOCKWISE, 44.0, false)
-            .tip("Refresh")
+            .tip(tr!("feed-refresh"))
             .clicked();
         if let Body::Home { search, typed, .. } | Body::Search { search, typed, .. } = &mut p.body
-            && page::search_field(ui, search, "Search this server", 220.0)
+            && page::search_field(ui, search, tr!("jf-search-server"), 220.0)
         {
             *typed = Some(Instant::now());
         }
@@ -761,7 +761,8 @@ fn follow(v: &mut View, source: &str, j: &mut JellyfinView, go: Go) {
                 limit: PAGE,
                 ..MbQuery::tagged(&tag)
             };
-            let body = Body::Grid(Box::new(Grid::new(format!("Tagged {tag}"), query.clone())));
+            let title = tr!("jf-tagged", tag = tag.as_str());
+            let body = Body::Grid(Box::new(Grid::new(title, query.clone())));
             ask(v, seq, Load::Grid(query));
             j.open(seq, body);
         }
@@ -819,7 +820,7 @@ fn trail(pages: &[Page]) -> String {
         .iter()
         .filter_map(|p| match &p.body {
             Body::Home { .. } => None,
-            Body::Search { asked, .. } => Some(format!("Search \"{asked}\"")),
+            Body::Search { asked, .. } => Some(tr!("jf-trail-search", text = asked.as_str())),
             Body::Grid(g) => Some(g.title.clone()),
             Body::Series { series, .. } => Some(series.name.clone()),
             Body::Item { item } => Some(item.name.clone()),
@@ -874,13 +875,13 @@ fn card_facts(item: &MbItem) -> String {
                 f.push(y.to_string());
             }
             match item.unplayed {
-                Some(n) if n > 0 => f.push(format!("{n} unwatched")),
+                Some(n) if n > 0 => f.push(tr!("jf-unwatched", count = n)),
                 _ => {}
             }
         }
         MbKind::BoxSet | MbKind::Folder | MbKind::Library => {
             if let Some(n) = item.child_count {
-                f.push(page::plural(n as usize, "item", "items"));
+                f.push(tr!("count-items", count = (n as usize)));
             }
         }
         _ => {
@@ -982,19 +983,19 @@ fn item_row(
 
 fn home_rows(ui: &mut egui::Ui, v: &mut View, h: &MbHome) -> Option<Go> {
     ui.add_space(6.0);
-    let mut go = item_row(ui, v, "My media", &h.libraries, true);
-    go = go.or(item_row(ui, v, "Continue watching", &h.resume, true));
-    go = go.or(item_row(ui, v, "Next up", &h.next_up, true));
+    let mut go = item_row(ui, v, tr!("jf-my-media"), &h.libraries, true);
+    go = go.or(item_row(ui, v, tr!("jf-continue"), &h.resume, true));
+    go = go.or(item_row(ui, v, tr!("jf-next-up"), &h.next_up, true));
     for (library, items) in &h.latest {
-        let title = format!("Latest in {}", library.name);
+        let title = tr!("jf-latest-in", library = library.name.as_str());
         go = go.or(item_row(ui, v, &title, items, false));
     }
     if h.libraries.is_empty() {
         page::empty_state(
             ui,
             icons::MONITOR_PLAY,
-            "No video libraries",
-            "This account sees no film, TV or video libraries on the server.",
+            tr!("jf-no-libraries"),
+            tr!("jf-no-libraries-desc"),
             |_| {},
         );
     }
@@ -1032,10 +1033,8 @@ fn search_results(
         page::empty_state(
             ui,
             icons::MAGNIFYING_GLASS,
-            "Nothing found",
-            &format!(
-                "No film, series, collection, video or person on this server is called \"{asked}\"."
-            ),
+            tr!("jf-nothing-found"),
+            &tr!("jf-nothing-found-desc", text = asked),
             |_| {},
         );
     }
@@ -1048,7 +1047,7 @@ fn grid(ui: &mut egui::Ui, v: &mut View, g: &mut Grid, loading: bool) -> Option<
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        if page::search_field(ui, &mut g.query.search, "Search", 220.0) {
+        if page::search_field(ui, &mut g.query.search, tr!("jf-search"), 220.0) {
             g.typed = Some(Instant::now());
         }
         if page::filters_button(ui, g.on().len()).clicked() {
@@ -1056,10 +1055,10 @@ fn grid(ui: &mut egui::Ui, v: &mut View, g: &mut Grid, loading: bool) -> Option<
         }
         ui.add_space(10.0);
         for (f, label) in [
-            (MbFilter::All, "All"),
-            (MbFilter::Unplayed, "Unwatched"),
-            (MbFilter::Resumable, "In progress"),
-            (MbFilter::Favorites, "Favorites"),
+            (MbFilter::All, tr!("filter-all")),
+            (MbFilter::Unplayed, tr!("filter-unwatched")),
+            (MbFilter::Resumable, tr!("filter-in-progress")),
+            (MbFilter::Favorites, tr!("filter-favorites")),
         ] {
             if widgets::chip(ui, label, g.query.filter == f).clicked() && g.query.filter != f {
                 g.query.filter = f;
@@ -1072,13 +1071,13 @@ fn grid(ui: &mut egui::Ui, v: &mut View, g: &mut Grid, loading: bool) -> Option<
         if page::sort_bar(
             ui,
             &[
-                (MbSort::Name, "Title"),
-                (MbSort::Added, "Date added"),
-                (MbSort::Released, "Release date"),
-                (MbSort::Rating, "Rating"),
-                (MbSort::Runtime, "Length"),
-                (MbSort::LastWatched, "Last watched"),
-                (MbSort::Random, "Shuffle"),
+                (MbSort::Name, tr!("sort-title")),
+                (MbSort::Added, tr!("sort-date-added")),
+                (MbSort::Released, tr!("sort-release-date")),
+                (MbSort::Rating, tr!("filter-rating")),
+                (MbSort::Runtime, tr!("filter-length")),
+                (MbSort::LastWatched, tr!("sort-last-watched")),
+                (MbSort::Random, tr!("sort-shuffle")),
             ],
             &mut g.query.sort,
         ) {
@@ -1091,10 +1090,10 @@ fn grid(ui: &mut egui::Ui, v: &mut View, g: &mut Grid, loading: bool) -> Option<
             page::direction(
                 ui,
                 &mut g.query.descending,
-                ["Largest first", "Smallest first"],
+                [tr!("sort-largest-first"), tr!("sort-smallest-first")],
             )
         };
-        page::count_label(ui, &page::plural(g.total, "item", "items"));
+        page::count_label(ui, &tr!("count-items", count = g.total));
     });
     match page::active_filters(ui, &g.labels()) {
         Some(page::FilterEdit::Remove(i)) => {
@@ -1123,7 +1122,7 @@ fn grid(ui: &mut egui::Ui, v: &mut View, g: &mut Grid, loading: bool) -> Option<
             go = Some(Go::Facets(g.query.clone()));
         }
         let mut open = true;
-        let count = page::plural(g.total, "item", "items");
+        let count = tr!("count-items", count = g.total);
         let clear = page::filter_drawer(ui, &mut open, &count, |ui| changed |= drawer(ui, g));
         g.filters_open = open;
         if clear {
@@ -1174,7 +1173,7 @@ fn drawer(ui: &mut egui::Ui, g: &mut Grid) -> bool {
                 _ => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(RichText::new("Asking the server…").color(theme::TEXT_2));
+                        ui.label(RichText::new(tr!("jf-asking")).color(theme::TEXT_2));
                     });
                 }
             }
@@ -1209,13 +1208,19 @@ fn drawer(ui: &mut egui::Ui, g: &mut Grid) -> bool {
         picked.is_some()
     };
     let genres: Vec<&str> = facets.genres.iter().map(String::as_str).collect();
-    changed |= list(ui, "Genres", "Find a genre", &genres, &mut q.genres);
+    changed |= list(
+        ui,
+        tr!("filter-genres"),
+        tr!("filter-find-genre"),
+        &genres,
+        &mut q.genres,
+    );
     let decades = decades(&facets.years);
     if !decades.is_empty() {
         let on = decades_on(&q.years);
-        page::filter_section(ui, "Released", |ui| {
+        page::filter_section(ui, tr!("filter-released"), |ui| {
             for d in decades {
-                if page::filter_chip(ui, &format!("{d}s"), None, on.contains(&d)) {
+                if page::filter_chip(ui, &tr!("filter-decade", decade = d), None, on.contains(&d)) {
                     if on.contains(&d) {
                         q.years.retain(|y| !(d..d + 10).contains(y));
                     } else {
@@ -1232,7 +1237,7 @@ fn drawer(ui: &mut egui::Ui, g: &mut Grid) -> bool {
             .iter()
             .any(|t| matches!(t.as_str(), "Movie" | "Video" | "MusicVideo" | "Episode"));
     if videos {
-        page::filter_section(ui, "Resolution", |ui| {
+        page::filter_section(ui, tr!("adjust-resolution"), |ui| {
             for (w, label) in RESOLUTIONS {
                 let on = q.min_width == Some(w);
                 if page::filter_chip(ui, label, None, on) {
@@ -1243,7 +1248,13 @@ fn drawer(ui: &mut egui::Ui, g: &mut Grid) -> bool {
         });
     }
     let studios: Vec<&str> = facets.studios.iter().map(String::as_str).collect();
-    changed |= list(ui, "Studios", "Find a studio", &studios, &mut q.studios);
+    changed |= list(
+        ui,
+        tr!("filter-studios"),
+        tr!("filter-find-studio"),
+        &studios,
+        &mut q.studios,
+    );
     // The page's own tag is no choice.
     let tags: Vec<&str> = facets
         .tags
@@ -1251,12 +1262,15 @@ fn drawer(ui: &mut egui::Ui, g: &mut Grid) -> bool {
         .filter(|t| !g.base_tags.contains(t))
         .map(String::as_str)
         .collect();
-    changed |= list(ui, "Tags", "Find a tag", &tags, &mut q.tags);
+    changed |= list(
+        ui,
+        tr!("filter-tags"),
+        tr!("filter-find-tag"),
+        &tags,
+        &mut q.tags,
+    );
     if facets.genres.is_empty() && facets.studios.is_empty() && facets.tags.is_empty() && !videos {
-        ui.label(
-            RichText::new("This library has no genres, studios or tags to filter by.")
-                .color(theme::TEXT_2),
-        );
+        ui.label(RichText::new(tr!("jf-no-filters")).color(theme::TEXT_2));
     }
     g.facets = Facets::Got(facets);
     changed
@@ -1283,7 +1297,7 @@ fn item_facts(item: &MbItem) -> Vec<String> {
         f.push(b);
     }
     if item.played {
-        f.push("Watched".into());
+        f.push(tr!("jf-watched").into());
     }
     f
 }
@@ -1292,14 +1306,14 @@ fn item_facts(item: &MbItem) -> Vec<String> {
 fn mark_chips(ui: &mut egui::Ui, item: &MbItem) -> Option<Go> {
     let mut go = None;
     let heart = if item.favorite {
-        "Favorite"
+        tr!("feed-favorite")
     } else {
-        "Add to favorites"
+        tr!("feed-add-favorite")
     };
     if widgets::chip_icon(ui, Some(icons::HEART), heart, item.favorite).clicked() {
         go = Some(Go::Mark(item.id.clone(), Mark::Favorite, !item.favorite));
     }
-    if widgets::chip_icon(ui, Some(icons::CHECK), "Watched", item.played).clicked() {
+    if widgets::chip_icon(ui, Some(icons::CHECK), tr!("jf-watched"), item.played).clicked() {
         go = Some(Go::Mark(item.id.clone(), Mark::Played, !item.played));
     }
     go
@@ -1344,7 +1358,7 @@ fn series_page(
         );
         let mut f = item_facts(series);
         if !seasons.is_empty() {
-            f.push(page::plural(seasons.len(), "season", "seasons"));
+            f.push(tr!("count-seasons", count = seasons.len()));
         }
         page::facts(inner, &f);
         if let Some(o) = &series.overview {
@@ -1357,9 +1371,9 @@ fn series_page(
             if let Some(n) = next_up {
                 let ep = n.episode_label().unwrap_or_default();
                 let label = if n.position > 1.0 {
-                    format!("Resume {ep}")
+                    tr!("jf-resume-episode", episode = ep.as_str())
                 } else {
-                    format!("Play {ep}")
+                    tr!("jf-play-episode", episode = ep.as_str())
                 };
                 if widgets::button(ui, Some(icons::PLAY), &label, Kind::Primary).clicked() {
                     // The next episode, with the rest of its season after it
@@ -1481,7 +1495,8 @@ fn episode_row(ui: &mut egui::Ui, v: &mut View, e: &MbItem) -> (bool, bool) {
     if e.position > 1.0
         && let Some(d) = e.runtime
     {
-        facts.push(format!("{} left", fmt_time(d - e.position)));
+        let left = fmt_time(d - e.position);
+        facts.push(tr!("jf-time-left", time = left));
     }
     if let Some(b) = vr_badge(e) {
         facts.push(b);
@@ -1533,7 +1548,7 @@ fn episode_row(ui: &mut egui::Ui, v: &mut View, e: &MbItem) -> (bool, bool) {
         theme::icon(24.0),
         theme::TEXT_2.lerp_to_gamma(Color32::WHITE, m.max(t * 0.6)),
     );
-    let more_clicked = more_resp.tip("Details").clicked();
+    let more_clicked = more_resp.tip(tr!("jf-details")).clicked();
     (resp.clicked() && !more_clicked, more_clicked)
 }
 
@@ -1565,9 +1580,9 @@ fn details(ui: &mut egui::Ui, v: &mut View, item: &mut MbItem) -> Option<Go> {
             ui.spacing_mut().item_spacing.x = 12.0;
             let resume = item.position > 1.0;
             let label = if resume {
-                format!("Resume from {}", fmt_time(item.position))
+                tr!("jf-resume-from", time = fmt_time(item.position))
             } else {
-                "Play".to_string()
+                tr!("player-play").to_string()
             };
             if widgets::button(ui, Some(icons::PLAY), &label, Kind::Primary).clicked() {
                 go = Some(Go::Play(vec![item.clone()], 0, false));
@@ -1576,7 +1591,7 @@ fn details(ui: &mut egui::Ui, v: &mut View, item: &mut MbItem) -> Option<Go> {
                 && widgets::button(
                     ui,
                     Some(icons::ARROW_COUNTER_CLOCKWISE),
-                    "Start over",
+                    tr!("jf-start-over"),
                     Kind::Secondary,
                 )
                 .clicked()
@@ -1594,13 +1609,13 @@ fn details(ui: &mut egui::Ui, v: &mut View, item: &mut MbItem) -> Option<Go> {
                 let button = |ui: &mut egui::Ui, icon, label| {
                     widgets::button(ui, Some(icon), label, Kind::Secondary).clicked()
                 };
-                if button(ui, icons::SKIP_FORWARD, "Play next") {
+                if button(ui, icons::SKIP_FORWARD, tr!("jf-play-next")) {
                     go = Some(Go::Queue(item.clone(), true));
                 }
-                if button(ui, icons::QUEUE, "Add to queue") {
+                if button(ui, icons::QUEUE, tr!("jf-add-to-queue")) {
                     go = Some(Go::Queue(item.clone(), false));
                 }
-                if button(ui, icons::PLAYLIST, "Add to playlist") {
+                if button(ui, icons::PLAYLIST, tr!("jf-add-to-playlist")) {
                     go = Some(Go::AddToPlaylist(item.clone()));
                 }
             });
@@ -1611,7 +1626,8 @@ fn details(ui: &mut egui::Ui, v: &mut View, item: &mut MbItem) -> Option<Go> {
             go = go.take().or(mark_chips(ui, item));
             if item.kind == MbKind::Episode
                 && let Some(id) = &item.series_id
-                && widgets::chip_icon(ui, Some(icons::MONITOR_PLAY), "Series", false).clicked()
+                && widgets::chip_icon(ui, Some(icons::MONITOR_PLAY), tr!("jf-series"), false)
+                    .clicked()
             {
                 go = Some(Go::Open(MbItem {
                     id: id.clone(),
@@ -1643,14 +1659,14 @@ fn details(ui: &mut egui::Ui, v: &mut View, item: &mut MbItem) -> Option<Go> {
         ui.label(RichText::new(text).color(theme::TEXT_2));
         ui.add_space(10.0);
     };
-    line(ui, "Genres", item.genres.join("  ·  "));
+    line(ui, tr!("filter-genres"), item.genres.join("  ·  "));
     let (cast, crew): (Vec<_>, Vec<_>) = item
         .people
         .iter()
         .partition(|(_, role)| !matches!(role.as_str(), "Director" | "Writer" | "Producer"));
     line(
         ui,
-        "Cast",
+        tr!("jf-cast"),
         cast.iter()
             .take(12)
             .map(|(n, r)| {
@@ -1665,15 +1681,15 @@ fn details(ui: &mut egui::Ui, v: &mut View, item: &mut MbItem) -> Option<Go> {
     );
     line(
         ui,
-        "Crew",
+        tr!("jf-crew"),
         crew.iter()
             .map(|(n, r)| format!("{n} ({r})"))
             .collect::<Vec<_>>()
             .join(",  "),
     );
-    line(ui, "Studios", item.studios.join("  ·  "));
+    line(ui, tr!("filter-studios"), item.studios.join("  ·  "));
     if !item.tags.is_empty() {
-        widgets::section_label(ui, "Tags");
+        widgets::section_label(ui, tr!("filter-tags"));
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
             for t in &item.tags {
@@ -1691,11 +1707,11 @@ fn details(ui: &mut egui::Ui, v: &mut View, item: &mut MbItem) -> Option<Go> {
 /// director's cut); the one clicked, to play it from wherever it is opened.
 fn version_chips(ui: &mut egui::Ui, item: &MbItem) -> Option<Option<String>> {
     let mut chosen = None;
-    widgets::section_label(ui, "Version");
+    widgets::section_label(ui, tr!("jf-version"));
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
-        if widgets::chip(ui, "Automatic", item.version.is_none())
-            .tip("The best that fits the server's maximum height")
+        if widgets::chip(ui, tr!("jf-version-automatic"), item.version.is_none())
+            .tip(tr!("jf-version-automatic-tip"))
             .clicked()
         {
             chosen = Some(None);

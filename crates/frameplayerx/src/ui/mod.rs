@@ -5,6 +5,7 @@
 pub mod controller_map;
 pub mod crash;
 pub mod depth;
+pub mod errors;
 pub mod feeds;
 pub mod folders;
 pub mod icons;
@@ -46,21 +47,129 @@ pub fn fmt_time(t: f64) -> String {
 pub fn fmt_size(bytes: u64) -> String {
     let b = bytes as f64;
     if b >= 1e9 {
-        format!("{:.1} GB", b / 1e9)
+        tr!("size-gb", n = format!("{:.1}", b / 1e9))
     } else if b >= 1e6 {
-        format!("{:.0} MB", b / 1e6)
+        tr!("size-mb", n = format!("{:.0}", b / 1e6))
     } else {
-        format!("{:.0} kB", b / 1e3)
+        tr!("size-kb", n = format!("{:.0}", b / 1e3))
     }
+}
+
+/// A video format, as the format panels name it ("180° side by side").
+pub fn format_label(f: &VideoFormat) -> String {
+    use fp_core::format::{Projection, StereoLayout};
+    let projection = match f.projection {
+        Projection::Flat => tr!("format-flat").to_string(),
+        Projection::Equirect { h_fov, .. } => format!("{}°", h_fov.round()),
+        Projection::Fisheye { fov } => {
+            let fov = format!("{}", fov.round());
+            tr!("format-short-fisheye", fov = fov)
+        }
+        Projection::Eac { h_fov } => format!("EAC {}°", h_fov.round()),
+    };
+    let stereo = match f.stereo {
+        StereoLayout::Mono => tr!("format-mono"),
+        StereoLayout::SideBySide => tr!("format-sbs"),
+        StereoLayout::HalfSideBySide => tr!("format-half-sbs"),
+        StereoLayout::TopBottom => tr!("format-tb"),
+        StereoLayout::HalfTopBottom => tr!("format-half-tb"),
+    };
+    tr!("format-label", projection = projection, stereo = stereo)
+}
+
+/// Where a video's format came from.
+pub fn evidence_label(e: fp_core::format::Evidence) -> &'static str {
+    use fp_core::format::Evidence;
+    match e {
+        Evidence::User => tr!("evidence-user"),
+        Evidence::Metadata => tr!("evidence-metadata"),
+        Evidence::FileName => tr!("evidence-file-name"),
+        Evidence::AspectRatio => tr!("evidence-shape"),
+        Evidence::Default => tr!("evidence-default"),
+    }
+}
+
+/// A language's name in the interface's language, by its code (see
+/// [`fp_core::language::LANGUAGES`]).
+pub fn language_name(code: &str) -> Option<String> {
+    Some(
+        match code {
+            "sq" => tr!("language-sq"),
+            "ar" => tr!("language-ar"),
+            "hy" => tr!("language-hy"),
+            "eu" => tr!("language-eu"),
+            "bn" => tr!("language-bn"),
+            "bs" => tr!("language-bs"),
+            "bg" => tr!("language-bg"),
+            "my" => tr!("language-my"),
+            "ca" => tr!("language-ca"),
+            "hr" => tr!("language-hr"),
+            "cs" => tr!("language-cs"),
+            "da" => tr!("language-da"),
+            "nl" => tr!("language-nl"),
+            "en" => tr!("language-en"),
+            "et" => tr!("language-et"),
+            "tl" => tr!("language-tl"),
+            "fi" => tr!("language-fi"),
+            "fr" => tr!("language-fr"),
+            "gl" => tr!("language-gl"),
+            "ka" => tr!("language-ka"),
+            "de" => tr!("language-de"),
+            "el" => tr!("language-el"),
+            "gu" => tr!("language-gu"),
+            "he" => tr!("language-he"),
+            "hi" => tr!("language-hi"),
+            "hu" => tr!("language-hu"),
+            "is" => tr!("language-is"),
+            "id" => tr!("language-id"),
+            "ga" => tr!("language-ga"),
+            "it" => tr!("language-it"),
+            "ja" => tr!("language-ja"),
+            "kn" => tr!("language-kn"),
+            "kk" => tr!("language-kk"),
+            "km" => tr!("language-km"),
+            "ko" => tr!("language-ko"),
+            "lo" => tr!("language-lo"),
+            "lv" => tr!("language-lv"),
+            "lt" => tr!("language-lt"),
+            "mk" => tr!("language-mk"),
+            "ms" => tr!("language-ms"),
+            "ml" => tr!("language-ml"),
+            "mr" => tr!("language-mr"),
+            "mn" => tr!("language-mn"),
+            "ne" => tr!("language-ne"),
+            "fa" => tr!("language-fa"),
+            "pl" => tr!("language-pl"),
+            "pt" => tr!("language-pt"),
+            "pa" => tr!("language-pa"),
+            "ro" => tr!("language-ro"),
+            "ru" => tr!("language-ru"),
+            "sr" => tr!("language-sr"),
+            "si" => tr!("language-si"),
+            "sk" => tr!("language-sk"),
+            "sl" => tr!("language-sl"),
+            "es" => tr!("language-es"),
+            "sw" => tr!("language-sw"),
+            "sv" => tr!("language-sv"),
+            "ta" => tr!("language-ta"),
+            "te" => tr!("language-te"),
+            "th" => tr!("language-th"),
+            "tr" => tr!("language-tr"),
+            "uk" => tr!("language-uk"),
+            "ur" => tr!("language-ur"),
+            "uz" => tr!("language-uz"),
+            "vi" => tr!("language-vi"),
+            "cy" => tr!("language-cy"),
+            _ => return None,
+        }
+        .to_string(),
+    )
 }
 
 /// A Unix time as a short date ("12 Oct 2026").
 pub fn fmt_date(unix: i64) -> String {
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
     let (y, m, d) = fp_sources::timeutil::civil_from_days(unix.div_euclid(86_400));
-    format!("{d} {} {y}", MONTHS[(m - 1) as usize])
+    tr!("date-short", day = d, month = m, year = y)
 }
 
 /// Something the UI asks the app to do.
@@ -219,9 +328,15 @@ pub enum Action {
     AddDevice(HapticDeviceConfig),
     RemoveDevice(usize),
     ReconnectDevices,
+    /// Unpairs every phone from the web remote.
     RegenerateToken,
+    /// Pairing again after wrong codes stopped it.
+    NewPairingCode,
     CheckUpdates,
     InstallUpdate,
+    /// Opens a web page (an address without `https://`) in Steam's
+    /// browser.
+    OpenWebPage(&'static str),
     /// Send the crash report the start offered, or don't.
     SendCrashReport,
     DismissCrashReport,
@@ -593,6 +708,8 @@ pub struct UiState {
     pub remap_grip: bool,
     /// The subtitle languages are listed in Settings › Sound and subtitles.
     pub languages_open: bool,
+    /// The interface's languages are listed in Settings › General.
+    pub interface_languages_open: bool,
     pub history: LibraryGrid,
     /// "Clear history" was pressed once: pressing again within a few
     /// seconds clears it.
@@ -667,6 +784,7 @@ impl Default for UiState {
             remap_open: None,
             remap_grip: false,
             languages_open: false,
+            interface_languages_open: false,
             history: LibraryGrid::history(),
             clear_armed: None,
             home: None,

@@ -13,6 +13,7 @@ use super::widgets;
 use super::{RemapSlot, View};
 use crate::bindings::{Axis, AxisAction, Button, ButtonAction, HandBindings, LEFT, RIGHT};
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Vec2};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// The bumper band's colour: the controllers' light grey.
@@ -36,7 +37,9 @@ const LABEL_W: f32 = 170.0;
 const MIN_RADIUS: f32 = 54.0;
 const GAP: f32 = 14.0;
 /// A button with the grip held that does what it does alone.
-const SAME: &str = "Same";
+fn same() -> &'static str {
+    tr!("controller-same")
+}
 
 /// A remappable place on the drawing.
 #[derive(Clone, Copy)]
@@ -162,7 +165,7 @@ impl Spot {
     fn lines(self, map: &HandBindings, grip: bool) -> Vec<String> {
         let button = |b: Button| match (grip, map.grip.button(b)) {
             (false, _) => map.button(b).short_label(),
-            (true, ButtonAction::Nothing) => SAME,
+            (true, ButtonAction::Nothing) => same(),
             (true, a) => a.short_label(),
         };
         match self {
@@ -179,7 +182,7 @@ impl Spot {
                 vec![
                     format!("←→ {}", map.axis(x).short_label()),
                     format!("↑↓ {}", map.axis(y).short_label()),
-                    format!("Press {}", button(Button::StickClick)),
+                    tr!("controller-press", action = button(Button::StickClick)),
                 ]
             }
         }
@@ -188,28 +191,38 @@ impl Spot {
 
 /// A label line for an input left as it is: dimmed.
 fn unchanged(line: &str) -> bool {
-    line.ends_with(SAME) || line.ends_with(ButtonAction::Nothing.short_label())
+    line.ends_with(same()) || line.ends_with(ButtonAction::Nothing.short_label())
+}
+
+/// A label's lines laid out, each wrapped to fit [`LABEL_W`]: a longer
+/// language's line takes two rows rather than being cut off.
+fn label_lines(p: &egui::Painter, lines: &[String]) -> Vec<Arc<egui::Galley>> {
+    let font = theme::font(Weight::Medium, 14.0);
+    lines
+        .iter()
+        .map(|s| {
+            let color = if unchanged(s) {
+                theme::TEXT_3
+            } else {
+                theme::TEXT
+            };
+            p.layout(s.clone(), font.clone(), color, LABEL_W - 20.0)
+        })
+        .collect()
 }
 
 /// Width of a label holding `lines`.
-fn label_width(ui: &egui::Ui, lines: &[String]) -> f32 {
-    let font = theme::font(Weight::Medium, 14.0);
-    let widest = lines
-        .iter()
-        .map(|s| {
-            ui.painter()
-                .layout_no_wrap(s.clone(), font.clone(), theme::TEXT)
-                .size()
-                .x
-        })
-        .fold(0.0, f32::max);
-    widest.min(LABEL_W - 20.0) + 20.0
+fn label_width(lines: &[Arc<egui::Galley>]) -> f32 {
+    lines.iter().map(|g| g.size().x).fold(0.0, f32::max) + 20.0
 }
 
 /// Both controllers, then the chosen input's choices.
 pub fn controller_map(ui: &mut egui::Ui, v: &mut View) {
     ui.horizontal(|ui| {
-        for (grip, label) in [(false, "Press"), (true, "Grip + press")] {
+        for (grip, label) in [
+            (false, tr!("controller-press-view")),
+            (true, tr!("controller-grip-view")),
+        ] {
             if widgets::chip(ui, label, v.state.remap_grip == grip).clicked() {
                 v.state.remap_grip = grip;
                 v.state.remap_open = v.state.remap_open.map(|s| s.with_grip(grip));
@@ -225,7 +238,10 @@ pub fn controller_map(ui: &mut egui::Ui, v: &mut View) {
         let mut w = [0.0_f32; 2];
         for spot in spots(hand) {
             let col = (spot.side(hand) >= 0.0) as usize;
-            w[col] = w[col].max(label_width(ui, &spot.lines(map, grip)));
+            w[col] = w[col].max(label_width(&label_lines(
+                ui.painter(),
+                &spot.lines(map, grip),
+            )));
         }
         w
     });
@@ -264,7 +280,11 @@ pub fn controller_map(ui: &mut egui::Ui, v: &mut View) {
         ui.painter().text(
             Pos2::new(centre.x, top + h),
             Align2::CENTER_BOTTOM,
-            if hand == RIGHT { "Right" } else { "Left" },
+            if hand == RIGHT {
+                tr!("controller-right")
+            } else {
+                tr!("controller-left")
+            },
             theme::font(Weight::SemiBold, 16.0),
             theme::TEXT_2,
         );
@@ -336,21 +356,9 @@ fn draw_hand(ui: &mut egui::Ui, v: &mut View, hand: usize, c: Pos2, r: f32, t: f
         mine.sort_by(|a, b| a.1.y.total_cmp(&b.1.y));
         let mut next_top = f32::MIN;
         for (_, pos, lines, lit) in mine {
-            let font = theme::font(Weight::Medium, 14.0);
-            let galleys: Vec<_> = lines
-                .iter()
-                .map(|s| {
-                    let color = if unchanged(s) {
-                        theme::TEXT_3
-                    } else {
-                        theme::TEXT
-                    };
-                    p.layout_no_wrap(s.clone(), font.clone(), color)
-                })
-                .collect();
-            let w = label_width(ui, lines);
-            let lh = galleys.first().map(|g| g.size().y).unwrap_or(18.0);
-            let hgt = lh * galleys.len() as f32 + 12.0;
+            let galleys = label_lines(&p, lines);
+            let w = label_width(&galleys);
+            let hgt = galleys.iter().map(|g| g.size().y).sum::<f32>() + 12.0;
             let top = (pos.y - hgt / 2.0).max(next_top);
             next_top = top + hgt + 6.0;
             let x = if col > 0.0 {
@@ -382,9 +390,10 @@ fn draw_hand(ui: &mut egui::Ui, v: &mut View, hand: usize, c: Pos2, r: f32, t: f
             );
             let mut y = label.top() + 6.0;
             for g in galleys {
+                let row = g.size().y;
                 p.with_clip_rect(label)
                     .galley(Pos2::new(label.left() + 10.0, y), g, theme::TEXT);
-                y += lh;
+                y += row;
             }
         }
     }
@@ -487,11 +496,9 @@ fn chooser(ui: &mut egui::Ui, v: &mut View) {
     let Some(open) = v.state.remap_open else {
         ui.label(
             egui::RichText::new(if v.state.remap_grip {
-                "With a controller's grip held, its buttons and thumbstick do this instead \
-                 (Same: what the button does alone). Point at one and pull the trigger to \
-                 change it."
+                tr!("controller-grip-hint")
             } else {
-                "Point at a glowing button and pull the trigger to change what it does."
+                tr!("controller-hint")
             })
             .font(theme::font(Weight::Regular, 15.0))
             .color(theme::TEXT_3),
@@ -502,7 +509,11 @@ fn chooser(ui: &mut egui::Ui, v: &mut View) {
         RemapSlot::Button(h, b) | RemapSlot::Grip(h, b) => (h, Some(b)),
         RemapSlot::Axis(h, _) => (h, None),
     };
-    let hand_name = if hand == RIGHT { "Right" } else { "Left" };
+    let hand_name = if hand == RIGHT {
+        tr!("controller-right")
+    } else {
+        tr!("controller-left")
+    };
     widgets::card(ui, |ui| {
         ui.set_width(ui.available_width());
         egui::Frame::new()
@@ -510,10 +521,15 @@ fn chooser(ui: &mut egui::Ui, v: &mut View) {
             .show(ui, |ui| {
                 let stick = button.is_none_or(|b| b == Button::StickClick);
                 let grip = open.with_grip(true) == open;
-                let held = if grip { "Grip + " } else { "" };
-                let title = match button {
-                    Some(b) if !stick => format!("{hand_name} · {held}{}", b.label(hand)),
-                    _ => format!("{hand_name} · {held}Thumbstick"),
+                let thumbstick = tr!("controller-thumbstick");
+                let input = match button {
+                    Some(b) if !stick => b.label(hand),
+                    _ => thumbstick,
+                };
+                let title = if grip {
+                    tr!("controller-title-grip", hand = hand_name, input = input)
+                } else {
+                    tr!("controller-title", hand = hand_name, input = input)
                 };
                 ui.label(
                     egui::RichText::new(title)
@@ -524,9 +540,18 @@ fn chooser(ui: &mut egui::Ui, v: &mut View) {
                 if stick {
                     // Which part of the stick.
                     let parts = [
-                        (RemapSlot::Axis(hand, Axis::StickX), "←→  Left / right"),
-                        (RemapSlot::Axis(hand, Axis::StickY), "↑↓  Up / down"),
-                        (RemapSlot::Button(hand, Button::StickClick), "Press"),
+                        (
+                            RemapSlot::Axis(hand, Axis::StickX),
+                            tr!("controller-stick-x"),
+                        ),
+                        (
+                            RemapSlot::Axis(hand, Axis::StickY),
+                            tr!("controller-stick-y"),
+                        ),
+                        (
+                            RemapSlot::Button(hand, Button::StickClick),
+                            tr!("controller-press-view"),
+                        ),
                     ];
                     ui.horizontal_wrapped(|ui| {
                         for (slot, label) in parts {
@@ -554,7 +579,9 @@ fn chooser(ui: &mut egui::Ui, v: &mut View) {
                         // Nothing: as the button does alone.
                         let current = map.grip.button(b);
                         let same = ButtonAction::Nothing;
-                        if widgets::chip(ui, "Same as press", current == same).clicked() {
+                        if widgets::chip(ui, tr!("controller-same-as-press"), current == same)
+                            .clicked()
+                        {
                             *map.grip.button_mut(b) = same;
                         }
                         for a in ButtonAction::ALL.into_iter().filter(|a| *a != same) {
