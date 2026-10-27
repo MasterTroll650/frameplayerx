@@ -26,7 +26,8 @@ const LIST_FIELDS: &str = "Overview,Genres,Path,DateCreated,ChildCount,PremiereD
 const DETAIL_FIELDS: &str =
     "Overview,Genres,Tags,Studios,People,Path,DateCreated,ChildCount,PremiereDate,MediaSources";
 
-/// What a tag can be on: films, series, episodes and other videos.
+/// What a tag can be on, and a person in: films, series, episodes and
+/// other videos.
 const TAGGED: [&str; 5] = ["Movie", "Series", "Episode", "Video", "MusicVideo"];
 
 /// Image types listings ask tags for.
@@ -62,7 +63,9 @@ pub enum MbKind {
     Folder,
     /// One of the user's libraries (a view).
     Library,
-    /// Anything else (people, photos...).
+    /// Someone in the cast or crew.
+    Person,
+    /// Anything else (photos...).
     #[default]
     Other,
 }
@@ -80,6 +83,7 @@ impl MbKind {
             "Playlist" => MbKind::Playlist,
             "Folder" => MbKind::Folder,
             "CollectionFolder" | "UserView" => MbKind::Library,
+            "Person" => MbKind::Person,
             _ => MbKind::Other,
         }
     }
@@ -96,7 +100,12 @@ impl MbKind {
     pub fn portrait(self) -> bool {
         matches!(
             self,
-            MbKind::Movie | MbKind::Series | MbKind::Season | MbKind::BoxSet | MbKind::Playlist
+            MbKind::Movie
+                | MbKind::Series
+                | MbKind::Season
+                | MbKind::BoxSet
+                | MbKind::Playlist
+                | MbKind::Person
         )
     }
 }
@@ -110,7 +119,7 @@ pub struct MbItem {
     pub kind: MbKind,
     /// Of a library: `movies`, `tvshows`, `boxsets`, `homevideos`...
     pub collection_type: Option<String>,
-    /// Of a playlist: `Video`, `Audio`... The player only shows video playlists on the server's front page.
+    /// Of a playlist: `Video`, `Audio`... Only video playlists are shown.
     pub media_type: Option<String>,
     /// Plot or description.
     pub overview: Option<String>,
@@ -298,6 +307,8 @@ pub enum MbSort {
     Rating,
     /// By length.
     Runtime,
+    /// Most recently watched first.
+    LastWatched,
     /// Shuffled.
     Random,
 }
@@ -310,13 +321,17 @@ impl MbSort {
             MbSort::Released => "PremiereDate,ProductionYear,SortName",
             MbSort::Rating => "CommunityRating,SortName",
             MbSort::Runtime => "Runtime,SortName",
+            MbSort::LastWatched => "DatePlayed,SortName",
             MbSort::Random => "Random",
         }
     }
 
     /// Whether this order reads best largest first.
     pub fn default_descending(self) -> bool {
-        matches!(self, MbSort::Added | MbSort::Released | MbSort::Rating)
+        matches!(
+            self,
+            MbSort::Added | MbSort::Released | MbSort::Rating | MbSort::LastWatched
+        )
     }
 }
 
@@ -351,7 +366,6 @@ pub struct MbQuery {
     /// Library, folder or collection to list; `None` for the whole server.
     pub parent: Option<String>,
     /// A playlist whose ordered items come from `/Playlists/{id}/Items`.
-    /// Jellyfin's generic item endpoint does not promise that order.
     pub playlist: Option<String>,
     /// Item types to keep (`Movie`, `Series`...); empty keeps every type.
     pub types: Vec<String>,
@@ -370,6 +384,20 @@ pub struct MbQuery {
     pub limit: usize,
     /// Only items with one of these tags.
     pub tags: Vec<String>,
+    /// Only items in one of these genres.
+    pub genres: Vec<String>,
+    /// Only items from one of these years.
+    pub years: Vec<i32>,
+    /// Only items from one of these studios.
+    pub studios: Vec<String>,
+    /// Only videos at least this many pixels wide.
+    pub min_width: Option<u32>,
+    /// Only items this person is in, by id (one: Jellyfin and Emby separate
+    /// several differently).
+    pub person: Option<String>,
+    /// These items, in this order (a page of a shuffle); the other fields
+    /// still choose what is listed.
+    pub ids: Vec<String>,
 }
 
 impl Default for MbQuery {
@@ -386,6 +414,12 @@ impl Default for MbQuery {
             start: 0,
             limit: 60,
             tags: Vec::new(),
+            genres: Vec::new(),
+            years: Vec::new(),
+            studios: Vec::new(),
+            min_width: None,
+            person: None,
+            ids: Vec::new(),
         }
     }
 }
@@ -402,8 +436,17 @@ impl MbQuery {
     }
 
     /// What opening `item` lists: a film library its films, a TV library
-    /// its series, a collection or folder what is in it.
+    /// its series, a collection or folder what is in it, a person what they
+    /// are in.
     pub fn children(item: &MbItem) -> MbQuery {
+        if item.kind == MbKind::Person {
+            return MbQuery {
+                types: TAGGED.iter().map(ToString::to_string).collect(),
+                recursive: true,
+                person: Some(item.id.clone()),
+                ..MbQuery::default()
+            };
+        }
         let types: &[&str] = match (item.kind, item.collection_type.as_deref()) {
             (MbKind::Library, Some("movies")) => &["Movie"],
             (MbKind::Library, Some("tvshows")) => &["Series"],
@@ -450,14 +493,11 @@ impl MbQuery {
         if !search.is_empty() {
             q += &format!("&SearchTerm={}", encode_form_value(search));
         }
-        if !self.tags.is_empty() {
-            q += &format!("&Tags={}", encode_form_value(&self.tags.join("|")));
-        }
-        q
+        q + &self.filter_params()
     }
 
-    /// The ordered contents of a playlist. This endpoint accepts paging but
-    /// not the catalogue's search, filters or sorting controls.
+    /// The ordered contents of a playlist. This endpoint supports paging,
+    /// but not the catalogue's search, filters or sorting controls.
     pub(crate) fn playlist_path(&self, user: &str) -> Option<String> {
         let id = self.playlist.as_ref()?;
         Some(format!(
@@ -467,6 +507,115 @@ impl MbQuery {
             self.limit.max(1),
         ))
     }
+
+    /// The listing's every item, shuffled by the server, as ids alone: what
+    /// a shuffle pages through, so each item comes once.
+    pub(crate) fn shuffled_path(&self, user: &str) -> String {
+        let mut q = format!(
+            "/Users/{user}/Items?Recursive={}&SortBy=Random&EnableImages=false\
+             &EnableUserData=false&EnableTotalRecordCount=false",
+            self.recursive,
+        );
+        if let Some(p) = &self.parent {
+            q += &format!("&ParentId={}", encode_form_value(p));
+        }
+        if !self.types.is_empty() {
+            q += &format!("&IncludeItemTypes={}", self.types.join(","));
+        }
+        if let Some(f) = self.filter.api() {
+            q += &format!("&Filters={f}");
+        }
+        let search = self.search.trim();
+        if !search.is_empty() {
+            q += &format!("&SearchTerm={}", encode_form_value(search));
+        }
+        q + &self.filter_params()
+    }
+
+    /// The tags, genres, years, studios, width and ids asked for.
+    fn filter_params(&self) -> String {
+        let mut q = String::new();
+        let any_of = |values: &[String]| encode_form_value(&values.join("|"));
+        if !self.tags.is_empty() {
+            q += &format!("&Tags={}", any_of(&self.tags));
+        }
+        if !self.genres.is_empty() {
+            q += &format!("&Genres={}", any_of(&self.genres));
+        }
+        if !self.studios.is_empty() {
+            q += &format!("&Studios={}", any_of(&self.studios));
+        }
+        if !self.years.is_empty() {
+            let years: Vec<String> = self.years.iter().map(ToString::to_string).collect();
+            q += &format!("&Years={}", years.join(","));
+        }
+        if let Some(w) = self.min_width {
+            q += &format!("&MinWidth={w}");
+        }
+        if let Some(p) = &self.person {
+            q += &format!("&PersonIds={}", encode_form_value(p));
+        }
+        if !self.ids.is_empty() {
+            q += &format!("&Ids={}", self.ids.join(","));
+        }
+        q
+    }
+
+    /// The query string a listing's genres, years, studios and tags are
+    /// asked for with: its library and kinds of item.
+    fn scope_params(&self, user: &str) -> String {
+        let mut q =
+            format!("UserId={user}&Recursive=true&EnableImages=false&EnableTotalRecordCount=false");
+        if let Some(p) = &self.parent {
+            q += &format!("&ParentId={}", encode_form_value(p));
+        }
+        let types = if self.types.is_empty() {
+            TAGGED.join(",")
+        } else {
+            self.types.join(",")
+        };
+        q + &format!("&IncludeItemTypes={types}")
+    }
+}
+
+/// What a listing can be filtered by: the genres, years, studios and tags
+/// its items have.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MbFacets {
+    pub genres: Vec<String>,
+    /// Newest first.
+    pub years: Vec<i32>,
+    pub studios: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+/// The names of a `{"Items": [{"Name": ...}]}` answer, as `/Genres`,
+/// `/Studios`, `/Years` and `/Tags` give them.
+fn names(v: &Value) -> Vec<String> {
+    let mut names: Vec<String> = array(v, "Items")
+        .iter()
+        .filter_map(|i| text(i, "Name"))
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names.dedup();
+    names
+}
+
+/// Ids in the order of an `{"Items": [{"Id": ...}]}` answer.
+fn ids(v: &Value) -> Vec<String> {
+    array(v, "Items")
+        .iter()
+        .filter_map(|i| text(i, "Id"))
+        .collect()
+}
+
+/// `items` in the order of `ids`; ones the server didn't send are left out.
+fn in_order(mut items: Vec<MbItem>, ids: &[String]) -> Vec<MbItem> {
+    items.retain(|i| ids.contains(&i.id));
+    items.sort_by_key(|item| ids.iter().position(|id| *id == item.id));
+    items
 }
 
 /// What a search of the whole server looks through, a section each, as
@@ -509,6 +658,15 @@ pub(crate) fn search_path(user: &str, text: &str, types: &[&str], limit: usize) 
     )
 }
 
+/// The people whose names have `text` in them.
+pub(crate) fn people_search_path(user: &str, text: &str, limit: usize) -> String {
+    format!(
+        "/Persons?UserId={user}&SearchTerm={}&Limit={}&{IMAGES}&EnableTotalRecordCount=false",
+        encode_form_value(text.trim()),
+        limit.max(1),
+    )
+}
+
 /// One page of a listing.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MbPage {
@@ -523,7 +681,7 @@ pub struct MbPage {
 pub struct MbHome {
     /// The user's video libraries.
     pub libraries: Vec<MbItem>,
-    /// The user's video playlists, kept on Jellyfin and read only here.
+    /// The user's read-only video playlists.
     pub playlists: Vec<MbItem>,
     /// Partly watched films and episodes.
     pub resume: Vec<MbItem>,
@@ -773,18 +931,22 @@ impl MediaBrowserSource {
         Ok(video_libraries(parse_list(&v, &self.base_url)))
     }
 
-    /// One page of a listing.
+    /// One page of a listing; a page of a shuffle (`query.ids`) in the
+    /// shuffle's order.
     pub fn items(&self, query: &MbQuery) -> Result<MbPage> {
         let user = self.user()?;
         let path = query
             .playlist_path(&user)
             .unwrap_or_else(|| query.path(&user));
         let v = self.api_get_json(&path)?;
-        Ok(parse_page(&v, &self.base_url))
+        let mut page = parse_page(&v, &self.base_url);
+        if !query.ids.is_empty() {
+            page.items = in_order(page.items, &query.ids);
+        }
+        Ok(page)
     }
 
-    /// The user's video playlists. They are intentionally read-only: opening
-    /// one reads its ordered contents, but this client never changes it.
+    /// The user's video playlists. Their contents are read-only here.
     pub fn playlists(&self, limit: usize) -> Result<Vec<MbItem>> {
         let page = self.items(&MbQuery {
             types: vec!["Playlist".into()],
@@ -803,6 +965,44 @@ impl MediaBrowserSource {
                         .is_none_or(|t| t.eq_ignore_ascii_case("video"))
             })
             .collect())
+    }
+
+    /// Every item of a listing in a new random order, by id.
+    pub fn shuffled(&self, query: &MbQuery) -> Result<Vec<String>> {
+        let user = self.user()?;
+        let v = self.api_get_json(&query.shuffled_path(&user))?;
+        Ok(ids(&v))
+    }
+
+    /// The genres, years, studios and tags of a listing's library, to
+    /// filter it by. Emby has no `/Items/Filters`; its tags are a list of
+    /// their own, as are both servers' genres, studios and years.
+    pub fn facets(&self, query: &MbQuery) -> Result<MbFacets> {
+        let user = self.user()?;
+        let scope = query.scope_params(&user);
+        let list = |kind: &str| -> Result<Vec<String>> {
+            Ok(names(&self.api_get_json(&format!("/{kind}?{scope}"))?))
+        };
+        let mut years: Vec<i32> = list("Years")?
+            .iter()
+            .filter_map(|y| y.parse().ok())
+            .collect();
+        years.sort_unstable_by(|a, b| b.cmp(a));
+        let tags = match self.api_get_json(&format!("/Items/Filters?{scope}")) {
+            Ok(v) => {
+                let mut tags = strings(&v, "Tags");
+                tags.sort_by_key(|t| t.to_lowercase());
+                tags
+            }
+            Err(Error::NotFound(_)) => list("Tags")?,
+            Err(e) => return Err(e),
+        };
+        Ok(MbFacets {
+            genres: list("Genres")?,
+            years,
+            studios: list("Studios")?,
+            tags,
+        })
     }
 
     /// One item with everything a details page shows.
@@ -832,6 +1032,13 @@ impl MediaBrowserSource {
             let items = parse_list(&v, &self.base_url);
             if !items.is_empty() {
                 found.push((section, items));
+            }
+        }
+        // The titles still show when this fails.
+        if let Ok(v) = self.api_get_json(&people_search_path(&user, text, limit)) {
+            let people = parse_list(&v, &self.base_url);
+            if !people.is_empty() {
+                found.push(("People", people));
             }
         }
         // The server searches titles only: what carries a tag with the
@@ -1169,7 +1376,6 @@ mod tests {
     fn listing_paths() {
         let q = MbQuery {
             parent: Some("lib 1".into()),
-            playlist: None,
             types: vec!["Movie".into()],
             recursive: true,
             search: " blade runner ".into(),
@@ -1178,7 +1384,7 @@ mod tests {
             filter: MbFilter::Unplayed,
             start: 60,
             limit: 60,
-            tags: Vec::new(),
+            ..MbQuery::default()
         };
         let p = q.path("u1");
         assert!(p.starts_with("/Users/u1/Items?Recursive=true&SortBy=DateCreated,SortName"));
@@ -1210,6 +1416,86 @@ mod tests {
                 "/Playlists/playlist%201/Items?UserId=u1&StartIndex=0&Limit=60&Fields=Overview,Genres,Path,DateCreated,ChildCount,PremiereDate&EnableImageTypes=Primary,Backdrop,Thumb&ImageTypeLimit=1"
             )
         );
+    }
+
+    #[test]
+    fn filters_go_to_the_server() {
+        let q = MbQuery {
+            parent: Some("lib".into()),
+            genres: vec!["Sci-Fi".into(), "Noir".into()],
+            years: vec![1990, 1991],
+            studios: vec!["A & B".into()],
+            min_width: Some(7680),
+            sort: MbSort::LastWatched,
+            ..MbQuery::default()
+        };
+        let p = q.path("u1");
+        for part in [
+            "SortBy=DatePlayed,SortName",
+            "&Genres=Sci-Fi%7CNoir",
+            "&Years=1990,1991",
+            "&Studios=A%20%26%20B",
+            "&MinWidth=7680",
+        ] {
+            assert!(p.contains(part), "{part} missing from {p}");
+        }
+        assert!(MbSort::LastWatched.default_descending());
+        // A shuffle asks once for every id, with the same filters and no
+        // paging, then for its pages by id.
+        let s = q.shuffled_path("u1");
+        assert!(
+            s.contains("SortBy=Random") && s.contains("&Genres=Sci-Fi%7CNoir"),
+            "{s}"
+        );
+        assert!(!s.contains("StartIndex") && !s.contains("Limit="), "{s}");
+        let page = MbQuery {
+            ids: vec!["b".into(), "a".into()],
+            ..q.clone()
+        };
+        assert!(page.path("u1").contains("&Ids=b,a"));
+    }
+
+    #[test]
+    fn people_are_found_and_open_what_they_are_in() {
+        let p = people_search_path("u1", " ana rivera ", 20);
+        assert!(
+            p.starts_with("/Persons?UserId=u1&SearchTerm=ana%20rivera&Limit=20&"),
+            "{p}"
+        );
+        let found = parse_list(
+            &json!({"Items": [{"Id": "p 1", "Name": "Ana Rivera", "Type": "Person"}]}),
+            "http://h",
+        );
+        assert_eq!(found[0].kind, MbKind::Person);
+        let path = MbQuery::children(&found[0]).path("u1");
+        assert!(path.contains("&PersonIds=p%201"), "{path}");
+        assert!(
+            path.contains("Recursive=true") && !path.contains("ParentId"),
+            "{path}"
+        );
+    }
+
+    #[test]
+    fn a_shuffle_keeps_its_order_and_facets_are_names() {
+        let list = parse_list(
+            &json!({"Items": [
+                {"Id": "a", "Name": "A", "Type": "Movie"},
+                {"Id": "c", "Name": "C", "Type": "Movie"},
+                {"Id": "b", "Name": "B", "Type": "Movie"}
+            ]}),
+            BASE,
+        );
+        let order: Vec<String> = ["b", "a", "x"].iter().map(ToString::to_string).collect();
+        let got: Vec<String> = in_order(list, &order).into_iter().map(|i| i.id).collect();
+        assert_eq!(got, ["b", "a"], "in the shuffle's order, others left out");
+        assert_eq!(
+            ids(&json!({"Items": [{"Id": "z"}, {"Id": "y"}]})),
+            ["z", "y"]
+        );
+        let v = json!({"Items": [{"Name": "drama"}, {"Name": " Comedy "}, {"Name": "Drama"}, {}]});
+        assert_eq!(names(&v), ["Comedy", "drama", "Drama"]);
+        let scope = MbQuery::default().scope_params("u1");
+        assert!(scope.contains("IncludeItemTypes=Movie,Series,Episode,Video,MusicVideo"));
     }
 
     #[test]
