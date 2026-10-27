@@ -120,7 +120,6 @@ headset's Noto Sans CJK; for the preview, install it with
 | `tools/` | Build, package, preview and test scripts |
 | `tools/frame-desktop-install/` | The Desktop Mode installer: a Python script, and the install and uninstall `.desktop` launchers that download and run it (see its [README](../tools/frame-desktop-install/README.md)) |
 | `tools/crash-relay/` | The Cloudflare Worker crash reports go to (see [Crash reports](#crash-reports)) |
-| `vendor/smb/` | The `smb` crate with a credit-accounting fix (see `vendor/smb/PATCHES.md`) |
 
 ## How it fits together
 
