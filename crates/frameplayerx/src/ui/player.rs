@@ -492,12 +492,7 @@ fn tracks_label(pb: &crate::playback::Playback, language: &str) -> Option<String
 
 /// Whether `pick` is the subtitles showing.
 fn showing(pb: &crate::playback::Playback, pick: Pick) -> bool {
-    let (stream, file) = (pb.player.subtitle_stream(), pb.active_subtitle_file);
-    match pick {
-        Pick::Off => stream.is_none() && file.is_none(),
-        Pick::File(i) => file == Some(i),
-        Pick::Stream(s) => stream == Some(s) && file.is_none(),
-    }
+    pb.subtitles_showing() == pick
 }
 
 /// The pill naming the audio and subtitles in use, which opens the picker

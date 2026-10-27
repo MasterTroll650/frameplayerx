@@ -882,8 +882,6 @@ pub fn slider_control(
     changed |= resp.changed();
     if resp.hovered() {
         let ctx = ui.ctx().clone();
-        let pass = ctx.cumulative_pass_nr();
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(OVER_SLIDER), pass));
         let dir = ui.input_mut(|i| {
             let mut n = |key| i.count_and_consume_key(egui::Modifiers::NONE, key) as f32;
             n(egui::Key::ArrowRight) - n(egui::Key::ArrowLeft)
@@ -901,14 +899,20 @@ pub fn slider_control(
 
 const OVER_SLIDER: &str = "over-slider";
 
-/// Whether the pointer was on a [`slider_control`] in the panel's last pass:
-/// the thumbstick then steps it (arrow keys) instead of paging.
+/// Whether the pointer was on a [`slider`] in the panel's last pass: a
+/// trigger press on it drags from the start, and the thumbstick steps it
+/// (the arrow keys a [`slider_control`] takes) instead of paging.
 pub fn over_slider(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<u64>(egui::Id::new(OVER_SLIDER)))
         .is_some_and(|pass| pass + 1 == ctx.cumulative_pass_nr())
 }
 
-/// A slider: a slim rail filled in the accent up to a white knob.
+/// A press this close to a slider's knob, in points, takes hold of it where
+/// it is.
+const GRAB_REACH: f32 = 30.0;
+
+/// A slider: a slim rail filled in the accent up to a white knob. Pulled
+/// on, the knob moves as far as the pointer does.
 pub fn slider(
     ui: &mut Ui,
     value: &mut f32,
@@ -919,24 +923,52 @@ pub fn slider(
     let (lo, hi) = (*range.start(), *range.end());
     let inset = 11.0;
     let rail_x = (rect.left() + inset)..=(rect.right() - inset);
+    let len = rail_x.end() - rail_x.start();
+    let fraction = |v: f32| {
+        if hi > lo {
+            ((v - lo) / (hi - lo)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    };
+    if resp.hovered() {
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.data_mut(|d| d.insert_temp(egui::Id::new(OVER_SLIDER), pass));
+    }
+    // Where a press took the knob, and the value then.
+    let grab = resp.id.with("grab");
     if resp.is_pointer_button_down_on()
         && let Some(p) = resp.interact_pointer_pos()
     {
-        let f = ((p.x - rail_x.start()) / (rail_x.end() - rail_x.start())).clamp(0.0, 1.0);
-        let v = lo + f * (hi - lo);
+        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
+        let knob = egui::lerp(rail_x.clone(), fraction(*value));
+        let (from, v0) = ui.data_mut(|d| {
+            match d.get_temp::<(Pos2, f32)>(grab) {
+                Some(g) if g.0 == origin => g,
+                // Pressed on or near the knob, it is taken where it is;
+                // further along the rail it jumps there first.
+                _ => {
+                    let v0 = if (origin.x - knob).abs() <= GRAB_REACH {
+                        *value
+                    } else {
+                        lo + ((origin.x - rail_x.start()) / len).clamp(0.0, 1.0) * (hi - lo)
+                    };
+                    d.insert_temp(grab, (origin, v0));
+                    (origin, v0)
+                }
+            }
+        });
+        let v = (v0 + (p.x - from.x) / len * (hi - lo)).clamp(lo, hi);
         if (v - *value).abs() > f32::EPSILON {
             *value = v;
             resp.mark_changed();
         }
+    } else {
+        ui.data_mut(|d| d.remove::<(Pos2, f32)>(grab));
     }
     if ui.is_rect_visible(rect) {
         let t = anim(ui, resp.id, resp.hovered() || resp.dragged());
-        let f = if hi > lo {
-            ((*value - lo) / (hi - lo)).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let x = egui::lerp(rail_x.clone(), f);
+        let x = egui::lerp(rail_x.clone(), fraction(*value));
         let h = 7.0 + t * 2.0;
         let y = rect.center().y;
         let rail = Rect::from_x_y_ranges(rail_x.clone(), (y - h / 2.0)..=(y + h / 2.0));
@@ -1377,5 +1409,57 @@ mod tests {
         assert!(!over_slider(&ctx));
         pass(vec![key(egui::Key::ArrowRight)], &mut v);
         assert!((v - 1.1).abs() < 1e-5, "not pointed at: {v}");
+    }
+
+    #[test]
+    fn a_press_on_the_knob_takes_it_where_it_is() {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let pass = |events: Vec<egui::Event>, value: &mut f32| {
+            let mut rect = Rect::NOTHING;
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    rect = ui
+                        .horizontal(|ui| slider_control(ui, value, -10.0..=10.0, 0.0, "%", 1))
+                        .response
+                        .rect;
+                });
+            });
+            rect
+        };
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let moved = |pos| egui::Event::PointerMoved(pos);
+        // The slider is the row's last 240 points: its rail runs from 229
+        // to 11 points before the end, 0 in the middle.
+        let mut v = 0.0;
+        let rect = pass(vec![], &mut v);
+        let knob = Pos2::new(rect.right() - 120.0, rect.center().y);
+        let x = |dx: f32| knob + Vec2::new(dx, 0.0);
+
+        // Pressed beside the knob, it stays, then goes as far as the
+        // pointer: a quarter of the rail.
+        pass(vec![moved(x(8.0)), button(x(8.0), true)], &mut v);
+        assert_eq!(v, 0.0, "taken where it is");
+        pass(vec![moved(x(8.0 + 54.5))], &mut v);
+        assert!((v - 5.0).abs() < 1e-3, "{v}");
+        pass(vec![button(x(62.5), false)], &mut v);
+        assert!((v - 5.0).abs() < 1e-3, "{v}");
+
+        // Pressed further along the rail, it jumps there: a quarter of the
+        // way along is -5.
+        let quarter = Pos2::new(rect.right() - 11.0 - 218.0 * 0.75, knob.y);
+        pass(vec![moved(quarter), button(quarter, true)], &mut v);
+        assert!((v + 5.0).abs() < 1e-3, "{v}");
+        pass(vec![button(quarter, false)], &mut v);
+        assert!((v + 5.0).abs() < 1e-3, "a click leaves it there: {v}");
     }
 }

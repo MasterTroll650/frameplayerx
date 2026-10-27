@@ -239,6 +239,7 @@ impl Sim {
                 ui.screen = screen;
                 ui.details = None;
                 ui.remap_open = None;
+                ui.remap_grip = false;
                 // As the tab does: Sources shows the list, not a source or
                 // a form.
                 ui.source = None;
@@ -257,6 +258,15 @@ impl Sim {
                             ui.remap_open = Some(crate::ui::RemapSlot::Button(
                                 crate::bindings::RIGHT,
                                 crate::bindings::Button::South,
+                            ));
+                            SettingsTab::Controller
+                        }
+                        // ...with the right Y's grip choices open.
+                        "controller-grip" => {
+                            ui.remap_grip = true;
+                            ui.remap_open = Some(crate::ui::RemapSlot::Grip(
+                                crate::bindings::RIGHT,
+                                crate::bindings::Button::North,
                             ));
                             SettingsTab::Controller
                         }
