@@ -220,13 +220,16 @@ are deleted too.
 
 **Up next** is the list of videos playing in turn; the button beside
 Browse on the control bar shows it over the video. Opening a video from a
-folder, grid or season makes that list Up next, and X and Y step through
-it. *Play all*, a playlist and what you queue yourself also play through:
-the next video starts when one ends. *Play next* (after the video playing)
-and *Add to queue* (at the end) are on a video's details, a Jellyfin or
-scene page and a folder row's ⋯; with nothing playing, either plays it. On
-the Up next page, pick a video to play it, move videos up or down, take
-them out, *Clear* everything but the video playing, or *Save as playlist*.
+folder, grid or season makes that list Up next, and **⏮** and **⏭** either
+side of the play button (or X and Y) step through it; pointing at one names
+the video it goes to, and it dims at either end of the list or when the
+video was opened on its own. *Play all*, a playlist and what you queue
+yourself also play through: the next video starts when one ends. *Play
+next* (after the video playing) and *Add to queue* (at the end) are on a
+video's details, a Jellyfin or scene page and a folder row's ⋯; with
+nothing playing, either plays it. On the Up next page, pick a video to play
+it, move videos up or down, take them out, *Clear* everything but the video
+playing, or *Save as playlist*.
 
 **Playlists**, a tab beside Watch history, holds your playlists: make one
 there or with *Add to playlist*, which offers your playlists and a name
@@ -372,8 +375,8 @@ that way (none of the discs tried) play their left eye in 2D; the decoder
 line in the video's info says "3D Blu-ray as 2D".
 
 A disc image, 2D or 3D, plays its main title (its longest playlist) with
-its chapters and its audio and subtitle languages. Menus, extras and other
-titles aren't offered.
+its chapters (under **⚙ › Chapters**) and its audio and subtitle languages.
+Menus, extras and other titles aren't offered.
 
 To change it: open the video, press **⚙** on the control bar, **Format**.
 Overrides are remembered per video. The same panel has position, zoom,
@@ -423,10 +426,21 @@ Settings › Sound and subtitles › **Subtitles** sets what a video starts with
 - **Off**: none.
 
 **Your language** starts as the system's (English when it has none). While
-a video plays, **⚙** › **Audio & subs** lists its subtitles, those in your
+a video plays, the pill beside its format on the control bar names the
+subtitles showing, and the audio track when there is more than one. Press
+it for the audio tracks and subtitles side by side, subtitles in your
 language first, each with what tells it apart: forced, SDH, its title or
-file name, and its format. A video with many keeps those in other
-languages under **Other languages**.
+file name, and its format. Pick one and it plays at once; a long list
+scrolls. Press the pill again, or point off the lists and press, to close
+it. A video with one audio track and no subtitles has no pill.
+
+What you pick there is kept with the video: it opens with the same audio
+track or subtitles next time, while they are still there. Only what you
+picked is kept, so a video whose subtitles you never changed follows
+**Subtitles** above, even after you change it.
+
+**⚙ › Chapters** lists the video's chapters and your bookmarks (**Bookmark**
+on the control bar adds one where you are), each with a button to go there.
 
 Subtitles show in any script, with the fonts on the headset: Arabic and
 Hebrew read right to left, and Chinese, Japanese or Korean need a font

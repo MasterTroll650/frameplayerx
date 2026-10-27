@@ -29,9 +29,11 @@ pub trait Tip {
 
 impl Tip for Response {
     fn tip(self, word: &str) -> Response {
+        // A control that can't be used says why too.
+        let over = self.hovered() || (!self.enabled() && self.contains_pointer());
         let t = self
             .ctx
-            .animate_bool_with_time(self.id.with("tip"), self.hovered(), 0.1);
+            .animate_bool_with_time(self.id.with("tip"), over, 0.1);
         if t > 0.01 {
             let painter = self.ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Tooltip,
@@ -122,6 +124,12 @@ pub const SHADOW_ROOM: egui::Margin = egui::Margin {
 /// body's rect (the panel less [`SHADOW_ROOM`]).
 pub fn panel_slab(ctx: &egui::Context, radius: f32) -> Rect {
     let rect = ctx.screen_rect() - SHADOW_ROOM;
+    slab(ctx, rect, radius);
+    rect
+}
+
+/// [`panel_slab`]'s body at `rect`, for a panel that shows less of itself.
+pub fn slab(ctx: &egui::Context, rect: Rect, radius: f32) {
     let p = ctx.layer_painter(egui::LayerId::background());
     p.add(
         egui::epaint::Shadow {
@@ -153,7 +161,6 @@ pub fn panel_slab(ctx: &egui::Context, radius: f32) -> Rect {
         super::depth::Side::Bottom,
         false,
     );
-    rect
 }
 
 /// What a button is for.

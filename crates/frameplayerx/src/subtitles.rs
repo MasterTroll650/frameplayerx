@@ -4,6 +4,7 @@ use crate::settings::SubtitleMode;
 use fp_core::format::StereoLayout;
 use fp_core::language::Tag;
 use fp_core::source::SubtitleFile;
+use fp_library::PickedSubtitles;
 use fp_media::subtitle::SubBitmap;
 use fp_media::{MediaInfo, StreamInfo};
 use fp_sources::urlutil::last_segment;
@@ -114,6 +115,56 @@ pub fn choose(
         .map_or(Pick::Off, |t| t.pick)
 }
 
+/// The subtitles a video starts with: those picked for it while they are
+/// still there, else what the settings [`choose`] with the audio it starts
+/// with (`audio`, when one was picked).
+pub fn starting(
+    picked: Option<&PickedSubtitles>,
+    audio: Option<usize>,
+    mode: SubtitleMode,
+    language: &str,
+    info: &MediaInfo,
+    files: &[SubtitleFile],
+    video_name: &str,
+) -> Pick {
+    if let Some(pick) = picked.and_then(|p| restored(p, info, files)) {
+        return pick;
+    }
+    match audio.filter(|i| Some(*i) != info.audio && info.audio_streams().any(|s| s.index == *i)) {
+        Some(i) => {
+            let mut info = info.clone();
+            info.audio = Some(i);
+            choose(mode, language, &info, files, video_name)
+        }
+        None => choose(mode, language, info, files, video_name),
+    }
+}
+
+/// A pick as it is saved with the video: a file by where it is, as the
+/// files beside a video can change.
+pub fn saved(pick: Pick, files: &[SubtitleFile]) -> Option<PickedSubtitles> {
+    Some(match pick {
+        Pick::Off => PickedSubtitles::Off,
+        Pick::Stream(i) => PickedSubtitles::Stream(i),
+        Pick::File(i) => PickedSubtitles::File(files.get(i)?.location.clone()),
+    })
+}
+
+/// A saved pick again, while what it names is still there.
+fn restored(saved: &PickedSubtitles, info: &MediaInfo, files: &[SubtitleFile]) -> Option<Pick> {
+    match saved {
+        PickedSubtitles::Off => Some(Pick::Off),
+        PickedSubtitles::Stream(i) => info
+            .subtitle_streams()
+            .any(|s| s.index == *i)
+            .then_some(Pick::Stream(*i)),
+        PickedSubtitles::File(location) => files
+            .iter()
+            .position(|f| &f.location == location)
+            .map(Pick::File),
+    }
+}
+
 /// A track's name: its language, else its title, else its number.
 pub fn track_name(s: &StreamInfo) -> String {
     Tag::parse(s.language.as_deref().unwrap_or(""))
@@ -203,14 +254,11 @@ fn codec_name(codec: &str) -> String {
     .into()
 }
 
-/// A subtitle file or stream as the Audio & subs tab lists it.
+/// A subtitle file or stream as the audio and subtitles picker lists it.
 pub struct Row {
     pub pick: Pick,
     pub title: String,
     pub detail: String,
-    /// In a known language other than the user's: these fold away when a
-    /// video has many subtitles.
-    pub foreign: bool,
 }
 
 /// The video's subtitle files and embedded streams, labelled: those in
@@ -223,14 +271,12 @@ pub fn rows(language: &str, info: &MediaInfo, files: &[SubtitleFile]) -> Vec<Row
         .map(|(i, f)| {
             let (title, detail) = file_label(f, i + 1);
             let code = Tag::parse(f.language.as_deref().unwrap_or("")).code;
-            let pick = Pick::File(i);
             (
                 code,
                 Row {
-                    pick,
+                    pick: Pick::File(i),
                     title,
                     detail,
-                    foreign: false,
                 },
             )
         })
@@ -240,7 +286,6 @@ pub fn rows(language: &str, info: &MediaInfo, files: &[SubtitleFile]) -> Vec<Row
             pick: Pick::Stream(s.index),
             title: track_name(s),
             detail: stream_detail(s),
-            foreign: false,
         };
         (stream_tag(s).code, row)
     }));
@@ -250,12 +295,7 @@ pub fn rows(language: &str, info: &MediaInfo, files: &[SubtitleFile]) -> Vec<Row
         Some(_) => 2,
     };
     rows.sort_by_key(|(code, _)| (group(*code), code.and_then(fp_core::language::name)));
-    rows.into_iter()
-        .map(|(code, mut row)| {
-            row.foreign = group(code) == 2;
-            row
-        })
-        .collect()
+    rows.into_iter().map(|(_, row)| row).collect()
 }
 
 /// Picture subtitles of a 3D video, which are drawn on the whole frame like
@@ -380,6 +420,57 @@ mod tests {
     }
 
     use SubtitleMode::{Always, Automatic, Off};
+
+    #[test]
+    fn what_was_never_picked_follows_the_settings() {
+        let mut forced = sub(3, "eng");
+        forced.forced = true;
+        let info = video(Some("eng"), vec![sub(2, "eng"), forced]);
+        let start = |picked, mode| starting(picked, None, mode, "en", &info, &[], "Movie.mkv");
+        // Watched with subtitles off in Settings, none picked: once Settings
+        // say Automatic, the forced ones come on.
+        assert_eq!(start(None, Off), Pick::Off);
+        assert_eq!(start(None, Automatic), Pick::Stream(3));
+        // Turned off in the player: they stay off whatever Settings say.
+        let off = PickedSubtitles::Off;
+        assert_eq!(start(Some(&off), Always), Pick::Off);
+        assert_eq!(
+            start(Some(&PickedSubtitles::Stream(2)), Off),
+            Pick::Stream(2)
+        );
+    }
+
+    #[test]
+    fn a_pick_that_is_gone_follows_the_settings() {
+        let info = video(Some("jpn"), vec![sub(2, "eng")]);
+        let files = [file("Movie.ar.srt", Some("ar"))];
+        let start = |picked: &PickedSubtitles| {
+            starting(Some(picked), None, Automatic, "en", &info, &files, "M.mkv")
+        };
+        let ar = saved(Pick::File(0), &files).unwrap();
+        assert_eq!(ar, PickedSubtitles::File("/v/Movie.ar.srt".into()));
+        assert_eq!(start(&ar), Pick::File(0));
+        // The file was removed, the stream isn't in this version of it.
+        assert_eq!(
+            start(&PickedSubtitles::File("/v/Movie.fr.srt".into())),
+            Pick::Stream(2)
+        );
+        assert_eq!(start(&PickedSubtitles::Stream(7)), Pick::Stream(2));
+        assert_eq!(saved(Pick::File(4), &files), None);
+    }
+
+    #[test]
+    fn subtitles_follow_the_audio_picked() {
+        // Picked the Japanese audio of an English film: Automatic gives
+        // English subtitles, as for a Japanese one.
+        let mut info = video(Some("eng"), vec![sub(3, "eng")]);
+        info.streams
+            .insert(2, stream(2, StreamKind::Audio, Some("jpn")));
+        let start = |audio| starting(None, audio, Automatic, "en", &info, &[], "Movie.mkv");
+        assert_eq!(start(None), Pick::Off);
+        assert_eq!(start(Some(2)), Pick::Stream(3));
+        assert_eq!(start(Some(9)), Pick::Off, "no such audio");
+    }
 
     #[test]
     fn a_first_track_in_another_language_is_not_shown() {
@@ -522,16 +613,16 @@ mod tests {
         ];
         let order: Vec<_> = rows("en", &info, &files)
             .iter()
-            .map(|r| (r.pick, r.title.clone(), r.foreign))
+            .map(|r| (r.pick, r.title.clone()))
             .collect();
         assert_eq!(
             order,
             [
-                (Pick::File(2), "English".into(), false),
-                (Pick::Stream(3), "English".into(), false),
-                (Pick::File(1), "Movie.srt".into(), false),
-                (Pick::Stream(2), "Arabic".into(), true),
-                (Pick::File(0), "French".into(), true),
+                (Pick::File(2), "English".into()),
+                (Pick::Stream(3), "English".into()),
+                (Pick::File(1), "Movie.srt".into()),
+                (Pick::Stream(2), "Arabic".into()),
+                (Pick::File(0), "French".into()),
             ]
         );
     }

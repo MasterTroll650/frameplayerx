@@ -110,9 +110,12 @@ ALTER TABLE media ADD COLUMN resume_thumbnail TEXT;
 ALTER TABLE media ADD COLUMN resume_thumbnail_at REAL;
 ";
 
+/// Version 4: the audio and subtitles picked for a video.
+const V4: &str = "ALTER TABLE media ADD COLUMN tracks TEXT;";
+
 /// All migrations, oldest first. The schema version equals the number of
 /// migrations applied.
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3];
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
 
 /// Schema version this build writes.
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;

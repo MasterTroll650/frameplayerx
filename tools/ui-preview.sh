@@ -225,7 +225,7 @@ chroma-global
 screen settings passthrough
 frames 8
 panel main settings-passthrough-on
-chroma-global
+chroma-global off
 screen settings controller
 panel main settings-controller
 screen settings controller-open
@@ -320,8 +320,8 @@ point main 0.6 0.6
 stick 0 -1 30
 frames 8
 panel main settings-subtitles
-# The video with subtitle files, set to start in Arabic: the subtitles and
-# the Audio & subs tab.
+# The video with subtitle files, set to start in Arabic: the subtitles, the
+# audio and subtitles picker over the bar, and the Chapters tab.
 subtitles always ar
 open-in device-home $home/Subtitled/Lantern.mp4
 wait-playing
@@ -329,11 +329,22 @@ wait 1
 pause
 frames 8
 panel subs subtitles-arabic
+tracks
+frames 8
+panel tracks tracks
+panel bar player-bar-tracks
+sbs player-tracks-scene
+point tracks 0.5 0.02
+click
+frames 4
 adjust 5
 frames 8
-panel adjust adjust-subtitles
-# The library queued behind it, and Up next from the control bar.
+panel adjust adjust-chapters
+# The library queued behind it: Next on the bar, and Up next from it.
 queue-all
+point bar 0.6215 0.69
+frames 10
+panel bar player-bar-next
 up-next
 frames 8
 panel main up-next

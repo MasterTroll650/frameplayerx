@@ -191,6 +191,30 @@ pub struct MediaRecord {
     /// What its source says about it (Jellyfin's overview, a scene's
     /// description).
     pub description: Option<String>,
+    /// The audio and subtitles picked while it played.
+    pub tracks: PickedTracks,
+}
+
+/// The audio and subtitles picked for a video, which it plays with again
+/// when it opens (while they are still there). What wasn't picked follows
+/// the settings.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PickedTracks {
+    /// The audio stream, by index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitles: Option<PickedSubtitles>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PickedSubtitles {
+    Off,
+    /// An embedded stream, by index.
+    Stream(usize),
+    /// A subtitle file, by location.
+    File(String),
 }
 
 impl MediaRecord {
@@ -296,7 +320,7 @@ pub(crate) const MEDIA_COLUMNS: &str = "m.id, m.location, m.source_id, m.title, 
     m.duration, m.width, m.height, m.video_codec, m.detected_format, m.detected_evidence,
     m.user_format, m.view_settings, m.keyframes, m.rating, m.favorite, m.play_count,
     m.last_played, m.resume_position, m.added_at, m.missing, m.thumbnail, m.resume_thumbnail,
-    m.thumbnail_url, m.probed, m.probe_error, m.scripts, m.subtitles, m.description,
+    m.thumbnail_url, m.probed, m.probe_error, m.scripts, m.subtitles, m.description, m.tracks,
     (SELECT json_group_array(t.name ORDER BY t.name COLLATE NOCASE)
        FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE mt.media_id = m.id)";
 
@@ -378,7 +402,8 @@ pub(crate) fn media_from_row(row: &Row<'_>) -> rusqlite::Result<MediaRecord> {
         scripts: json_col(row, 27)?,
         subtitles: json_col(row, 28)?,
         description: row.get(29)?,
-        tags: json_col(row, 30)?,
+        tracks: json_opt(row, 30)?.unwrap_or_default(),
+        tags: json_col(row, 31)?,
     })
 }
 

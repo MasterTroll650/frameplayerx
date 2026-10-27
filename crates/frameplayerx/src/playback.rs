@@ -69,6 +69,9 @@ pub struct Playback {
     pub markers: Vec<(f64, String)>,
     pub subtitle_files: Vec<SubtitleFile>,
     pub active_subtitle_file: Option<usize>,
+    /// The audio and subtitles picked for this video in the player (see
+    /// [`Self::save_tracks`]).
+    pub picked: fp_library::PickedTracks,
     pub script_count: usize,
     last_save: Instant,
     pub notice: Option<String>,
@@ -211,16 +214,25 @@ pub fn open(
         source.clone(),
         settings.haptics_enabled,
     );
+    let picked = record
+        .as_ref()
+        .map(|r| r.tracks.clone())
+        .unwrap_or_default();
     let mut pick = Pick::Off;
     let player = Player::open(src, &name, player_config(settings, start_at), |info| {
-        pick = subtitles::choose(
+        pick = subtitles::starting(
+            picked.subtitles.as_ref(),
+            picked.audio,
             settings.subtitles,
             &settings.subtitle_language,
             info,
             &subs,
             &name,
         );
-        pick.stream()
+        fp_media::Tracks {
+            audio: picked.audio,
+            subtitle: pick.stream(),
+        }
     })
     .map_err(|e| failed(format!("{name}: {e}")))?;
     let info = player.info().clone();
@@ -302,6 +314,7 @@ pub fn open(
             markers,
             subtitle_files: subs,
             active_subtitle_file,
+            picked,
             script_count: scripts.len(),
             last_save: Instant::now(),
             notice: None,
@@ -649,6 +662,19 @@ impl Playback {
         self.settings_dirty = false;
         self.saved_settings = self.settings;
         Ok(true)
+    }
+
+    /// Saves the audio and subtitles picked in the player, which the video
+    /// opens with next time; what wasn't picked keeps following the
+    /// settings.
+    pub fn save_tracks(&self, library: &Library) {
+        let Some(id) = self.record_id else { return };
+        if let Err(e) = library.set_tracks(id, &self.picked) {
+            log::warn!(
+                "saving the tracks picked for {}: {e}",
+                self.request.location
+            );
+        }
     }
 
     /// Saves this video's chroma key (the Passthrough tab) without the
