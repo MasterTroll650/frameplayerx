@@ -18,7 +18,7 @@ pub fn browser(ctx: &egui::Context, v: &mut View) {
     widgets::panel_slab(ctx, 28.0);
     let room = widgets::SHADOW_ROOM;
     egui::TopBottomPanel::top("nav")
-        .exact_height(76.0)
+        .exact_height(page::NAV_HEIGHT)
         .frame(
             egui::Frame::new()
                 .outer_margin(egui::Margin { bottom: 0, ..room })
@@ -583,7 +583,9 @@ pub fn grid_page(
     let mut changed = filters(ui, g);
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        if page::sort_bar(ui, sorts, &mut g.sort) {
+        let picked = page::sort_bar(ui, sorts, &mut g.sort);
+        let again = g.sort == Sort::Random && page::shuffle_again(ui);
+        if picked || again {
             if g.sort == Sort::Random {
                 // A new shuffle each time it is picked.
                 g.base.random_seed = fp_core::playback::now_ms() as u64;
@@ -615,7 +617,7 @@ pub fn grid_page(
         || g.stereo_only
         || g.format_filter != FormatFilter::All;
     let mut more = false;
-    page::scroll(ui, |ui| {
+    page::scroll_from(ui, changed, |ui| {
         ui.add_space(4.0);
         if results.is_empty() {
             if filtered {
@@ -631,12 +633,7 @@ pub fn grid_page(
             }
         }
         record_grid(ui, v, &results);
-        if results.len() < g.total {
-            ui.vertical_centered(|ui| {
-                more = widgets::button(ui, None, "Show more", Kind::Secondary).clicked();
-            });
-            ui.add_space(20.0);
-        }
+        more = results.len() < g.total && page::load_more(ui, false);
     });
     if more {
         g.page_size += 48;
