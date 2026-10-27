@@ -45,6 +45,8 @@ pub(super) enum Job {
         result: Box<Result<fp_sources::SceneInfo, String>>,
     },
     Toast(String),
+    /// FunScriptSync deleted the active Stash scene.
+    StashDeleted,
     /// Nothing to show (a server took a change).
     Done,
     Dlna(Result<Vec<fp_sources::DlnaDevice>, String>),
@@ -383,6 +385,7 @@ impl App {
                 }
             }
             Job::Toast(t) => self.ui.toast(t),
+            Job::StashDeleted => self.play_next_after_stash_delete(),
             Job::Done => {}
             Job::Subtitles { seq, index, result } => {
                 // Only for the same video, and the file still picked.

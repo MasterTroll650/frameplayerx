@@ -523,9 +523,7 @@ impl App {
                 .header("Accept", "application/json")
                 .send_empty()
             {
-                Ok(response) if response.status().is_success() => {
-                    Job::Toast("Stash scene deleted".into())
-                }
+                Ok(response) if response.status().is_success() => Job::StashDeleted,
                 Ok(mut response) => {
                     let status = response.status();
                     let body = response.body_mut().read_to_string().unwrap_or_default();

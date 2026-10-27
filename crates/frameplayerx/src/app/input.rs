@@ -299,4 +299,18 @@ impl App {
         self.ui.toast(format!("{} of {}", next + 1, n));
         self.open_request(req);
     }
+
+    /// After a confirmed Stash deletion, continue the active queue or stop.
+    pub(super) fn play_next_after_stash_delete(&mut self) {
+        self.ui.toast("Stash scene deleted");
+        let next = self.queue.pos + 1;
+        if self.queue.up_next().is_some() {
+            let Some(req) = self.queue.jump(next).cloned() else {
+                return;
+            };
+            self.open_request(req);
+        } else {
+            self.close_playback();
+        }
+    }
 }
