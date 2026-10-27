@@ -66,6 +66,8 @@ pub(super) enum Job {
     /// The last run crashed: the report the user may send.
     CrashReport(Box<crate::crash::Report>),
     CrashSent(Result<(), String>),
+    /// Steam was asked to open a web page.
+    WebPageOpened(Result<(), String>),
     /// Subtitle file `index` of the video opened as `seq`, read.
     Subtitles {
         seq: u64,
@@ -223,6 +225,24 @@ impl App {
         );
         self.ui.crash = crate::crash::Report::from_log(log, &private, &crate::crash::system())
             .map(ui::crash::CrashPrompt::new);
+    }
+
+    /// Opens `address` in Steam's browser, which shows over the app: the
+    /// headset has no other browser to hand it to.
+    pub(super) fn open_web_page(&mut self, address: &str) {
+        let url = format!("steam://openurl/https://{address}");
+        self.jobs.spawn("open-web-page", move || {
+            let r = std::process::Command::new("steam")
+                .arg(&url)
+                .status()
+                .map_err(|e| e.to_string())
+                .and_then(|s| {
+                    s.success()
+                        .then_some(())
+                        .ok_or_else(|| format!("steam: {s}"))
+                });
+            Job::WebPageOpened(r)
+        });
     }
 
     /// Sends the crash report the user agreed to send.
@@ -400,7 +420,7 @@ impl App {
                 }
             }
             Job::Toast(t) => self.ui.toast(t),
-            Job::Done => {}
+            Job::Done | Job::WebPageOpened(Ok(())) => {}
             Job::Subtitles { seq, index, result } => {
                 // Only for the same video, and the file still picked.
                 let Some(p) = self.playback.as_mut().filter(|_| seq == self.open_seq) else {
@@ -479,6 +499,10 @@ impl App {
                     c.sending = false;
                     c.error = Some(e);
                 }
+            }
+            Job::WebPageOpened(Err(e)) => {
+                log::warn!("opening a web page: {e}");
+                self.ui.toast(tr!("error-open-page", error = e));
             }
         }
     }

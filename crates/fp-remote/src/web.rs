@@ -1,12 +1,13 @@
 //! The LAN web remote: an embedded single-page app plus a small JSON API.
 //!
-//! Endpoints (all but the static assets need the pairing token, given once
-//! as `?token=` and then carried by an `HttpOnly; SameSite=Strict` cookie,
-//! or as `Authorization: Bearer <token>`):
+//! Endpoints (all but the static assets and pairing need the pairing token,
+//! which pairing puts in an `HttpOnly; SameSite=Strict` cookie, or
+//! `Authorization: Bearer <token>`):
 //!
 //! | Method | Path | |
 //! |---|---|---|
-//! | GET | `/` | the app (`/?token=` sets the cookie and redirects to `/`) |
+//! | GET | `/` | the app, or the pairing page for a browser not paired |
+//! | POST | `/pair` | `code=` from the pairing page: the right one sets the cookie and redirects to `/` |
 //! | GET | `/api/status` | [`PlaybackStatus`] JSON plus `now_ms` (server clock) |
 //! | POST | `/api/command` | [`fp_core::PlayerCommand`] JSON |
 //! | GET | `/api/library?q=&limit=&offset=` | `{"items": [RemoteItem...]}` |
@@ -20,6 +21,7 @@
 use crate::RemoteError;
 use crate::hub::{PageText, RemoteEvent, RemoteLibrary, Shared};
 use crate::net::is_allowed_peer;
+use crate::pairing::Entered;
 use crate::status::{ChangeTracker, command_is_valid};
 use crate::token::constant_time_eq;
 use fp_core::playback::now_ms;
@@ -41,6 +43,8 @@ const PAIR_HTML: &str = include_str!("web/pair.html");
 
 /// Name of the cookie carrying the pairing token.
 pub const COOKIE_NAME: &str = "fp_remote_token";
+/// The pairing page's slot for what went wrong.
+const PAIR_MESSAGE: &str = "pair-message";
 
 /// Request-handling threads. Live-status streams get their own threads.
 const WORKERS: usize = 4;
@@ -243,29 +247,14 @@ fn respond(rq: Request, reply: Reply) {
     }
 }
 
-/// How (and whether) a request proved it knows the token.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Auth {
-    /// No valid token.
-    None,
-    /// Valid token in `?token=`; the response should set the cookie.
-    Query,
-    /// Valid cookie or bearer header.
-    Carried,
-}
-
-/// Checks the query parameter, cookie and bearer header against `token`,
-/// each in constant time.
+/// Whether the cookie or bearer header carries `token`, each compared in
+/// constant time.
 pub(crate) fn authenticate(
     token: &str,
-    query_token: Option<&str>,
     cookie_header: Option<&str>,
     authorization: Option<&str>,
-) -> Auth {
+) -> bool {
     let ok = |t: &str| !token.is_empty() && constant_time_eq(t.as_bytes(), token.as_bytes());
-    if query_token.is_some_and(ok) {
-        return Auth::Query;
-    }
     let cookie_ok = cookie_header
         .and_then(|h| cookie_value(h, COOKIE_NAME))
         .is_some_and(ok);
@@ -273,11 +262,7 @@ pub(crate) fn authenticate(
         .and_then(|h| h.strip_prefix("Bearer "))
         .map(str::trim)
         .is_some_and(ok);
-    if cookie_ok || bearer_ok {
-        Auth::Carried
-    } else {
-        Auth::None
-    }
+    cookie_ok || bearer_ok
 }
 
 fn set_cookie(token: &str) -> String {
@@ -321,15 +306,19 @@ pub(crate) fn percent_decode(s: &str) -> String {
 /// Splits `/path?query` and decodes the query into pairs.
 pub(crate) fn parse_url(url: &str) -> (&str, Vec<(String, String)>) {
     let (path, query) = url.split_once('?').unwrap_or((url, ""));
-    let pairs = query
+    (path, parse_query(query))
+}
+
+/// Decodes `a=1&b=2`, a query or a form's body, into pairs.
+fn parse_query(query: &str) -> Vec<(String, String)> {
+    query
         .split('&')
         .filter(|kv| !kv.is_empty())
         .map(|kv| {
             let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
             (percent_decode(k), percent_decode(v))
         })
-        .collect();
-    (path, pairs)
+        .collect()
 }
 
 fn param<'a>(q: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -363,35 +352,35 @@ fn handle(mut rq: Request, ctx: &Arc<Ctx>) {
         _ => {}
     }
 
-    let token = ctx.shared.token();
-    let auth = authenticate(
-        &token,
-        param(&query, "token"),
+    if path == "/pair" {
+        let reply = match method {
+            Method::Post => match read_body(&mut rq) {
+                Ok(body) => pair(&body, ctx),
+                Err(r) => r,
+            },
+            _ => Reply::error(405, "method not allowed").header("Allow", "POST"),
+        };
+        return respond(rq, reply);
+    }
+
+    let paired = authenticate(
+        &ctx.shared.token(),
         header_value(&rq, "Cookie"),
         header_value(&rq, "Authorization"),
     );
-    if auth == Auth::None {
+    if !paired {
         let reply = if method == Method::Get && path == "/" {
-            Reply::new(
-                401,
-                "text/html; charset=utf-8",
-                render(PAIR_HTML, &read(&ctx.shared.page)),
-            )
+            pair_page(ctx, None)
         } else {
             Reply::error(401, "not paired")
         };
         return respond(rq, reply);
     }
-    let cookie = (auth == Auth::Query).then(|| set_cookie(&token));
 
     if method == Method::Get && path == "/api/events" {
-        return start_event_stream(rq, ctx, cookie);
+        return start_event_stream(rq, ctx);
     }
     let reply = match (&method, path) {
-        // The token leaves the address bar (and history) right away.
-        (Method::Get, "/" | "/index.html") if auth == Auth::Query => {
-            Reply::new(303, "text/plain", "").header("Location", "/")
-        }
         (Method::Get, "/" | "/index.html") => Reply::new(
             200,
             "text/html; charset=utf-8",
@@ -421,11 +410,50 @@ fn handle(mut rq: Request, ctx: &Arc<Ctx>) {
         }
         _ => Reply::error(404, "not found"),
     };
-    let reply = match cookie {
-        Some(c) => reply.header("Set-Cookie", c),
-        None => reply,
-    };
     respond(rq, reply);
+}
+
+/// A code entered on the pairing page: the right one pairs this browser
+/// (the token goes in its cookie) and opens the remote; any other shows
+/// the page again, saying what went wrong.
+fn pair(body: &[u8], ctx: &Ctx) -> Reply {
+    let form = parse_query(&String::from_utf8_lossy(body));
+    let typed = param(&form, "code").unwrap_or("");
+    let message = match ctx.shared.enter_code(typed) {
+        Entered::Paired => {
+            log::info!("web remote: a phone paired");
+            return Reply::new(303, "text/plain", "")
+                .header("Location", "/")
+                .header("Set-Cookie", set_cookie(&ctx.shared.token()));
+        }
+        Entered::Wrong => {
+            log::warn!("web remote: a wrong pairing code");
+            (
+                "remote-pair-wrong",
+                "That isn't the code the headset shows. Try again.",
+            )
+        }
+        Entered::NoCode => (
+            "remote-pair-no-code",
+            "The headset isn't showing a code. In FramePlayerX, open Settings › Remote control.",
+        ),
+        Entered::Stopped => (
+            "remote-pair-stopped",
+            "Too many wrong codes. In the headset, press New pairing code under Settings › Remote control.",
+        ),
+    };
+    pair_page(ctx, Some(message))
+}
+
+/// The pairing page, with `message` (its id and its English) under the
+/// form.
+fn pair_page(ctx: &Ctx, message: Option<(&str, &str)>) -> Reply {
+    let mut text = read(&ctx.shared.page).clone();
+    if let Some((id, english)) = message {
+        let shown = text.strings.get(id).map_or(english, String::as_str);
+        text.strings.insert(PAIR_MESSAGE.into(), shown.to_string());
+    }
+    Reply::new(401, "text/html; charset=utf-8", render(PAIR_HTML, &text))
 }
 
 fn cached(mut r: Reply) -> Reply {
@@ -610,7 +638,7 @@ impl Drop for StreamGuard {
     }
 }
 
-fn start_event_stream(rq: Request, ctx: &Arc<Ctx>, cookie: Option<String>) {
+fn start_event_stream(rq: Request, ctx: &Arc<Ctx>) {
     if ctx.streams.fetch_add(1, Ordering::AcqRel) >= ctx.max_streams {
         ctx.streams.fetch_sub(1, Ordering::AcqRel);
         return respond(rq, Reply::error(503, "too many live connections"));
@@ -622,7 +650,7 @@ fn start_event_stream(rq: Request, ctx: &Arc<Ctx>, cookie: Option<String>) {
         .spawn(move || {
             let _guard = guard;
             let mut w = rq.into_writer();
-            if let Err(e) = event_stream(&mut w, &ctx2, cookie.as_deref()) {
+            if let Err(e) = event_stream(&mut w, &ctx2) {
                 log::debug!("web remote: event stream ended: {e}");
             }
         });
@@ -633,16 +661,13 @@ fn start_event_stream(rq: Request, ctx: &Arc<Ctx>, cookie: Option<String>) {
     }
 }
 
-fn event_stream(w: &mut dyn Write, ctx: &Ctx, cookie: Option<&str>) -> std::io::Result<()> {
+fn event_stream(w: &mut dyn Write, ctx: &Ctx) -> std::io::Result<()> {
     let mut head = String::from(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n\
          Cache-Control: no-store\r\nConnection: close\r\nX-Accel-Buffering: no\r\n",
     );
     for (n, v) in SECURITY_HEADERS {
         head.push_str(&format!("{n}: {v}\r\n"));
-    }
-    if let Some(c) = cookie {
-        head.push_str(&format!("Set-Cookie: {c}\r\n"));
     }
     head.push_str("\r\nretry: 2000\n\n");
     w.write_all(head.as_bytes())?;
@@ -702,24 +727,11 @@ mod tests {
         );
         assert_eq!(cookie_value("a=1", COOKIE_NAME), None);
         let t = "abc123";
-        assert_eq!(authenticate(t, Some(t), None, None), Auth::Query);
-        assert_eq!(
-            authenticate(t, Some("nope"), Some("fp_remote_token=abc123"), None),
-            Auth::Carried
-        );
-        assert_eq!(
-            authenticate(t, None, None, Some("Bearer abc123")),
-            Auth::Carried
-        );
-        assert_eq!(
-            authenticate(t, None, Some("fp_remote_token=abc12"), None),
-            Auth::None
-        );
-        assert_eq!(
-            authenticate(t, None, None, Some("Basic abc123")),
-            Auth::None
-        );
-        assert_eq!(authenticate("", Some(""), None, None), Auth::None);
+        assert!(authenticate(t, Some("fp_remote_token=abc123"), None));
+        assert!(authenticate(t, None, Some("Bearer abc123")));
+        assert!(!authenticate(t, Some("fp_remote_token=abc12"), None));
+        assert!(!authenticate(t, None, Some("Basic abc123")));
+        assert!(!authenticate("", Some("fp_remote_token="), None));
     }
 
     #[test]
@@ -747,7 +759,9 @@ mod tests {
             !german.contains("</script>\""),
             "the strings can't close their script"
         );
-        assert!(render(PAIR_HTML, &text).contains("<html lang=\"de\">"));
+        let pair = render(PAIR_HTML, &text);
+        assert!(pair.contains("<html lang=\"de\">"));
+        assert!(!pair.contains("{{"), "every slot filled, the message's too");
     }
 
     #[test]

@@ -101,13 +101,20 @@ settings-vibration = Hübe als Vibration
 settings-vibration-desc = Für Geräte, die nur vibrieren.
 settings-remotes = Fernbedienungen
 settings-web-remote = Fernbedienung per Handy und Browser
-settings-web-remote-desc = Steuern Sie die Wiedergabe mit Ihrem Handy: Scannen Sie den Code unten.
+settings-web-remote-desc = Steuern Sie die Wiedergabe, finden Sie Videos und tippen Sie Text mit Ihrem Handy.
 settings-deovr-remote = DeoVR-Fernbedienungs-API
 settings-deovr-remote-desc = Port 23554, für DeoVR-kompatible Apps.
 settings-remotes-local = Beide antworten nur Geräten in Ihrem lokalen Netzwerk.
 settings-pair = Ein Handy koppeln
-settings-pair-scan = Mit der Kamera Ihres Handys scannen
 settings-pair-new-code = Neuer Kopplungscode
+settings-pair-open = Öffnen Sie auf Ihrem Handy
+settings-pair-enter = und geben Sie diesen Code ein
+settings-pair-stopped = Die Kopplung wurde nach fünf falschen Codes angehalten.
+settings-pair-phones = { $count ->
+    [one] { $count } Handy verbunden
+   *[other] { $count } Handys verbunden
+}
+settings-unpair-all = Alle Handys entkoppeln
 settings-no-network = Mit keinem Netzwerk verbunden.
 settings-check-updates = Beim Start nach Updates suchen
 settings-channel-beta-desc = Erhält auch Testversionen, bevor sie veröffentlicht werden.
@@ -139,10 +146,6 @@ settings-deovr-api-clients = { $count ->
     [one] DeoVR-API auf Port { $port } · { $count } Client
    *[other] DeoVR-API auf Port { $port } · { $count } Clients
 }
-settings-pair-or-open = { $count ->
-    [one] oder öffnen Sie { $url }. { $count } Handy verbunden.
-   *[other] oder öffnen Sie { $url }. { $count } Handys verbunden.
-}
 settings-update-available = Version { $version } ist verfügbar
 settings-update-installed = Version { $version } ist installiert
 settings-about-tagline = FramePlayerX { $version } · ein nativer VR-Videoplayer für den Steam Frame
@@ -151,7 +154,7 @@ settings-about-settings-file = Einstellungsdatei
 settings-about-log = Protokoll
 settings-about-links = Hilfe und Unterstützung
 settings-about-github = FramePlayerX auf GitHub
-settings-about-github-desc = Neuigkeiten, Versionen und der Quellcode. Scannen Sie den Code, um es auf Ihrem Handy zu öffnen.
+settings-about-github-desc = Neuigkeiten, Versionen und der Quellcode.
 settings-about-issue = Ein Problem melden
 settings-about-issue-desc = Eröffnen Sie ein Issue auf GitHub, wählen Sie Bug report und hängen Sie das oben genannte Protokoll an.
 settings-about-sponsor = FramePlayerX unterstützen
@@ -847,6 +850,7 @@ remote-error-deovr = DeoVR-Fernbedienungs-API: { $error }
 remote-error-web = Web-Fernbedienung: { $error }
 format-short-fisheye = Fisheye { $fov }°
 error-save-settings = Die Einstellungen konnten nicht gespeichert werden: { $error }
+error-open-page = Die Seite konnte nicht geöffnet werden: { $error }
 about-runtime = OpenXR-Laufzeit
 about-headset-name = Headset
 about-passthrough = Passthrough für Apps
@@ -904,10 +908,14 @@ remote-library = Bibliothek
 remote-search-label = Bibliothek durchsuchen
 remote-load-more = Mehr laden
 remote-unpaired-title = FramePlayerX-Fernbedienung: nicht gekoppelt
-remote-unpaired = Nicht gekoppelt
 remote-unpaired-desc = Dieser Browser wurde noch nicht mit dem Headset gekoppelt, oder die Kopplung wurde zurückgesetzt.
-remote-unpaired-how = Öffnen Sie in FramePlayerX Einstellungen › Fernbedienung und scannen Sie den QR-Code mit der Kamera dieses Handys.
-remote-not-paired = Nicht gekoppelt: Scannen Sie den QR-Code im Headset
+remote-pair-heading = Mit dem Headset koppeln
+remote-pair-how = Öffnen Sie in FramePlayerX Einstellungen › Fernbedienung und geben Sie den angezeigten Code ein.
+remote-pair-code = Code
+remote-pair = Koppeln
+remote-pair-wrong = Das ist nicht der Code, den das Headset zeigt. Versuchen Sie es erneut.
+remote-pair-no-code = Das Headset zeigt keinen Code. Öffnen Sie in FramePlayerX Einstellungen › Fernbedienung.
+remote-pair-stopped = Zu viele falsche Codes. Drücken Sie im Headset unter Einstellungen › Fernbedienung auf Neuer Kopplungscode.
 remote-connected = Verbunden
 remote-reconnecting = Verbinde erneut…
 remote-sent = An das Headset gesendet

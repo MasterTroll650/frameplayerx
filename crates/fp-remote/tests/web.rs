@@ -21,6 +21,24 @@ fn bearer(token: &str) -> String {
     format!("Bearer {token}")
 }
 
+const FORM: (&str, &str) = ("Content-Type", "application/x-www-form-urlencoded");
+
+/// Enters `code` on the pairing page.
+fn enter(addr: SocketAddr, code: &str) -> HttpResponse {
+    http(
+        addr,
+        "POST",
+        "/pair",
+        &[FORM],
+        format!("code={code}").as_bytes(),
+    )
+}
+
+/// A code that isn't `code`.
+fn not(code: &str) -> &'static str {
+    if code == "000000" { "111111" } else { "000000" }
+}
+
 #[test]
 fn everything_but_assets_requires_the_token() {
     let (_hub, addr, token) = started();
@@ -38,13 +56,16 @@ fn everything_but_assets_requires_the_token() {
     let wrong = "fp_remote_token=0000";
     let r = http(addr, "GET", "/api/status", &[("Cookie", wrong)], b"");
     assert_eq!(r.status, 401);
-    let r = http(addr, "GET", "/api/status?token=nope", &[], b"");
+    // The token never travels in an address, where history keeps it.
+    let r = http(addr, "GET", &format!("/api/status?token={token}"), &[], b"");
+    assert_eq!(r.status, 401);
+    let r = http(addr, "GET", &format!("/?token={token}"), &[], b"");
     assert_eq!(r.status, 401);
 
-    // Unpaired page explains what to do; it is not the app.
+    // Unpaired, the page asks for the headset's code; it is not the app.
     let r = http(addr, "GET", "/", &[], b"");
     assert_eq!(r.status, 401);
-    assert!(r.text().contains("Not paired"));
+    assert!(r.text().contains("action=\"/pair\""));
     assert!(!r.text().contains("app.js"));
 
     // Static code needs no token (it holds no data).
@@ -70,16 +91,24 @@ fn everything_but_assets_requires_the_token() {
 }
 
 #[test]
-fn pairing_url_sets_cookie_and_redirects() {
+fn the_headsets_code_pairs_a_phone() {
     let (hub, addr, token) = started();
-    let url = hub.pairing_url(Ipv4Addr::LOCALHOST);
     assert_eq!(
-        url,
-        format!("http://127.0.0.1:{}/?token={token}", addr.port())
+        hub.pairing_address(Ipv4Addr::LOCALHOST),
+        format!("127.0.0.1:{}", addr.port())
     );
-    let path = &url[url.find("/?").unwrap()..];
+    let r = enter(addr, "123456");
+    assert_eq!(r.status, 401);
+    assert!(r.text().contains("isn't showing a code"), "{}", r.text());
 
-    let r = http(addr, "GET", path, &[], b"");
+    let code = hub.pairing_code().unwrap().unwrap();
+    let r = enter(addr, not(&code));
+    assert_eq!(r.status, 401);
+    assert!(r.text().contains("isn't the code"));
+    assert!(r.header("Set-Cookie").is_none());
+
+    // Typed as the headset shows it, with a space.
+    let r = enter(addr, &format!("{}+{}", &code[..3], &code[3..]));
     assert_eq!(r.status, 303);
     assert_eq!(r.header("Location"), Some("/"));
     let cookie = r.header("Set-Cookie").unwrap();
@@ -110,10 +139,32 @@ fn pairing_url_sets_cookie_and_redirects() {
     let back: fp_core::PlaybackStatus = serde_json::from_value(s).unwrap();
     assert_eq!(back.position, 7.0);
 
+    // Used up: another phone needs the new code the headset shows next.
+    assert!(enter(addr, &code).text().contains("isn't showing a code"));
+
     // Rotating the token unpairs.
     hub.regenerate_token().unwrap();
     let r = http(addr, "GET", "/api/status", &[("Cookie", pair)], b"");
     assert_eq!(r.status, 401);
+}
+
+#[test]
+fn wrong_codes_stop_pairing() {
+    let (hub, addr, _) = started();
+    let code = hub.pairing_code().unwrap().unwrap();
+    for _ in 0..5 {
+        assert!(enter(addr, not(&code)).text().contains("isn't the code"));
+    }
+    let r = enter(addr, &code);
+    assert_eq!(r.status, 401, "not even the right one");
+    assert!(r.text().contains("Too many wrong codes"));
+    assert_eq!(hub.pairing_code().unwrap(), None);
+
+    hub.new_pairing_code();
+    let code = hub.pairing_code().unwrap().unwrap();
+    assert_eq!(enter(addr, &code).status, 303);
+    let r = http(addr, "GET", "/pair", &[], b"");
+    assert_eq!(r.status, 405);
 }
 
 #[test]
@@ -281,7 +332,7 @@ fn live_status_stream() {
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     write!(
         s,
-        "GET /api/events?token={token} HTTP/1.1\r\nHost: x\r\nAccept: text/event-stream\r\n\r\n"
+        "GET /api/events HTTP/1.1\r\nHost: x\r\nCookie: fp_remote_token={token}\r\nAccept: text/event-stream\r\n\r\n"
     )
     .unwrap();
     let mut buf = Vec::new();
@@ -299,7 +350,6 @@ fn live_status_stream() {
             .unwrap()
             .starts_with("text/event-stream")
     );
-    assert!(head.header("Set-Cookie").is_some());
     buf.drain(..split + 4);
 
     next_data(&mut s, &mut buf, |v| v["location"] == "");
@@ -321,7 +371,7 @@ fn open_stream(addr: SocketAddr, token: &str) -> (TcpStream, Vec<u8>) {
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     write!(
         s,
-        "GET /api/events?token={token} HTTP/1.1\r\nHost: x\r\n\r\n"
+        "GET /api/events HTTP/1.1\r\nHost: x\r\nCookie: fp_remote_token={token}\r\n\r\n"
     )
     .unwrap();
     let mut buf = Vec::new();
@@ -380,11 +430,17 @@ fn event_streams_are_capped() {
     let mut first = TcpStream::connect(addr).unwrap();
     write!(
         first,
-        "GET /api/events?token={token} HTTP/1.1\r\nHost: x\r\n\r\n"
+        "GET /api/events HTTP/1.1\r\nHost: x\r\nCookie: fp_remote_token={token}\r\n\r\n"
     )
     .unwrap();
     assert!(wait_for(Duration::from_secs(2), || hub.web_client_count() == 1));
-    let r = http(addr, "GET", &format!("/api/events?token={token}"), &[], b"");
+    let r = http(
+        addr,
+        "GET",
+        "/api/events",
+        &[("Authorization", &bearer(&token))],
+        b"",
+    );
     assert_eq!(r.status, 503);
     hub.stop();
     assert!(hub.web_addr().is_none());

@@ -247,8 +247,14 @@ impl App {
                     self.ui.toast(e.to_string());
                 }
             }
+            Action::NewPairingCode => {
+                if let Some(h) = &self.services.remote {
+                    h.new_pairing_code();
+                }
+            }
             Action::CheckUpdates => self.check_updates(),
             Action::InstallUpdate => self.install_update(),
+            Action::OpenWebPage(address) => self.open_web_page(address),
             Action::SendCrashReport => self.send_crash_report(),
             Action::DismissCrashReport => self.ui.crash = None,
             Action::Recenter => self.recenter(),

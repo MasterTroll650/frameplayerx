@@ -50,8 +50,9 @@
     const o = Object.assign({ credentials: 'same-origin', cache: 'no-store' }, opts || {});
     return fetch(path, o).then((r) => {
       if (r.status === 401) {
+        // Unpaired in the headset: reloaded, this becomes the pairing page.
         unpaired = true;
-        setConn(t('remote-not-paired', 'Not paired: scan the QR code in the headset'), true);
+        location.reload();
         throw new Error('not paired');
       }
       if (!r.ok) throw new Error('HTTP ' + r.status);

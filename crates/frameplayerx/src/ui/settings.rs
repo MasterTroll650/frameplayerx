@@ -757,76 +757,72 @@ fn remote(ui: &mut egui::Ui, v: &mut View) {
             ),
         );
     }
-    if hub.web_addr().is_some() {
-        heading(ui, tr!("settings-pair"));
-        let ips = fp_remote::lan_addresses();
-        match ips.first() {
-            Some(ip) => {
-                let url = hub.pairing_url(*ip);
-                widgets::card(ui, |ui| {
-                    egui::Frame::new()
-                        .inner_margin(egui::Margin::same(16))
-                        .show(ui, |ui| {
-                            ui.horizontal_top(|ui| {
-                                ui.spacing_mut().item_spacing.x = 24.0;
-                                if let Ok(qr) = fp_remote::pairing_qr(&url) {
-                                    draw_qr(ui, &qr, 220.0);
-                                }
-                                ui.vertical(|ui| {
-                                    ui.label(
-                                        RichText::new(tr!("settings-pair-scan"))
-                                            .font(theme::font(Weight::SemiBold, 20.0)),
-                                    );
-                                    ui.label(
-                                        RichText::new(tr!(
-                                            "settings-pair-or-open",
-                                            url = url.as_str(),
-                                            count = hub.web_client_count()
-                                        ))
-                                        .color(theme::TEXT_2),
-                                    );
-                                    ui.add_space(10.0);
-                                    if widgets::button(
-                                        ui,
-                                        Some(icons::ARROWS_CLOCKWISE),
-                                        tr!("settings-pair-new-code"),
-                                        Kind::Secondary,
-                                    )
-                                    .clicked()
-                                    {
-                                        v.actions.push(Action::RegenerateToken);
-                                    }
-                                });
-                            });
-                        });
+    if hub.web_addr().is_none() {
+        return;
+    }
+    heading(ui, tr!("settings-pair"));
+    let Some(ip) = fp_remote::lan_addresses().first().copied() else {
+        ui.label(RichText::new(tr!("settings-no-network")).color(theme::WARN));
+        return;
+    };
+    let big = |ui: &mut egui::Ui, s: &str| {
+        ui.label(
+            RichText::new(s)
+                .font(theme::font(Weight::SemiBold, 34.0))
+                .color(theme::TEXT),
+        );
+    };
+    widgets::card(ui, |ui| {
+        egui::Frame::new()
+            .inner_margin(egui::Margin::same(16))
+            .show(ui, |ui| {
+                match hub.pairing_code() {
+                    Ok(Some(code)) => {
+                        ui.label(RichText::new(tr!("settings-pair-open")).color(theme::TEXT_2));
+                        big(ui, &hub.pairing_address(ip));
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(tr!("settings-pair-enter")).color(theme::TEXT_2));
+                        big(ui, &format!("{} {}", &code[..3], &code[3..]));
+                    }
+                    Ok(None) => {
+                        ui.label(RichText::new(tr!("settings-pair-stopped")).color(theme::WARN));
+                        ui.add_space(6.0);
+                        if widgets::button(
+                            ui,
+                            Some(icons::ARROWS_CLOCKWISE),
+                            tr!("settings-pair-new-code"),
+                            Kind::Secondary,
+                        )
+                        .clicked()
+                        {
+                            v.actions.push(Action::NewPairingCode);
+                        }
+                    }
+                    Err(e) => {
+                        ui.label(RichText::new(e.to_string()).color(theme::ERROR));
+                    }
+                }
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(tr!("settings-pair-phones", count = hub.web_client_count()))
+                            .color(theme::TEXT_2),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if widgets::button(
+                            ui,
+                            Some(icons::X),
+                            tr!("settings-unpair-all"),
+                            Kind::Secondary,
+                        )
+                        .clicked()
+                        {
+                            v.actions.push(Action::RegenerateToken);
+                        }
+                    });
                 });
-            }
-            None => {
-                ui.label(RichText::new(tr!("settings-no-network")).color(theme::WARN));
-            }
-        }
-    }
-}
-
-fn draw_qr(ui: &mut egui::Ui, qr: &fp_remote::QrMatrix, size: f32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(rect, 12.0, Color32::WHITE);
-    let quiet = 3.0;
-    let cell = size / (qr.size as f32 + quiet * 2.0);
-    for y in 0..qr.size {
-        for x in 0..qr.size {
-            if qr.is_dark(x, y) {
-                let min =
-                    rect.min + Vec2::new((x as f32 + quiet) * cell, (y as f32 + quiet) * cell);
-                p.rect_filled(
-                    egui::Rect::from_min_size(min, Vec2::splat(cell + 0.3)),
-                    0.0,
-                    Color32::BLACK,
-                );
-            }
-        }
-    }
+            });
+    });
 }
 
 fn updates(ui: &mut egui::Ui, v: &mut View) {
@@ -974,11 +970,9 @@ fn about_text(text: &str) -> &str {
 }
 
 /// The project's pages, as About lists them.
-const GITHUB: &str = "https://github.com/remotesojourner/frameplayerx";
-const ISSUES: &str = "https://github.com/remotesojourner/frameplayerx/issues/new/choose";
-const SPONSOR: &str = "https://github.com/sponsors/remotesojourner";
-/// How big each link's QR code is drawn (points).
-const QR: f32 = 104.0;
+const GITHUB: &str = "github.com/remotesojourner/frameplayerx";
+const ISSUES: &str = "github.com/remotesojourner/frameplayerx/issues/new/choose";
+const SPONSOR: &str = "github.com/sponsors/remotesojourner";
 
 fn about(ui: &mut egui::Ui, v: &mut View) {
     ui.label(
@@ -1002,11 +996,9 @@ fn about(ui: &mut egui::Ui, v: &mut View) {
             &crate::logger::log_path().display().to_string(),
         );
     });
-    // A browser can't open in the headset: each page's code opens it on
-    // a phone.
     heading(ui, tr!("settings-about-links"));
     widgets::rows(ui, |r| {
-        for (title, desc, url) in [
+        for (title, desc, address) in [
             (
                 tr!("settings-about-github"),
                 tr!("settings-about-github-desc"),
@@ -1023,12 +1015,21 @@ fn about(ui: &mut egui::Ui, v: &mut View) {
                 SPONSOR,
             ),
         ] {
-            let short = url.trim_start_matches("https://");
-            r.row_at_least(title, Some(&format!("{desc}\n{short}")), QR, |ui| {
-                if let Ok(qr) = fp_remote::pairing_qr(url) {
-                    draw_qr(ui, &qr, QR);
-                }
-            });
+            r.row_with(
+                title,
+                Some(desc),
+                |ui| {
+                    let link = egui::Link::new(
+                        RichText::new(format!("{}  {address}", icons::LINK))
+                            .font(theme::font(Weight::Medium, 16.0))
+                            .color(theme::ACCENT_HOVER),
+                    );
+                    if ui.add(link).clicked() {
+                        v.actions.push(Action::OpenWebPage(address));
+                    }
+                },
+                |_| {},
+            );
         }
     });
     ui.add_space(6.0);

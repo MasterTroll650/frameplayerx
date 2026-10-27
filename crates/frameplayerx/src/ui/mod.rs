@@ -328,9 +328,15 @@ pub enum Action {
     AddDevice(HapticDeviceConfig),
     RemoveDevice(usize),
     ReconnectDevices,
+    /// Unpairs every phone from the web remote.
     RegenerateToken,
+    /// Pairing again after wrong codes stopped it.
+    NewPairingCode,
     CheckUpdates,
     InstallUpdate,
+    /// Opens a web page (an address without `https://`) in Steam's
+    /// browser.
+    OpenWebPage(&'static str),
     /// Send the crash report the start offered, or don't.
     SendCrashReport,
     DismissCrashReport,

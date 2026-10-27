@@ -367,6 +367,13 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
+            // `remote on` / `remote off`: the phone and browser remote, as
+            // Settings › Remote control does.
+            Some("remote") => {
+                self.app.settings.remote.web_enabled = parts.get(1) != Some(&"off");
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
             // `subtitles always ar`, as Settings › Sound and subtitles does.
             Some("subtitles") => {
                 use crate::settings::SubtitleMode;

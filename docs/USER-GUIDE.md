@@ -636,11 +636,17 @@ seek bar shows the script's intensity.
 
 ## Remote control
 
-**Settings › Remote control › Phone / browser remote** shows a QR code; scan
-it to control playback, find videos and type from your phone. The
-**DeoVR remote API** (port 23554) works with apps that speak DeoVR's
-protocol. Both only answer devices on your local network. The phone's page
-is in the headset's language, and changes with it.
+With **Settings › Remote control › Phone and browser remote** on, you can
+control playback, find videos and type from your phone. To pair a phone,
+open the address that tab shows (such as `192.168.1.20:8790`) in the phone's
+browser and enter the 6-digit code under it; the phone stays paired. A code
+pairs one phone, and stops working ten minutes after the tab last showed it.
+After five wrong codes pairing stops until you press **New pairing code**.
+**Unpair all phones** makes every paired phone pair again.
+
+The **DeoVR remote API** (port 23554) works with apps that speak DeoVR's
+protocol, without pairing. Both only answer devices on your local network.
+The phone's page is in the headset's language, and changes with it.
 
 ## Language
 
@@ -666,9 +672,10 @@ The translations started as machine drafts. If one reads wrong, the
   your servers' addresses and any password replaced by placeholders such as
   `<video 1>`. **Show the report** shows exactly what would be sent;
   nothing is sent unless you choose **Send report**.
-- To report a problem yourself, **Settings › About** has QR codes that open
-  FramePlayerX's GitHub page, its issues (choose Bug report and attach the
-  log below) and its GitHub Sponsors page on your phone.
+- To report a problem yourself, **Settings › About** links to FramePlayerX's
+  GitHub page, its issue form (choose Bug report and attach the log below)
+  and its GitHub Sponsors page. A link opens in Steam's browser; the
+  address beside it works on a phone or a computer too.
 - Log: `~/.local/share/frameplayerx/frameplayerx.log`; the run before is kept
   as `frameplayerx.log.old` (the one to send after a freeze or crash, once
   FramePlayerX has been started again)

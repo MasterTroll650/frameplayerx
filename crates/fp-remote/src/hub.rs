@@ -1,6 +1,7 @@
 //! [`RemoteHub`]: the app-facing entry point that owns both servers.
 
 use crate::deovr::DeovrServer;
+use crate::pairing::{Entered, Pairing};
 use crate::status::StatusCell;
 use crate::web::WebServer;
 use crate::{RemoteConfig, RemoteError, token};
@@ -66,6 +67,7 @@ pub(crate) struct Shared {
     pub(crate) status: StatusCell,
     pub(crate) token: RwLock<String>,
     pub(crate) page: RwLock<PageText>,
+    pairing: Mutex<Pairing>,
     events: Sender<RemoteEvent>,
 }
 
@@ -79,6 +81,11 @@ impl Shared {
 
     pub(crate) fn token(&self) -> String {
         read(&self.token).clone()
+    }
+
+    /// A code typed on a phone's pairing page.
+    pub(crate) fn enter_code(&self, typed: &str) -> Entered {
+        lock(&self.pairing).enter(typed)
     }
 }
 
@@ -110,6 +117,7 @@ impl RemoteHub {
                 status: StatusCell::default(),
                 token: RwLock::new(token),
                 page: RwLock::new(PageText::default()),
+                pairing: Mutex::new(Pairing::default()),
                 events: tx,
             }),
             events: rx,
@@ -241,15 +249,27 @@ impl RemoteHub {
         Ok(new)
     }
 
-    /// The URL to show as a QR code: `http://<lan_ip>:<port>/?token=...`,
-    /// using the bound port while the web remote runs, else the configured one.
-    pub fn pairing_url(&self, lan_ip: impl Into<IpAddr>) -> String {
+    /// The address to open on a phone, `<lan_ip>:<port>`, using the bound
+    /// port while the web remote runs, else the configured one.
+    pub fn pairing_address(&self, lan_ip: impl Into<IpAddr>) -> String {
         let port = self.web_addr().map_or(self.config.web_port, |a| a.port());
-        let host = match lan_ip.into() {
-            IpAddr::V4(v4) => v4.to_string(),
-            IpAddr::V6(v6) => format!("[{v6}]"),
-        };
-        format!("http://{host}:{port}/?token={}", self.token())
+        match lan_ip.into() {
+            IpAddr::V4(v4) => format!("{v4}:{port}"),
+            IpAddr::V6(v6) => format!("[{v6}]:{port}"),
+        }
+    }
+
+    /// The code the headset shows for a phone to pair with: kept while it
+    /// is shown (call this each time it is drawn), and replaced once a
+    /// phone pairs with it or ten minutes after it was last shown. `None`
+    /// after five wrong codes, until [`new_pairing_code`](Self::new_pairing_code).
+    pub fn pairing_code(&self) -> Result<Option<String>, RemoteError> {
+        lock(&self.shared.pairing).show()
+    }
+
+    /// Starts pairing again after wrong codes stopped it, with a new code.
+    pub fn new_pairing_code(&self) {
+        lock(&self.shared.pairing).restart();
     }
 }
 
@@ -265,15 +285,15 @@ mod tests {
     use std::net::Ipv4Addr;
 
     #[test]
-    fn pairing_url_and_token_rotation() {
+    fn pairing_address_and_token_rotation() {
         let hub = RemoteHub::new(RemoteConfig::default()).unwrap();
         let t = hub.token();
         assert_eq!(
-            hub.pairing_url(Ipv4Addr::new(192, 168, 1, 9)),
-            format!("http://192.168.1.9:8790/?token={t}")
+            hub.pairing_address(Ipv4Addr::new(192, 168, 1, 9)),
+            "192.168.1.9:8790"
         );
         let v6: IpAddr = "fe80::1".parse().unwrap();
-        assert!(hub.pairing_url(v6).starts_with("http://[fe80::1]:8790/"));
+        assert_eq!(hub.pairing_address(v6), "[fe80::1]:8790");
         let t2 = hub.regenerate_token().unwrap();
         assert_ne!(t, t2);
         assert_eq!(hub.token(), t2);

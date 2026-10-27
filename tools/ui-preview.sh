@@ -311,8 +311,10 @@ panel main settings-controller-stick
 haptics on
 screen settings haptics
 panel main settings-haptics
+remote on
 screen settings remote
 panel main settings-remote
+remote off
 screen settings updates
 panel main settings-updates
 screen settings about

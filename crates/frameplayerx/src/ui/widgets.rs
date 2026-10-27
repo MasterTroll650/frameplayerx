@@ -647,18 +647,6 @@ impl Rows<'_> {
         desc: Option<&str>,
         control: impl FnOnce(&mut Ui) -> R,
     ) -> R {
-        self.row_at_least(title, desc, ROW_MIN_HEIGHT, control)
-    }
-
-    /// A [`row`](Self::row) at least `height` tall, for a control taller
-    /// than its text, such as a QR code.
-    pub fn row_at_least<R>(
-        &mut self,
-        title: &str,
-        desc: Option<&str>,
-        height: f32,
-        control: impl FnOnce(&mut Ui) -> R,
-    ) -> R {
         self.next_row(|ui| {
             // Text on the left and the control on the right, both
             // centred on the row's height.
@@ -681,7 +669,7 @@ impl Rows<'_> {
             let text_h =
                 title_g.size().y + desc_g.as_ref().map(|g| 3.0 + g.size().y).unwrap_or(0.0);
             let (rect, _) =
-                ui.allocate_exact_size(Vec2::new(w, text_h.max(height)), Sense::hover());
+                ui.allocate_exact_size(Vec2::new(w, text_h.max(ROW_MIN_HEIGHT)), Sense::hover());
             let mut y = rect.center().y - text_h / 2.0;
             let p = ui.painter();
             let title_h = title_g.size().y;

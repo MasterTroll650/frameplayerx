@@ -143,13 +143,26 @@ settings-vibration = Strokes as vibration
 settings-vibration-desc = For devices that only vibrate.
 settings-remotes = Remotes
 settings-web-remote = Phone and browser remote
-settings-web-remote-desc = Control playback from your phone: scan the code below.
+settings-web-remote-desc = Control playback, find videos and type from your phone.
 settings-deovr-remote = DeoVR remote API
 settings-deovr-remote-desc = Port 23554, for DeoVR-compatible apps.
 settings-remotes-local = Both only answer devices on your local network.
 settings-pair = Pair a phone
-settings-pair-scan = Scan with your phone's camera
+# Short: a button, shown once pairing stopped: a new code to pair with.
 settings-pair-new-code = New pairing code
+# Settings › Remote control › Pair a phone, above the web remote's address.
+settings-pair-open = On your phone, open
+# Between the address and the pairing code.
+settings-pair-enter = and enter
+# Shown instead of the code once five wrong ones were entered on a phone.
+settings-pair-stopped = Pairing stopped after five wrong codes.
+# Phone remote pages open now.
+settings-pair-phones = { $count ->
+    [one] { $count } phone connected
+   *[other] { $count } phones connected
+}
+# Short: a button. Phones paired before have to pair again.
+settings-unpair-all = Unpair all phones
 settings-no-network = Not connected to a network.
 settings-check-updates = Check for updates at start
 settings-channel-beta-desc = Gets test versions too, before they are released.
@@ -193,10 +206,6 @@ settings-deovr-api-clients = { $count ->
     [one] DeoVR API on port { $port } · { $count } client
    *[other] DeoVR API on port { $port } · { $count } clients
 }
-settings-pair-or-open = { $count ->
-    [one] or open { $url }. { $count } phone connected.
-   *[other] or open { $url }. { $count } phones connected.
-}
 settings-update-available = Version { $version } is available
 settings-update-installed = Version { $version } is installed
 
@@ -208,7 +217,7 @@ settings-about-settings-file = Settings file
 settings-about-log = Log
 settings-about-links = Help and support
 settings-about-github = FramePlayerX on GitHub
-settings-about-github-desc = News, releases and the source code. Scan the code to open it on your phone.
+settings-about-github-desc = News, releases and the source code.
 settings-about-issue = Report a problem
 settings-about-issue-desc = Open an issue on GitHub, choose Bug report and attach the log named above.
 settings-about-sponsor = Sponsor FramePlayerX
@@ -1157,6 +1166,8 @@ remote-error-web = web remote: { $error }
 # A video format: a fisheye lens and its field of view.
 format-short-fisheye = Fisheye { $fov }°
 error-save-settings = Settings couldn't be saved: { $error }
+# A toast: Steam's browser didn't open a link in About.
+error-open-page = Couldn't open the page: { $error }
 about-runtime = OpenXR runtime
 about-headset-name = Headset
 about-passthrough = Passthrough for apps
@@ -1231,10 +1242,17 @@ remote-search-label = Search library
 # Short: a button.
 remote-load-more = Load more
 remote-unpaired-title = FramePlayerX Remote: not paired
-remote-unpaired = Not paired
 remote-unpaired-desc = This browser has not been paired with the headset yet, or the pairing was reset.
-remote-unpaired-how = In FramePlayerX, open Settings › Remote control and scan the QR code with this phone's camera.
-remote-not-paired = Not paired: scan the QR code in the headset
+remote-pair-heading = Pair with the headset
+remote-pair-how = In FramePlayerX, open Settings › Remote control and enter the code it shows.
+# The pairing code field's label and hint.
+remote-pair-code = Code
+# Short: a button.
+remote-pair = Pair
+remote-pair-wrong = That isn't the code the headset shows. Try again.
+remote-pair-no-code = The headset isn't showing a code. In FramePlayerX, open Settings › Remote control.
+# New pairing code is the headset's button: use its translation.
+remote-pair-stopped = Too many wrong codes. In the headset, press New pairing code under Settings › Remote control.
 remote-connected = Connected
 remote-reconnecting = Reconnecting…
 remote-sent = Sent to headset

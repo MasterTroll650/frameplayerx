@@ -101,13 +101,20 @@ settings-vibration = Mouvements en vibrations
 settings-vibration-desc = Pour les appareils qui ne font que vibrer.
 settings-remotes = Télécommandes
 settings-web-remote = Télécommande par téléphone et navigateur
-settings-web-remote-desc = Contrôlez la lecture depuis votre téléphone : scannez le code ci-dessous.
+settings-web-remote-desc = Contrôlez la lecture, trouvez des vidéos et tapez du texte depuis votre téléphone.
 settings-deovr-remote = API de télécommande DeoVR
 settings-deovr-remote-desc = Port 23554, pour les applications compatibles DeoVR.
 settings-remotes-local = Les deux ne répondent qu’aux appareils de votre réseau local.
 settings-pair = Associer un téléphone
-settings-pair-scan = Scannez avec l’appareil photo de votre téléphone
 settings-pair-new-code = Nouveau code d’association
+settings-pair-open = Sur votre téléphone, ouvrez
+settings-pair-enter = et saisissez
+settings-pair-stopped = L’association s’est arrêtée après cinq codes incorrects.
+settings-pair-phones = { $count ->
+    [one] { $count } téléphone connecté
+   *[other] { $count } téléphones connectés
+}
+settings-unpair-all = Dissocier tous les téléphones
 settings-no-network = Connecté à aucun réseau.
 settings-check-updates = Rechercher les mises à jour au démarrage
 settings-channel-beta-desc = Reçoit aussi les versions de test, avant leur sortie.
@@ -139,10 +146,6 @@ settings-deovr-api-clients = { $count ->
     [one] API DeoVR sur le port { $port } · { $count } client
    *[other] API DeoVR sur le port { $port } · { $count } clients
 }
-settings-pair-or-open = { $count ->
-    [one] ou ouvrez { $url }. { $count } téléphone connecté.
-   *[other] ou ouvrez { $url }. { $count } téléphones connectés.
-}
 settings-update-available = La version { $version } est disponible
 settings-update-installed = La version { $version } est installée
 settings-about-tagline = FramePlayerX { $version } · un lecteur vidéo VR natif pour le Steam Frame
@@ -151,7 +154,7 @@ settings-about-settings-file = Fichier de paramètres
 settings-about-log = Journal
 settings-about-links = Aide et soutien
 settings-about-github = FramePlayerX sur GitHub
-settings-about-github-desc = Actualités, versions et code source. Scannez le code pour l’ouvrir sur votre téléphone.
+settings-about-github-desc = Actualités, versions et code source.
 settings-about-issue = Signaler un problème
 settings-about-issue-desc = Ouvrez une issue sur GitHub, choisissez Bug report et joignez le journal indiqué ci-dessus.
 settings-about-sponsor = Soutenir FramePlayerX
@@ -847,6 +850,7 @@ remote-error-deovr = API de télécommande DeoVR : { $error }
 remote-error-web = télécommande web : { $error }
 format-short-fisheye = Fisheye { $fov }°
 error-save-settings = Les paramètres n’ont pas pu être enregistrés : { $error }
+error-open-page = Impossible d’ouvrir la page : { $error }
 about-runtime = Runtime OpenXR
 about-headset-name = Casque
 about-passthrough = Passthrough pour les applications
@@ -904,10 +908,14 @@ remote-library = Bibliothèque
 remote-search-label = Chercher dans la bibliothèque
 remote-load-more = Charger plus
 remote-unpaired-title = Télécommande FramePlayerX : non associée
-remote-unpaired = Non associée
 remote-unpaired-desc = Ce navigateur n’a pas encore été associé au casque, ou l’association a été réinitialisée.
-remote-unpaired-how = Dans FramePlayerX, ouvrez Paramètres › Télécommande et scannez le code QR avec l’appareil photo de ce téléphone.
-remote-not-paired = Non associée : scannez le code QR dans le casque
+remote-pair-heading = Associer au casque
+remote-pair-how = Dans FramePlayerX, ouvrez Paramètres › Télécommande et saisissez le code affiché.
+remote-pair-code = Code
+remote-pair = Associer
+remote-pair-wrong = Ce n’est pas le code affiché par le casque. Réessayez.
+remote-pair-no-code = Le casque n’affiche aucun code. Dans FramePlayerX, ouvrez Paramètres › Télécommande.
+remote-pair-stopped = Trop de codes incorrects. Dans le casque, appuyez sur Nouveau code d’association sous Paramètres › Télécommande.
 remote-connected = Connectée
 remote-reconnecting = Reconnexion…
 remote-sent = Envoyé au casque

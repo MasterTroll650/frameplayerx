@@ -101,13 +101,20 @@ settings-vibration = Movimientos como vibración
 settings-vibration-desc = Para dispositivos que solo vibran.
 settings-remotes = Controles remotos
 settings-web-remote = Control remoto por móvil y navegador
-settings-web-remote-desc = Controla la reproducción desde tu móvil: escanea el código de abajo.
+settings-web-remote-desc = Controla la reproducción, busca vídeos y escribe desde tu móvil.
 settings-deovr-remote = API de control remoto de DeoVR
 settings-deovr-remote-desc = Puerto 23554, para aplicaciones compatibles con DeoVR.
 settings-remotes-local = Ambos solo responden a dispositivos de tu red local.
 settings-pair = Vincular un móvil
-settings-pair-scan = Escanéalo con la cámara de tu móvil
 settings-pair-new-code = Nuevo código de vinculación
+settings-pair-open = En tu móvil, abre
+settings-pair-enter = e introduce
+settings-pair-stopped = La vinculación se detuvo tras cinco códigos incorrectos.
+settings-pair-phones = { $count ->
+    [one] { $count } móvil conectado
+   *[other] { $count } móviles conectados
+}
+settings-unpair-all = Desvincular todos los móviles
 settings-no-network = No estás conectado a ninguna red.
 settings-check-updates = Buscar actualizaciones al iniciar
 settings-channel-beta-desc = Recibe también versiones de prueba, antes de publicarse.
@@ -139,10 +146,6 @@ settings-deovr-api-clients = { $count ->
     [one] API de DeoVR en el puerto { $port } · { $count } cliente
    *[other] API de DeoVR en el puerto { $port } · { $count } clientes
 }
-settings-pair-or-open = { $count ->
-    [one] o abre { $url }. { $count } móvil conectado.
-   *[other] o abre { $url }. { $count } móviles conectados.
-}
 settings-update-available = La versión { $version } está disponible
 settings-update-installed = La versión { $version } está instalada
 settings-about-tagline = FramePlayerX { $version } · un reproductor de vídeo VR nativo para Steam Frame
@@ -151,7 +154,7 @@ settings-about-settings-file = Archivo de ajustes
 settings-about-log = Registro
 settings-about-links = Ayuda y apoyo
 settings-about-github = FramePlayerX en GitHub
-settings-about-github-desc = Novedades, versiones y el código fuente. Escanea el código para abrirlo en tu móvil.
+settings-about-github-desc = Novedades, versiones y el código fuente.
 settings-about-issue = Informar de un problema
 settings-about-issue-desc = Abre una incidencia en GitHub, elige Bug report y adjunta el registro indicado arriba.
 settings-about-sponsor = Patrocinar FramePlayerX
@@ -847,6 +850,7 @@ remote-error-deovr = API de control remoto de DeoVR: { $error }
 remote-error-web = control remoto web: { $error }
 format-short-fisheye = Ojo de pez { $fov }°
 error-save-settings = No se pudieron guardar los ajustes: { $error }
+error-open-page = No se pudo abrir la página: { $error }
 about-runtime = Runtime de OpenXR
 about-headset-name = Visor
 about-passthrough = Passthrough para aplicaciones
@@ -904,10 +908,14 @@ remote-library = Biblioteca
 remote-search-label = Buscar en la biblioteca
 remote-load-more = Cargar más
 remote-unpaired-title = Control remoto FramePlayerX: sin vincular
-remote-unpaired = Sin vincular
 remote-unpaired-desc = Este navegador aún no se ha vinculado con el visor, o la vinculación se restableció.
-remote-unpaired-how = En FramePlayerX, abre Ajustes › Control remoto y escanea el código QR con la cámara de este móvil.
-remote-not-paired = Sin vincular: escanea el código QR en el visor
+remote-pair-heading = Vincular con el visor
+remote-pair-how = En FramePlayerX, abre Ajustes › Control remoto e introduce el código que muestra.
+remote-pair-code = Código
+remote-pair = Vincular
+remote-pair-wrong = Ese no es el código que muestra el visor. Inténtalo de nuevo.
+remote-pair-no-code = El visor no muestra ningún código. En FramePlayerX, abre Ajustes › Control remoto.
+remote-pair-stopped = Demasiados códigos incorrectos. En el visor, pulsa Nuevo código de vinculación en Ajustes › Control remoto.
 remote-connected = Conectado
 remote-reconnecting = Reconectando…
 remote-sent = Enviado al visor

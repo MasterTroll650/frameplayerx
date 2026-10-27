@@ -11,9 +11,15 @@
 <body>
 <main>
   <section class="card">
-    <h1>{{remote-unpaired:Not paired}}</h1>
+    <h1>{{remote-pair-heading:Pair with the headset}}</h1>
     <p>{{remote-unpaired-desc:This browser has not been paired with the headset yet, or the pairing was reset.}}</p>
-    <p>{{remote-unpaired-how:In FramePlayerX, open Settings › Remote control and scan the QR code with this phone's camera.}}</p>
+    <p>{{remote-pair-how:In FramePlayerX, open Settings › Remote control and enter the code it shows.}}</p>
+    <form class="row" method="post" action="/pair" autocomplete="off">
+      <label for="code" class="sr-only">{{remote-pair-code:Code}}</label>
+      <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="{{remote-pair-code:Code}}" required autofocus>
+      <button type="submit" class="primary">{{remote-pair:Pair}}</button>
+    </form>
+    <p class="hint bad" role="alert">{{pair-message:}}</p>
   </section>
 </main>
 </body>
