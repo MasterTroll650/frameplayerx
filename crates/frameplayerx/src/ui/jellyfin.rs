@@ -620,8 +620,7 @@ fn has_content(body: &Body) -> bool {
     match body {
         Body::Home { home, .. } => home.is_some(),
         Body::Search { results, .. } => !results.is_empty(),
-        Body::Grid { items, .. } => !items.is_empty(),
-        Body::Playlists { items } => !items.is_empty(),
+        Body::Grid { items, .. } | Body::Playlists { items } => !items.is_empty(),
         Body::Series { episodes, .. } => !episodes.is_empty(),
         Body::Item { .. } => true,
     }
