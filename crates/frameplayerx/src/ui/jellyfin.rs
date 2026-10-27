@@ -1,7 +1,8 @@
 //! A Jellyfin/Emby client: the server's libraries and rows of what to watch
-//! next, poster grids the server searches, sorts and filters, series with
-//! their seasons and episodes, and details pages. Watched marks, resume
-//! points and favourites are the server's own.
+//! next, poster grids the server searches, sorts, shuffles and filters
+//! (genres, decades, resolution, studios, tags), series with their seasons
+//! and episodes, and details pages. Watched marks, resume points and
+//! favourites are the server's own.
 
 use super::page::{self, Card};
 use super::theme::{self, Weight};
@@ -9,13 +10,17 @@ use super::widgets::{self, Kind, Tip};
 use super::{Action, View, fmt_time, icons};
 use crate::playback::OpenRequest;
 use egui::{Align2, Color32, RichText, Sense, Vec2};
-use fp_sources::{MbFilter, MbHome, MbItem, MbKind, MbPage, MbQuery, MbSort, MediaBrowserSource};
+use fp_sources::{
+    MbFacets, MbFilter, MbHome, MbItem, MbKind, MbPage, MbQuery, MbSort, MediaBrowserSource,
+};
 use std::time::{Duration, Instant};
 
 /// Typing rests this long before a search goes to the server.
 const SEARCH_DELAY: Duration = Duration::from_millis(600);
 /// Items per page of a grid.
 const PAGE: usize = 60;
+/// The widths the Resolution filter keeps at least.
+const RESOLUTIONS: [(u32, &str); 4] = [(1280, "HD"), (3840, "4K"), (5760, "6K"), (7680, "8K")];
 /// Matches shown per section of a search.
 const SEARCH_LIMIT: usize = 50;
 /// Height of the banners of series and details pages.
@@ -53,13 +58,7 @@ pub enum Body {
         results: Vec<(&'static str, Vec<MbItem>)>,
     },
     /// A library, collection or folder, a page at a time.
-    Grid {
-        title: String,
-        query: MbQuery,
-        items: Vec<MbItem>,
-        total: usize,
-        typed: Option<Instant>,
-    },
+    Grid(Box<Grid>),
     Series {
         series: Box<MbItem>,
         seasons: Vec<MbItem>,
@@ -71,14 +70,165 @@ pub enum Body {
     Item { item: Box<MbItem> },
 }
 
+/// A library, collection or folder, a page at a time.
+pub struct Grid {
+    pub title: String,
+    pub query: MbQuery,
+    pub items: Vec<MbItem>,
+    pub total: usize,
+    pub typed: Option<Instant>,
+    /// Every item of a shuffle, in its order, which its pages follow.
+    pub order: Option<Vec<String>>,
+    pub facets: Facets,
+    pub filters_open: bool,
+    /// How the drawer's long sections are narrowed, by title.
+    pub lists: std::collections::HashMap<&'static str, page::ListState>,
+    /// The tags the page is for ("Tagged ..."), which are not filters.
+    pub base_tags: Vec<String>,
+    /// Sorted or filtered anew: the grid goes back to its top.
+    pub to_top: bool,
+}
+
+/// A grid's genres, years, studios and tags, asked for when its Filters
+/// drawer first opens.
+pub enum Facets {
+    Unasked,
+    Asked,
+    Got(MbFacets),
+    Failed(String),
+}
+
+/// One filter that is on, as its chip under the sorts names it.
+enum On {
+    Genre(String),
+    Decade(i32),
+    Width(u32),
+    Studio(String),
+    Tag(String),
+}
+
+impl Grid {
+    fn new(title: String, query: MbQuery) -> Grid {
+        Grid {
+            title,
+            base_tags: query.tags.clone(),
+            query,
+            items: Vec::new(),
+            total: 0,
+            typed: None,
+            order: None,
+            facets: Facets::Unasked,
+            filters_open: false,
+            lists: Default::default(),
+            to_top: false,
+        }
+    }
+
+    fn on(&self) -> Vec<On> {
+        let q = &self.query;
+        let mut on: Vec<On> = q.genres.iter().cloned().map(On::Genre).collect();
+        on.extend(decades_on(&q.years).into_iter().map(On::Decade));
+        on.extend(q.min_width.map(On::Width));
+        on.extend(q.studios.iter().cloned().map(On::Studio));
+        on.extend(
+            q.tags
+                .iter()
+                .filter(|t| !self.base_tags.contains(t))
+                .cloned()
+                .map(On::Tag),
+        );
+        on
+    }
+
+    /// The chips of the filters that are on.
+    fn labels(&self) -> Vec<String> {
+        self.on()
+            .into_iter()
+            .map(|o| match o {
+                On::Genre(g) => format!("Genre · {g}"),
+                On::Decade(d) => format!("{d}s"),
+                On::Width(w) => format!("{} and up", width_label(w)),
+                On::Studio(s) => format!("Studio · {s}"),
+                On::Tag(t) => format!("Tag · {t}"),
+            })
+            .collect()
+    }
+
+    /// Takes off the filter of chip `i` (see [`Grid::labels`]).
+    fn take_off(&mut self, i: usize) {
+        let on = self.on().into_iter().nth(i);
+        let q = &mut self.query;
+        match on {
+            Some(On::Genre(g)) => q.genres.retain(|x| *x != g),
+            Some(On::Decade(d)) => q.years.retain(|y| !(d..d + 10).contains(y)),
+            Some(On::Width(_)) => q.min_width = None,
+            Some(On::Studio(s)) => q.studios.retain(|x| *x != s),
+            Some(On::Tag(t)) => q.tags.retain(|x| *x != t),
+            None => {}
+        }
+    }
+
+    fn clear_filters(&mut self) {
+        let q = &mut self.query;
+        q.genres.clear();
+        q.years.clear();
+        q.min_width = None;
+        q.studios.clear();
+        q.tags.retain(|t| self.base_tags.contains(t));
+    }
+
+    /// The next page: of a shuffle, its next items by id.
+    fn next_page(&self) -> MbQuery {
+        let start = self.items.len();
+        let ids = self
+            .order
+            .as_ref()
+            .map(|o| o.iter().skip(start).take(PAGE).cloned().collect())
+            .unwrap_or_default();
+        MbQuery {
+            start,
+            limit: PAGE,
+            ids,
+            ..self.query.clone()
+        }
+    }
+}
+
+/// The decades `years` make, newest first.
+fn decades(years: &[i32]) -> Vec<i32> {
+    let mut d: Vec<i32> = years.iter().map(|y| y - y.rem_euclid(10)).collect();
+    d.sort_unstable_by(|a, b| b.cmp(a));
+    d.dedup();
+    d
+}
+
+/// The decades a query keeps whole (the Released filter adds and takes
+/// off a decade's ten years).
+fn decades_on(years: &[i32]) -> Vec<i32> {
+    decades(years)
+        .into_iter()
+        .filter(|d| (*d..*d + 10).all(|y| years.contains(&y)))
+        .collect()
+}
+
+fn width_label(w: u32) -> &'static str {
+    RESOLUTIONS
+        .iter()
+        .find(|(x, _)| *x == w)
+        .map_or("", |(_, label)| label)
+}
+
 /// What to ask a server for.
 #[derive(Clone, Debug)]
 pub enum Load {
     Home,
     /// The titles matching the text.
     Search(String),
-    /// A page of a listing; past the first it adds to what is shown.
+    /// A page of a listing; past the first it adds to what is shown. A
+    /// shuffle's first asks for its order too.
     Grid(MbQuery),
+    /// What a listing's library can be filtered by.
+    Facets(MbQuery),
     /// A series with its seasons and one season's episodes (`season`, else
     /// the one to watch next).
     Series {
@@ -111,7 +261,13 @@ pub enum Loaded {
     Grid {
         page: MbPage,
         append: bool,
+        /// A new shuffle's order.
+        order: Option<Vec<String>>,
+        /// Items asked for by id (a shuffle's): the order stays.
+        by_id: bool,
     },
+    /// Failing quietly: the drawer says so, the page goes on.
+    Facets(Result<MbFacets, String>),
     Series {
         series: Box<MbItem>,
         seasons: Vec<MbItem>,
@@ -131,10 +287,49 @@ pub fn run(src: &MediaBrowserSource, load: &Load) -> fp_sources::Result<Loaded> 
             text: text.clone(),
             results: src.search(text, SEARCH_LIMIT)?,
         },
+        // A page of a shuffle: those items, wherever the listing starts.
+        Load::Grid(q) if !q.ids.is_empty() => Loaded::Grid {
+            page: src.items(&MbQuery {
+                start: 0,
+                limit: q.ids.len(),
+                ..q.clone()
+            })?,
+            append: q.start > 0,
+            order: None,
+            by_id: true,
+        },
+        // Server shuffles differ page to page: its order is asked for once.
+        Load::Grid(q) if q.sort == MbSort::Random => {
+            let order = src.shuffled(q)?;
+            let first: Vec<String> = order.iter().take(q.limit).cloned().collect();
+            let items = if first.is_empty() {
+                Vec::new()
+            } else {
+                src.items(&MbQuery {
+                    start: 0,
+                    limit: first.len(),
+                    ids: first,
+                    ..q.clone()
+                })?
+                .items
+            };
+            Loaded::Grid {
+                page: MbPage {
+                    total: order.len(),
+                    items,
+                },
+                append: false,
+                order: Some(order),
+                by_id: true,
+            }
+        }
         Load::Grid(q) => Loaded::Grid {
             page: src.items(q)?,
             append: q.start > 0,
+            order: None,
+            by_id: false,
         },
+        Load::Facets(q) => Loaded::Facets(src.facets(q).map_err(|e| e.to_string())),
         Load::Series { id, season } => {
             let series = Box::new(src.item(id)?);
             let seasons = src.seasons(id)?;
@@ -183,7 +378,10 @@ impl JellyfinView {
         let Some(p) = self.pages.iter_mut().find(|p| p.seq == seq) else {
             return;
         };
-        p.loading = false;
+        // The drawer's choices come beside the page's own answers.
+        if !matches!(result, Ok(Loaded::Facets(_))) {
+            p.loading = false;
+        }
         let loaded = match result {
             Ok(l) => l,
             Err(e) => {
@@ -198,13 +396,35 @@ impl JellyfinView {
                 *asked = text;
                 *results = r;
             }
-            (Body::Grid { items, total, .. }, Loaded::Grid { page, append }) => {
+            (
+                Body::Grid(g),
+                Loaded::Grid {
+                    page,
+                    append,
+                    order,
+                    by_id,
+                },
+            ) => {
                 if append {
-                    items.extend(page.items);
+                    g.items.extend(page.items);
                 } else {
-                    *items = page.items;
+                    g.items = page.items;
                 }
-                *total = page.total.max(items.len());
+                if order.is_some() {
+                    g.order = order;
+                } else if !by_id && !append {
+                    g.order = None;
+                }
+                g.total = match &g.order {
+                    Some(o) => o.len(),
+                    None => page.total.max(g.items.len()),
+                };
+            }
+            (Body::Grid(g), Loaded::Facets(f)) => {
+                g.facets = match f {
+                    Ok(f) => Facets::Got(f),
+                    Err(e) => Facets::Failed(e),
+                }
             }
             (
                 Body::Series {
@@ -251,10 +471,18 @@ impl JellyfinView {
         let load = match &p.body {
             Body::Home { .. } => Load::Home,
             Body::Search { asked, .. } => Load::Search(asked.clone()),
-            Body::Grid { query, items, .. } => Load::Grid(MbQuery {
-                start: 0,
-                limit: items.len().max(PAGE),
-                ..query.clone()
+            Body::Grid(g) => Load::Grid(match &g.order {
+                // The same shuffle, brought up to date.
+                Some(o) => MbQuery {
+                    start: 0,
+                    ids: o.iter().take(g.items.len().max(PAGE)).cloned().collect(),
+                    ..g.query.clone()
+                },
+                None => MbQuery {
+                    start: 0,
+                    limit: g.items.len().max(PAGE),
+                    ..g.query.clone()
+                },
             }),
             Body::Series { series, season, .. } => Load::Series {
                 id: series.id.clone(),
@@ -265,6 +493,18 @@ impl JellyfinView {
             },
         };
         Some((p.seq, load))
+    }
+
+    /// Whether the page shown has its Filters drawer open.
+    pub fn filters_open(&self) -> bool {
+        matches!(self.pages.last().map(|p| &p.body), Some(Body::Grid(g)) if g.filters_open)
+    }
+
+    /// Opens or closes the Filters drawer of the page shown, a grid.
+    pub fn show_filters(&mut self, open: bool) {
+        if let Some(Body::Grid(g)) = self.pages.last_mut().map(|p| &mut p.body) {
+            g.filters_open = open;
+        }
     }
 
     /// Shows a mark at once wherever the item appears; the server is told
@@ -298,7 +538,7 @@ impl JellyfinView {
                     .iter_mut()
                     .flat_map(|(_, items)| items.iter_mut())
                     .for_each(set),
-                Body::Grid { items, .. } => items.iter_mut().for_each(set),
+                Body::Grid(g) => g.items.iter_mut().for_each(set),
                 Body::Series {
                     series,
                     episodes,
@@ -332,6 +572,8 @@ enum Go {
     Details(MbItem),
     /// Load again what the page shows (`Load` with the page's number).
     Reload(Load),
+    /// The Filters drawer's choices, beside what the page shows.
+    Facets(MbQuery),
     Mark(String, Mark, bool),
     /// Play the item at this location from this version (`None`: the
     /// tallest that fits).
@@ -377,8 +619,12 @@ pub fn page(
     };
     page::status(ui, p.loading && !has_content(&p.body), p.error.as_deref());
     let loading = p.loading;
+    let top = match &mut p.body {
+        Body::Grid(g) => std::mem::take(&mut g.to_top),
+        _ => false,
+    };
     let mut go: Option<Go> = None;
-    page::scroll(ui, |ui| {
+    page::scroll_from(ui, top, |ui| {
         go = match &mut p.body {
             Body::Home {
                 home,
@@ -403,13 +649,7 @@ pub fn page(
                 asked,
                 results,
             } => search_results(ui, v, search, typed, asked, results, loading),
-            Body::Grid {
-                query,
-                items,
-                total,
-                typed,
-                ..
-            } => grid(ui, v, query, items, *total, typed),
+            Body::Grid(g) => grid(ui, v, g, loading),
             Body::Series {
                 series,
                 seasons,
@@ -440,6 +680,11 @@ fn follow(v: &mut View, source: &str, j: &mut JellyfinView, go: Go) {
             if let Some(p) = j.pages.last_mut() {
                 p.loading = true;
                 ask(v, p.seq, load);
+            }
+        }
+        Go::Facets(query) => {
+            if let Some(p) = j.pages.last() {
+                ask(v, p.seq, Load::Facets(query));
             }
         }
         Go::Play(list, i, from_start) => {
@@ -516,13 +761,7 @@ fn follow(v: &mut View, source: &str, j: &mut JellyfinView, go: Go) {
                 limit: PAGE,
                 ..MbQuery::tagged(&tag)
             };
-            let body = Body::Grid {
-                title: format!("Tagged {tag}"),
-                query: query.clone(),
-                items: Vec::new(),
-                total: 0,
-                typed: None,
-            };
+            let body = Body::Grid(Box::new(Grid::new(format!("Tagged {tag}"), query.clone())));
             ask(v, seq, Load::Grid(query));
             j.open(seq, body);
         }
@@ -566,13 +805,7 @@ fn page_for(item: MbItem) -> (Load, Body) {
                 limit: PAGE,
                 ..MbQuery::children(&item)
             };
-            let body = Body::Grid {
-                title: item.name.clone(),
-                query: query.clone(),
-                items: Vec::new(),
-                total: 0,
-                typed: None,
-            };
+            let body = Body::Grid(Box::new(Grid::new(item.name.clone(), query.clone())));
             (Load::Grid(query), body)
         }
     }
@@ -587,7 +820,7 @@ fn trail(pages: &[Page]) -> String {
         .filter_map(|p| match &p.body {
             Body::Home { .. } => None,
             Body::Search { asked, .. } => Some(format!("Search \"{asked}\"")),
-            Body::Grid { title, .. } => Some(title.clone()),
+            Body::Grid(g) => Some(g.title.clone()),
             Body::Series { series, .. } => Some(series.name.clone()),
             Body::Item { item } => Some(item.name.clone()),
         })
@@ -603,7 +836,7 @@ fn has_content(body: &Body) -> bool {
     match body {
         Body::Home { home, .. } => home.is_some(),
         Body::Search { results, .. } => !results.is_empty(),
-        Body::Grid { items, .. } => !items.is_empty(),
+        Body::Grid(g) => !g.items.is_empty(),
         Body::Series { episodes, .. } => !episodes.is_empty(),
         Body::Item { .. } => true,
     }
@@ -689,6 +922,7 @@ fn item_card(ui: &mut egui::Ui, v: &mut View, item: &MbItem, portrait: bool) -> 
     let placeholder = match item.kind {
         MbKind::Series | MbKind::Season => icons::MONITOR_PLAY,
         MbKind::Library | MbKind::Folder | MbKind::BoxSet => icons::FOLDERS,
+        MbKind::Person => icons::USER,
         _ => icons::FILM_STRIP,
     };
     page::card(
@@ -799,27 +1033,26 @@ fn search_results(
             ui,
             icons::MAGNIFYING_GLASS,
             "Nothing found",
-            &format!("No film, series, collection or video on this server is called \"{asked}\"."),
+            &format!(
+                "No film, series, collection, video or person on this server is called \"{asked}\"."
+            ),
             |_| {},
         );
     }
     go
 }
 
-/// A searchable, sortable, filterable listing.
-fn grid(
-    ui: &mut egui::Ui,
-    v: &mut View,
-    query: &mut MbQuery,
-    items: &[MbItem],
-    total: usize,
-    typed: &mut Option<Instant>,
-) -> Option<Go> {
+/// A searchable, sortable, filterable listing, loading more as its end
+/// shows.
+fn grid(ui: &mut egui::Ui, v: &mut View, g: &mut Grid, loading: bool) -> Option<Go> {
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        if page::search_field(ui, &mut query.search, "Search", 220.0) {
-            *typed = Some(Instant::now());
+        if page::search_field(ui, &mut g.query.search, "Search", 220.0) {
+            g.typed = Some(Instant::now());
+        }
+        if page::filters_button(ui, g.on().len()).clicked() {
+            g.filters_open = !g.filters_open;
         }
         ui.add_space(10.0);
         for (f, label) in [
@@ -828,8 +1061,8 @@ fn grid(
             (MbFilter::Resumable, "In progress"),
             (MbFilter::Favorites, "Favorites"),
         ] {
-            if widgets::chip(ui, label, query.filter == f).clicked() && query.filter != f {
-                query.filter = f;
+            if widgets::chip(ui, label, g.query.filter == f).clicked() && g.query.filter != f {
+                g.query.filter = f;
                 changed = true;
             }
         }
@@ -844,70 +1077,189 @@ fn grid(
                 (MbSort::Released, "Release date"),
                 (MbSort::Rating, "Rating"),
                 (MbSort::Runtime, "Length"),
+                (MbSort::LastWatched, "Last watched"),
                 (MbSort::Random, "Shuffle"),
             ],
-            &mut query.sort,
+            &mut g.query.sort,
         ) {
-            query.descending = query.sort.default_descending();
+            g.query.descending = g.query.sort.default_descending();
             changed = true;
         }
-        if query.sort != MbSort::Random {
-            let (icon, tip) = if query.descending {
-                (icons::CARET_DOWN, "Largest first")
-            } else {
-                (icons::CARET_UP, "Smallest first")
-            };
-            if widgets::icon_button(ui, icon, 38.0, false)
-                .tip(tip)
-                .clicked()
-            {
-                query.descending = !query.descending;
-                changed = true;
-            }
-        }
-        page::count_label(ui, &page::plural(total, "item", "items"));
+        changed |= if g.query.sort == MbSort::Random {
+            page::shuffle_again(ui)
+        } else {
+            page::direction(
+                ui,
+                &mut g.query.descending,
+                ["Largest first", "Smallest first"],
+            )
+        };
+        page::count_label(ui, &page::plural(g.total, "item", "items"));
     });
+    match page::active_filters(ui, &g.labels()) {
+        Some(page::FilterEdit::Remove(i)) => {
+            g.take_off(i);
+            changed = true;
+        }
+        Some(page::FilterEdit::Clear) => {
+            g.clear_filters();
+            changed = true;
+        }
+        None => {}
+    }
     ui.add_space(10.0);
-    if let Some(t) = *typed {
+    if let Some(t) = g.typed {
         if t.elapsed() >= SEARCH_DELAY {
-            *typed = None;
+            g.typed = None;
             changed = true;
         } else {
             ui.ctx().request_repaint_after(SEARCH_DELAY);
         }
     }
+    let mut go = None;
+    if g.filters_open {
+        if matches!(g.facets, Facets::Unasked) {
+            g.facets = Facets::Asked;
+            go = Some(Go::Facets(g.query.clone()));
+        }
+        let mut open = true;
+        let count = page::plural(g.total, "item", "items");
+        let clear = page::filter_drawer(ui, &mut open, &count, |ui| changed |= drawer(ui, g));
+        g.filters_open = open;
+        if clear {
+            g.clear_filters();
+            changed = true;
+        }
+    }
     if changed {
-        query.start = 0;
-        query.limit = PAGE;
-        return Some(Go::Reload(Load::Grid(query.clone())));
+        g.query.start = 0;
+        g.query.limit = PAGE;
+        g.query.ids.clear();
+        g.to_top = true;
+        return Some(Go::Reload(Load::Grid(g.query.clone())));
     }
-    if items.is_empty() {
-        return None;
+    if g.items.is_empty() {
+        return go;
     }
+    let items = &g.items;
     let portrait = items.iter().filter(|i| i.kind.portrait()).count() * 2 >= items.len();
     let width = if portrait {
         page::PORTRAIT.x
     } else {
         page::LANDSCAPE.x
     };
-    let mut go = None;
     page::grid(ui, items.len(), width, |ui, i| {
         let c = item_card(ui, v, &items[i], portrait);
         go = go.take().or_else(|| card_go(c, items, i));
     });
-    if items.len() < total {
-        ui.vertical_centered(|ui| {
-            if widgets::button(ui, None, "Show more", Kind::Secondary).clicked() {
-                go = Some(Go::Reload(Load::Grid(MbQuery {
-                    start: items.len(),
-                    limit: PAGE,
-                    ..query.clone()
-                })));
-            }
-        });
-        ui.add_space(20.0);
+    if items.len() < g.total && page::load_more(ui, loading) {
+        go = Some(Go::Reload(Load::Grid(g.next_page())));
     }
     go
+}
+
+/// The Filters drawer's sections, those the library has choices for; true
+/// when a filter changed.
+fn drawer(ui: &mut egui::Ui, g: &mut Grid) -> bool {
+    let facets = match std::mem::replace(&mut g.facets, Facets::Asked) {
+        Facets::Got(f) => f,
+        other => {
+            match &other {
+                Facets::Failed(e) => {
+                    ui.label(
+                        RichText::new(format!("{}  {e}", icons::WARNING_CIRCLE))
+                            .color(theme::ERROR),
+                    );
+                }
+                _ => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(RichText::new("Asking the server…").color(theme::TEXT_2));
+                    });
+                }
+            }
+            g.facets = other;
+            return false;
+        }
+    };
+    let mut changed = false;
+    let toggle = |list: &mut Vec<String>, name: &str| match list.iter().position(|x| x == name) {
+        Some(i) => {
+            list.remove(i);
+        }
+        None => list.push(name.to_string()),
+    };
+    let q = &mut g.query;
+    let lists = &mut g.lists;
+    let mut list = |ui: &mut egui::Ui,
+                    title: &'static str,
+                    hint: &str,
+                    names: &[&str],
+                    chosen: &mut Vec<String>| {
+        if names.is_empty() {
+            return false;
+        }
+        let choices: Vec<(&str, Option<usize>)> = names.iter().map(|n| (*n, None)).collect();
+        let state = lists.entry(title).or_default();
+        let on = |n: &str| chosen.iter().any(|c| c == n);
+        let picked = page::filter_list(ui, title, hint, &choices, on, state);
+        if let Some(name) = picked {
+            toggle(chosen, name);
+        }
+        picked.is_some()
+    };
+    let genres: Vec<&str> = facets.genres.iter().map(String::as_str).collect();
+    changed |= list(ui, "Genres", "Find a genre", &genres, &mut q.genres);
+    let decades = decades(&facets.years);
+    if !decades.is_empty() {
+        let on = decades_on(&q.years);
+        page::filter_section(ui, "Released", |ui| {
+            for d in decades {
+                if page::filter_chip(ui, &format!("{d}s"), None, on.contains(&d)) {
+                    if on.contains(&d) {
+                        q.years.retain(|y| !(d..d + 10).contains(y));
+                    } else {
+                        q.years.extend(d..d + 10);
+                    }
+                    changed = true;
+                }
+            }
+        });
+    }
+    // Series and folders have no width of their own.
+    let videos = q.types.is_empty()
+        || q.types
+            .iter()
+            .any(|t| matches!(t.as_str(), "Movie" | "Video" | "MusicVideo" | "Episode"));
+    if videos {
+        page::filter_section(ui, "Resolution", |ui| {
+            for (w, label) in RESOLUTIONS {
+                let on = q.min_width == Some(w);
+                if page::filter_chip(ui, label, None, on) {
+                    q.min_width = (!on).then_some(w);
+                    changed = true;
+                }
+            }
+        });
+    }
+    let studios: Vec<&str> = facets.studios.iter().map(String::as_str).collect();
+    changed |= list(ui, "Studios", "Find a studio", &studios, &mut q.studios);
+    // The page's own tag is no choice.
+    let tags: Vec<&str> = facets
+        .tags
+        .iter()
+        .filter(|t| !g.base_tags.contains(t))
+        .map(String::as_str)
+        .collect();
+    changed |= list(ui, "Tags", "Find a tag", &tags, &mut q.tags);
+    if facets.genres.is_empty() && facets.studios.is_empty() && facets.tags.is_empty() && !videos {
+        ui.label(
+            RichText::new("This library has no genres, studios or tags to filter by.")
+                .color(theme::TEXT_2),
+        );
+    }
+    g.facets = Facets::Got(facets);
+    changed
 }
 
 /// Year, rating and other facts about an item.
@@ -1382,16 +1734,13 @@ mod tests {
             seq: 2,
             loading: true,
             error: None,
-            body: Body::Grid {
-                title: "Movies".into(),
-                query: MbQuery {
+            body: Body::Grid(Box::new(Grid::new(
+                "Movies".into(),
+                MbQuery {
                     parent: Some("lib".into()),
                     ..MbQuery::default()
                 },
-                items: vec![],
-                total: 0,
-                typed: None,
-            },
+            ))),
         });
         let page = |n: usize| MbPage {
             items: (0..n)
@@ -1399,32 +1748,20 @@ mod tests {
                 .collect(),
             total: 100,
         };
-        j.loaded(
-            2,
-            Ok(Loaded::Grid {
-                page: page(60),
-                append: false,
-            }),
-        );
-        j.loaded(
-            2,
-            Ok(Loaded::Grid {
-                page: page(40),
-                append: true,
-            }),
-        );
+        let grid = |page: MbPage, append: bool| Loaded::Grid {
+            page,
+            append,
+            order: None,
+            by_id: false,
+        };
+        j.loaded(2, Ok(grid(page(60), false)));
+        j.loaded(2, Ok(grid(page(40), true)));
         // An answer for a page that is gone is dropped.
-        j.loaded(
-            9,
-            Ok(Loaded::Grid {
-                page: page(5),
-                append: false,
-            }),
-        );
-        let Body::Grid { items, total, .. } = &j.pages[1].body else {
+        j.loaded(9, Ok(grid(page(5), false)));
+        let Body::Grid(g) = &j.pages[1].body else {
             panic!()
         };
-        assert_eq!((items.len(), *total), (100, 100));
+        assert_eq!((g.items.len(), g.total), (100, 100));
         assert!(!j.pages[1].loading);
         // The home page is still waiting.
         assert!(j.pages[0].loading);
@@ -1440,6 +1777,90 @@ mod tests {
         assert_eq!(seq, 2);
         let Load::Grid(q) = load else { panic!() };
         assert_eq!((q.start, q.limit), (0, 100));
+    }
+
+    #[test]
+    fn a_shuffle_pages_through_its_own_order() {
+        let mut j = JellyfinView::new(1);
+        let mut g = Grid::new("Movies".into(), MbQuery::default());
+        g.query.sort = MbSort::Random;
+        j.pages[0].body = Body::Grid(Box::new(g));
+        let order: Vec<String> = (0..150).map(|i| format!("id{i}")).collect();
+        let items = |ids: &[String]| MbPage {
+            items: ids.iter().map(|i| item(i, MbKind::Movie)).collect(),
+            total: 0,
+        };
+        j.loaded(
+            1,
+            Ok(Loaded::Grid {
+                page: items(&order[..60]),
+                append: false,
+                order: Some(order.clone()),
+                by_id: true,
+            }),
+        );
+        let Body::Grid(g) = &j.pages[0].body else {
+            panic!()
+        };
+        assert_eq!(g.total, 150, "the shuffle's length");
+        // The next page is the order's next 60, by id.
+        let next = g.next_page();
+        assert_eq!((next.start, next.ids.len()), (60, 60));
+        assert_eq!(next.ids[0], "id60");
+        j.loaded(
+            1,
+            Ok(Loaded::Grid {
+                page: items(&next.ids),
+                append: true,
+                order: None,
+                by_id: true,
+            }),
+        );
+        // A reload (after watching something) keeps the order.
+        let Some((_, Load::Grid(q))) = j.reload() else {
+            panic!()
+        };
+        assert_eq!(q.ids.len(), 120);
+        assert_eq!(q.ids[..3], order[..3]);
+        j.loaded(
+            1,
+            Ok(Loaded::Grid {
+                page: items(&q.ids),
+                append: false,
+                order: None,
+                by_id: true,
+            }),
+        );
+        let Body::Grid(g) = &j.pages[0].body else {
+            panic!()
+        };
+        assert_eq!((g.items.len(), g.total), (120, 150));
+        assert!(g.order.is_some());
+        // The drawer's choices don't end the page's loading.
+        j.pages[0].loading = true;
+        j.loaded(1, Ok(Loaded::Facets(Ok(MbFacets::default()))));
+        assert!(j.pages[0].loading);
+    }
+
+    #[test]
+    fn filters_are_chips_until_taken_off() {
+        let mut g = Grid::new("Tagged sea".into(), MbQuery::tagged("sea"));
+        assert!(g.labels().is_empty(), "the page's own tag is no filter");
+        g.query.genres = vec!["Drama".into()];
+        g.query.years = (1990..2000).chain([2004]).collect();
+        g.query.min_width = Some(3840);
+        g.query.tags.push("night".into());
+        assert_eq!(
+            g.labels(),
+            ["Genre · Drama", "1990s", "4K and up", "Tag · night"],
+            "a decade counts whole"
+        );
+        g.take_off(1);
+        assert_eq!(g.query.years, [2004]);
+        g.clear_filters();
+        assert!(g.labels().is_empty());
+        assert_eq!(g.query.tags, ["sea"]);
+        assert_eq!(decades(&[2021, 1999, 2020, 1985]), [2020, 1990, 1980]);
     }
 
     #[test]

@@ -13,7 +13,7 @@ data=crates/fp-media/tests/data
 home="$(mktemp -d)"
 jf_port_file="$home/jf.port"
 python3 - "$home" "$jf_port_file" <<'PY' &
-import glob, http.server, json, os, sqlite3, sys
+import glob, http.server, json, os, random, sqlite3, sys, urllib.parse
 
 home, port_file = sys.argv[1], sys.argv[2]
 
@@ -69,6 +69,42 @@ LATEST_VR = [
      "UserData": {"Played": True}},
 ]
 
+# What the VR Videos grid can be filtered by.
+FACETS = {
+    "Genres": ["Documentary", "Nature", "Timelapse", "Travel"],
+    "Studios": ["Coastline Films", "Northlight VR"],
+    "Years": ["2026", "2025"],
+    "Tags": ["beach", "city", "drone", "night", "sunset"],
+}
+
+# The people a search finds (one without a picture); each is in a few videos.
+PEOPLE = [
+    {"Id": "p_riley", "Name": "Riley Brooks", "Type": "Person", "ImageTags": {"Primary": "r"}},
+    {"Id": "p_rivera", "Name": "Alex Rivera", "Type": "Person", "ImageTags": {}},
+]
+
+def grid_items(query):
+    """The VR Videos library: by id for a shuffle's pages, shuffled when asked.
+    A search's videos by title, a person's by who they are."""
+    q = urllib.parse.parse_qs(query)
+    if "SearchTerm" in q:
+        term = q["SearchTerm"][0].lower()
+        if "Video" not in q.get("IncludeItemTypes", [""])[0].split(","):
+            return []
+        return [i for i in LATEST_VR if term in i["Name"].lower()]
+    if q.get("PersonIds"):
+        return LATEST_VR[1:4]
+    if q.get("ParentId") != ["lib_vr"]:
+        return []
+    ids = q.get("Ids", [""])[0]
+    if ids:
+        by_id = {i["Id"]: i for i in LATEST_VR}
+        return [by_id[i] for i in ids.split(",") if i in by_id]
+    items = list(LATEST_VR)
+    if q.get("SortBy") == ["Random"]:
+        random.shuffle(items)
+    return items
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -86,8 +122,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
         if path.endswith("/Views"):
             body = VIEWS
+        elif path == "/Users/u1/Items":
+            items = grid_items(query)
+            body = {"Items": items, "TotalRecordCount": len(items)}
+        elif path == "/Persons":
+            term = urllib.parse.parse_qs(query).get("SearchTerm", [""])[0].lower()
+            body = {"Items": [p for p in PEOPLE if term in p["Name"].lower()]}
+        elif path == "/Items/Filters":
+            body = {"Tags": FACETS["Tags"], "Genres": FACETS["Genres"]}
+        elif path.lstrip("/") in FACETS:
+            body = {"Items": [{"Name": n} for n in FACETS[path.lstrip("/")]]}
         elif path.endswith("/Items/Resume"):
             body = RESUME
         elif path.endswith("/Items/Latest"):
@@ -171,6 +218,22 @@ panel main local
 open-source jellyfin
 wait 1
 panel main jellyfin
+# A library of the server, and its Filters drawer (Back closes it).
+point main 0.133 0.37
+click
+wait 1
+panel main jellyfin-grid
+filters
+wait 1
+panel main jellyfin-filters
+button secondary
+frames 4
+# Search: titles, and the people whose names match.
+button secondary
+frames 4
+jellyfin-search ri
+wait 1
+panel main jellyfin-search
 # Playlists: none yet, one made of the library, its page; Up next.
 details
 panel main details

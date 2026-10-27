@@ -26,7 +26,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 mod catalog;
-pub use catalog::{MbFilter, MbHome, MbItem, MbKind, MbPage, MbQuery, MbSort, MbVersion};
+pub use catalog::{MbFacets, MbFilter, MbHome, MbItem, MbKind, MbPage, MbQuery, MbSort, MbVersion};
 
 /// Largest JSON document accepted from a MediaBrowser API endpoint (64 MiB).
 const JSON_LIMIT: u64 = 64 << 20;

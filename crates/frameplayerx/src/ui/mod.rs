@@ -367,8 +367,16 @@ impl SourceView {
                     Back::Done
                 }
             },
+            SourcePage::Jellyfin(j) if j.filters_open() => {
+                j.show_filters(false);
+                Back::Done
+            }
             SourcePage::Jellyfin(j) if j.pages.len() > 1 => {
                 j.pages.pop();
+                Back::Done
+            }
+            SourcePage::Feed(f) if f.filters_open => {
+                f.filters_open = false;
                 Back::Done
             }
             SourcePage::Feed(f) if f.details.is_some() => {

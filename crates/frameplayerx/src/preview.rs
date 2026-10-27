@@ -26,6 +26,7 @@
 //! | `screen NAME [TAB]` | show a browser screen (`home`, `library`, `sources`, `settings` and its tab) |
 //! | `adjust [TAB]` | open the adjustments panel (at tab TAB) |
 //! | `tracks` | open the audio and subtitles picker |
+//! | `filters` | open the Filters drawer of the source page shown (a Jellyfin grid, a feed) |
 //! | `chroma` | turn chroma key on for the open video |
 //! | `panel PANEL NAME` | save a panel's image flat, pixel for pixel, as OUT_DIR/NAME.png |
 
@@ -293,6 +294,16 @@ impl Sim {
                 }
                 self.app.repaint_all();
                 self.run_frames(3)?;
+            }
+            Some("filters") => {
+                use crate::ui::SourcePage;
+                match self.app.ui.source.as_mut().map(|s| &mut s.page) {
+                    Some(SourcePage::Feed(f)) => f.filters_open = true,
+                    Some(SourcePage::Jellyfin(j)) => j.show_filters(true),
+                    _ => return Err("no Jellyfin grid or feed is open".into()),
+                }
+                self.app.repaint_all();
+                self.run_frames(6)?;
             }
             Some("tracks") => {
                 self.app.ui.tracks_open = true;
