@@ -18,6 +18,7 @@ impl App {
                     self.open_request(req);
                 }
             }
+            Action::StepQueue(dir) => self.step_queue(dir),
             Action::QueueRemove(i) => self.queue.remove(i),
             Action::QueueMove(from, to) => self.queue.move_item(from, to),
             Action::QueueClear => self.queue.clear_rest(),
@@ -109,16 +110,26 @@ impl App {
             Action::ClearKeyframes => self.edit_view(|p, _| p.keyframes = Default::default()),
             Action::AddBookmark => self.add_bookmark(),
             Action::SelectAudio(i) => {
-                if let Some(p) = self.player() {
-                    p.select_audio(i);
+                if let Some(p) = &mut self.playback {
+                    p.player.select_audio(i);
+                    p.picked.audio = Some(i);
+                    p.save_tracks(&self.services.library);
                 }
             }
-            Action::SelectSubtitleStream(i) => {
-                if let Some(p) = self.player() {
-                    p.select_subtitle(i);
+            Action::SelectSubtitles(pick) => {
+                if let crate::subtitles::Pick::File(i) = pick {
+                    self.select_subtitle_file(Some(i));
+                } else {
+                    self.select_subtitle_file(None);
+                    if let Some(p) = self.player() {
+                        p.select_subtitle(pick.stream());
+                    }
+                }
+                if let Some(p) = &mut self.playback {
+                    p.picked.subtitles = crate::subtitles::saved(pick, &p.subtitle_files);
+                    p.save_tracks(&self.services.library);
                 }
             }
-            Action::SelectSubtitleFile(i) => self.select_subtitle_file(i),
             Action::ResetPlacement => self.reset_placement(),
             Action::SetFavorite(id, f) => {
                 let r = self.services.library.set_favorite(id, f);

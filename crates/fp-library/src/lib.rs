@@ -37,8 +37,8 @@ pub use library::{
 pub use playlist::{Playlist, PlaylistEntry};
 pub use query::{Query, Sort, SortDirection, StereoFilter};
 pub use record::{
-    HistoryEntry, Marker, MarkerId, MediaId, MediaRecord, PlaylistId, ProjectionKind, SessionId,
-    TagCount,
+    HistoryEntry, Marker, MarkerId, MediaId, MediaRecord, PickedSubtitles, PickedTracks,
+    PlaylistId, ProjectionKind, SessionId, TagCount,
 };
 pub use scan::{
     SCRIPT_AXES, ScanError, ScanOptions, ScanPhase, ScanProgress, ScanReport, script_axis,

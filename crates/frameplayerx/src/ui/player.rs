@@ -61,12 +61,18 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
     widgets::panel_slab(ctx, 28.0);
     let frame = egui::Frame::new()
         .outer_margin(widgets::SHADOW_ROOM)
-        .inner_margin(egui::Margin::symmetric(28, 18));
+        .inner_margin(egui::Margin::symmetric(BAR_MARGIN, 18));
     egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
         let Some(pb) = v.playback.as_deref_mut() else {
             return;
         };
-        title_row(ui, pb, v.state, v.settings.hardware_decoding);
+        title_row(
+            ui,
+            pb,
+            v.state,
+            v.settings.hardware_decoding,
+            &v.settings.subtitle_language,
+        );
         ui.add_space(6.0);
         seek_row(ui, pb, v.state, v.actions);
         ui.add_space(8.0);
@@ -80,7 +86,7 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
                 .layout(Layout::left_to_right(Align::Center)),
         );
         widgets::well(&mut left, |ui| browse_and_sound(ui, pb, v.state, v.actions));
-        transport(ui, row, pb, v.settings.seek_step, v.actions);
+        transport(ui, row, pb, v.settings.seek_step, v.queue, v.actions);
         let mut right = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(row)
@@ -100,6 +106,10 @@ pub fn control_bar(ctx: &egui::Context, v: &mut View) {
     });
 }
 
+/// The control bar's side margin; the audio and subtitles picker lines up
+/// with the end of what is inside it.
+pub const BAR_MARGIN: i8 = 28;
+
 /// The format and stream pills open the adjust panel's Format tab (again
 /// closes it).
 fn toggle_format_tab(state: &mut super::UiState) {
@@ -108,12 +118,13 @@ fn toggle_format_tab(state: &mut super::UiState) {
     state.adjust_tab = 0;
 }
 
-/// Title, status and format.
+/// Title, status, format, and the audio and subtitles in use.
 fn title_row(
     ui: &mut egui::Ui,
     pb: &crate::playback::Playback,
     state: &mut super::UiState,
     hardware_decoding: bool,
+    language: &str,
 ) {
     ui.horizontal(|ui| {
         ui.set_height(30.0);
@@ -133,6 +144,13 @@ fn title_row(
                 {
                     toggle_format_tab(state);
                 }
+            }
+            if let Some(label) = tracks_label(pb, language)
+                && tracks_pill(ui, &label, state.tracks_open)
+                    .tip("Audio and subtitles")
+                    .clicked()
+            {
+                state.tracks_open = !state.tracks_open;
             }
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 let message = match pb.player.error() {
@@ -255,29 +273,31 @@ fn browse_and_sound(
         }
     }
     let mut vol_edit = vol;
-    if widgets::slider(ui, &mut vol_edit, 0.0..=1.5, 130.0).changed() {
+    if widgets::slider(ui, &mut vol_edit, 0.0..=1.5, 100.0).changed() {
         actions.push(Action::SetVolume(vol_edit));
     }
     ui.add_space(6.0);
 }
 
-/// Rewind, play and forward, centred on the row.
+/// Previous, rewind, play, forward and next, centred on the row.
 fn transport(
     ui: &mut egui::Ui,
     row: egui::Rect,
     pb: &crate::playback::Playback,
     step: f64,
+    queue: &crate::queue::Queue,
     actions: &mut Vec<Action>,
 ) {
     let paused = pb.player.is_paused() || pb.player.state() == PlayerState::Ended;
-    let centre_w = 56.0 + 16.0 + 72.0 + 16.0 + 56.0;
+    let centre_w = 52.0 + 56.0 + 72.0 + 56.0 + 52.0 + 4.0 * 12.0;
     let centre = egui::Rect::from_center_size(row.center(), Vec2::new(centre_w, row.height()));
     let mut mid = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(centre)
             .layout(Layout::left_to_right(Align::Center)),
     );
-    mid.spacing_mut().item_spacing.x = 16.0;
+    mid.spacing_mut().item_spacing.x = 12.0;
+    queue_key(&mut mid, queue, -1, actions);
     if skip_button(&mut mid, -step).tip("Rewind").clicked() {
         actions.push(Action::SeekRelative(-step));
     }
@@ -289,6 +309,33 @@ fn transport(
     }
     if skip_button(&mut mid, step).tip("Forward").clicked() {
         actions.push(Action::SeekRelative(step));
+    }
+    queue_key(&mut mid, queue, 1, actions);
+}
+
+/// The previous (`dir` -1) or next video in Up next, as the controller's
+/// X and Y; dimmed when there is none that way.
+fn queue_key(ui: &mut egui::Ui, queue: &crate::queue::Queue, dir: i32, actions: &mut Vec<Action>) {
+    let to = queue
+        .pos
+        .checked_add_signed(dir as isize)
+        .and_then(|i| queue.items.get(i));
+    let (icon, name) = if dir < 0 {
+        (icons::SKIP_BACK, "Previous")
+    } else {
+        (icons::SKIP_FORWARD, "Next")
+    };
+    let tip = match to {
+        Some(req) => format!("{name}: {}", widgets::display_title(&req.shown_title())),
+        None if queue.items.len() < 2 => "No other videos in this list".into(),
+        None if dir < 0 => "First video in this list".into(),
+        None => "Last video in this list".into(),
+    };
+    let key = ui
+        .add_enabled_ui(to.is_some(), |ui| widgets::key(ui, icon, 52.0, false))
+        .inner;
+    if key.tip(&tip).clicked() {
+        actions.push(Action::StepQueue(dir));
     }
 }
 
@@ -378,23 +425,100 @@ fn format_pill(ui: &mut egui::Ui, text: &str) -> egui::Response {
         theme::TEXT_2,
     );
     let (rect, resp) = ui.allocate_exact_size(g.size() + Vec2::new(20.0, 10.0), Sense::click());
+    let t = pill_face(ui, &resp, false);
+    let fg = theme::TEXT_2.lerp_to_gamma(theme::TEXT, t);
+    ui.painter().galley(rect.center() - g.size() / 2.0, g, fg);
+    resp
+}
+
+/// The raised body of a pill on the title row, lit while the pointer is
+/// on it and blue while what it opens is `open`; returns how lit it is.
+fn pill_face(ui: &egui::Ui, resp: &egui::Response, open: bool) -> f32 {
     let t = ui
         .ctx()
         .animate_bool_with_time(resp.id, resp.hovered(), 0.12);
+    let s = ui
+        .ctx()
+        .animate_bool_with_time(resp.id.with("open"), open, 0.12);
+    let lit = |a: Color32, b: Color32, on: Color32| a.lerp_to_gamma(b, t).lerp_to_gamma(on, s);
     depth::raised(
         ui.painter(),
-        rect,
+        resp.rect,
         8.0,
         depth::Raised {
-            top: Color32::from_rgb(46, 54, 65).lerp_to_gamma(Color32::from_rgb(62, 72, 86), t),
-            bottom: Color32::from_rgb(33, 40, 49).lerp_to_gamma(Color32::from_rgb(44, 52, 63), t),
+            top: lit(
+                Color32::from_rgb(46, 54, 65),
+                Color32::from_rgb(62, 72, 86),
+                Color32::from_rgb(31, 76, 114),
+            ),
+            bottom: lit(
+                Color32::from_rgb(33, 40, 49),
+                Color32::from_rgb(44, 52, 63),
+                Color32::from_rgb(21, 52, 82),
+            ),
             light: Color32::from_white_alpha(26),
             lift: 0.3,
             glow: None,
         },
     );
-    let fg = theme::TEXT_2.lerp_to_gamma(theme::TEXT, t);
-    ui.painter().galley(rect.center() - g.size() / 2.0, g, fg);
+    t
+}
+
+/// What the audio and subtitles pill says: the audio track when there is a
+/// choice of them, then the subtitles; none when there is nothing to choose.
+fn tracks_label(pb: &crate::playback::Playback, language: &str) -> Option<String> {
+    let info = pb.player.info();
+    let audio: Vec<_> = info.audio_streams().collect();
+    let subtitles = crate::subtitles::rows(language, info, &pb.subtitle_files);
+    if audio.len() < 2 && subtitles.is_empty() {
+        return None;
+    }
+    let mut label = String::new();
+    if audio.len() > 1 {
+        let playing = pb.player.audio_stream();
+        let name = audio
+            .iter()
+            .find(|s| Some(s.index) == playing)
+            .map_or_else(|| "Off".to_string(), |s| crate::subtitles::track_name(s));
+        label = format!("{}  {name}      ", icons::SPEAKER_HIGH);
+    }
+    let shown = subtitles
+        .iter()
+        .find(|r| showing(pb, r.pick))
+        .map_or("Off", |r| r.title.as_str());
+    label += &format!("{}  {shown}   {}", icons::SUBTITLES, icons::CARET_UP);
+    Some(label)
+}
+
+/// Whether `pick` is the subtitles showing.
+fn showing(pb: &crate::playback::Playback, pick: Pick) -> bool {
+    let (stream, file) = (pb.player.subtitle_stream(), pb.active_subtitle_file);
+    match pick {
+        Pick::Off => stream.is_none() && file.is_none(),
+        Pick::File(i) => file == Some(i),
+        Pick::Stream(s) => stream == Some(s) && file.is_none(),
+    }
+}
+
+/// The pill naming the audio and subtitles in use, which opens the picker
+/// above the bar.
+fn tracks_pill(ui: &mut egui::Ui, label: &str, open: bool) -> egui::Response {
+    let g = widgets::one_line(
+        ui.painter(),
+        label.to_string(),
+        theme::font(Weight::SemiBold, 14.0),
+        theme::TEXT,
+        320.0,
+    );
+    let (rect, resp) = ui.allocate_exact_size(g.size() + Vec2::new(24.0, 10.0), Sense::click());
+    pill_face(ui, &resp, open);
+    let fg = if open {
+        theme::ACCENT_HOVER
+    } else {
+        theme::TEXT
+    };
+    ui.painter()
+        .galley_with_override_text_color(rect.center() - g.size() / 2.0, g, fg);
     resp
 }
 
@@ -468,21 +592,7 @@ fn stream_pill(ui: &mut egui::Ui, text: &str, hardware: bool) -> egui::Response 
         text_color,
     );
     let (rect, resp) = ui.allocate_exact_size(g.size() + Vec2::new(20.0, 10.0), Sense::click());
-    let t = ui
-        .ctx()
-        .animate_bool_with_time(resp.id, resp.hovered(), 0.12);
-    depth::raised(
-        ui.painter(),
-        rect,
-        8.0,
-        depth::Raised {
-            top: Color32::from_rgb(46, 54, 65).lerp_to_gamma(Color32::from_rgb(62, 72, 86), t),
-            bottom: Color32::from_rgb(33, 40, 49).lerp_to_gamma(Color32::from_rgb(44, 52, 63), t),
-            light: Color32::from_white_alpha(26),
-            lift: 0.3,
-            glow: None,
-        },
-    );
+    let t = pill_face(ui, &resp, false);
     let fg = text_color.lerp_to_gamma(theme::TEXT, t);
     ui.painter().galley(rect.center() - g.size() / 2.0, g, fg);
     resp
@@ -666,7 +776,7 @@ const TABS: [(&str, &str); 7] = [
     (icons::CUBE, "Stereo"),
     (icons::SUN, "Picture"),
     (icons::EYEGLASSES, "Passthrough"),
-    (icons::SUBTITLES, "Audio & subs"),
+    (icons::LIST, "Chapters"),
     (icons::VIBRATE, "Haptics"),
 ];
 
@@ -731,13 +841,7 @@ pub fn adjust_panel(ctx: &egui::Context, v: &mut View) {
                             v.actions,
                         );
                     }
-                    5 => audio_and_text(
-                        ui,
-                        pb,
-                        &v.settings.subtitle_language,
-                        &mut v.state.foreign_subtitles_open,
-                        v.actions,
-                    ),
+                    5 => chapters_tab(ui, pb, v.actions),
                     _ => haptics_tab(ui, pb.script_count, v.settings, v.devices),
                 }
                 if pb.settings != before {
@@ -1237,86 +1341,17 @@ pub(super) fn chroma_controls(
     s.key() != before
 }
 
-/// Videos with more subtitles than this list those in other languages only
-/// when asked.
-const FOLD_SUBTITLES: usize = 6;
-
-fn audio_and_text(
-    ui: &mut egui::Ui,
-    pb: &crate::playback::Playback,
-    language: &str,
-    foreign_open: &mut bool,
-    actions: &mut Vec<Action>,
-) {
-    let info = pb.player.info();
-    widgets::section_label(ui, "Audio");
-    let current = pb.player.audio_stream();
-    let streams: Vec<_> = info.audio_streams().collect();
-    if streams.is_empty() {
-        ui.label(RichText::new("No audio").color(theme::TEXT_3));
+/// Chapters tab: the video's chapters and bookmarks to go to, and how
+/// playback is going.
+fn chapters_tab(ui: &mut egui::Ui, pb: &crate::playback::Playback, actions: &mut Vec<Action>) {
+    if pb.markers.is_empty() {
+        ui.label(
+            RichText::new(
+                "No chapters or bookmarks. Bookmark, on the control bar, marks where you are.",
+            )
+            .color(theme::TEXT_2),
+        );
     } else {
-        widgets::rows(ui, |r| {
-            for s in &streams {
-                let mut title = crate::subtitles::track_name(s);
-                if s.ambisonic {
-                    title += " · spatial";
-                }
-                let desc = format!("{} · {} ch", s.codec, s.channels);
-                r.row(&title, Some(desc.as_str()), |ui| {
-                    if radio(ui, current == Some(s.index)).clicked() {
-                        actions.push(Action::SelectAudio(s.index));
-                    }
-                });
-            }
-        });
-    }
-    widgets::section_label(ui, "Subtitles");
-    let sub_stream = pb.player.subtitle_stream();
-    let file = pb.active_subtitle_file;
-    let on = |pick: Pick| match pick {
-        Pick::Off => sub_stream.is_none() && file.is_none(),
-        Pick::File(i) => file == Some(i),
-        Pick::Stream(s) => sub_stream == Some(s) && file.is_none(),
-    };
-    let rows = crate::subtitles::rows(language, info, &pb.subtitle_files);
-    let fold = rows.len() > FOLD_SUBTITLES;
-    let (shown, folded): (Vec<_>, Vec<_>) = rows
-        .into_iter()
-        .partition(|row| !fold || !row.foreign || on(row.pick));
-    let mut track = |r: &mut widgets::Rows, title: &str, detail: &str, pick: Pick| {
-        let detail = Some(detail).filter(|d| !d.is_empty());
-        r.row(title, detail, |ui| {
-            if radio(ui, on(pick)).clicked() {
-                if let Pick::File(i) = pick {
-                    actions.push(Action::SelectSubtitleFile(Some(i)));
-                } else {
-                    actions.push(Action::SelectSubtitleFile(None));
-                    actions.push(Action::SelectSubtitleStream(pick.stream()));
-                }
-            }
-        });
-    };
-    widgets::rows(ui, |r| {
-        track(r, "Off", "", Pick::Off);
-        for row in &shown {
-            track(r, &row.title, &row.detail, row.pick);
-        }
-        if !folded.is_empty() {
-            let more = format!("{} more", folded.len());
-            r.row("Other languages", Some(more.as_str()), |ui| {
-                let label = if *foreign_open { "Hide" } else { "Show" };
-                if widgets::button(ui, None, label, Kind::Secondary).clicked() {
-                    *foreign_open = !*foreign_open;
-                }
-            });
-            if *foreign_open {
-                for row in &folded {
-                    track(r, &row.title, &row.detail, row.pick);
-                }
-            }
-        }
-    });
-    if !pb.markers.is_empty() {
         widgets::section_label(ui, "Chapters and bookmarks");
         widgets::rows(ui, |r| {
             for (t, name) in &pb.markers {
@@ -1348,27 +1383,161 @@ fn audio_and_text(
     );
 }
 
-/// A round radio mark, filled when chosen; the whole row reads as the choice.
-fn radio(ui: &mut egui::Ui, on: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(40.0), Sense::click());
-    let t = ui
-        .ctx()
-        .animate_bool_with_time(resp.id, resp.hovered(), 0.12);
-    let p = ui.painter();
-    p.circle_filled(
-        rect.center(),
-        18.0,
-        Color32::from_white_alpha((t * 18.0) as u8),
+const TRACK_ROW: f32 = 56.0;
+const TRACK_PAD: f32 = 20.0;
+const LIST_GAP: f32 = 10.0;
+
+/// The audio and subtitles picker over the control bar: the two lists side
+/// by side, each scrolling when long, and a row plays its track at once.
+/// Its body is as tall as the longer list needs, standing on the panel's
+/// bottom edge; a click on the rest of the panel closes it.
+pub fn tracks_panel(ctx: &egui::Context, v: &mut View) {
+    let Some(pb) = v.playback.as_deref() else {
+        return;
+    };
+    let info = pb.player.info();
+    let audio: Vec<_> = info.audio_streams().collect();
+    let subtitles = crate::subtitles::rows(&v.settings.subtitle_language, info, &pb.subtitle_files);
+    let label_h = ctx.fonts(|f| f.row_height(&theme::font(Weight::SemiBold, 13.0)));
+    let rows = audio.len().max(1).max(subtitles.len() + 1) as f32;
+    let tall = 2.0 * TRACK_PAD + label_h + LIST_GAP + 8.0 + rows * TRACK_ROW;
+    let full = ctx.screen_rect() - widgets::SHADOW_ROOM;
+    let body = egui::Rect::from_min_max(
+        egui::pos2(full.left(), (full.bottom() - tall).max(full.top())),
+        full.max,
     );
-    if on {
-        p.circle_filled(rect.center(), 11.0, theme::ACCENT);
-        p.circle_filled(rect.center(), 4.5, Color32::WHITE);
-    } else {
-        p.circle_stroke(
-            rect.center(),
-            10.0,
-            egui::Stroke::new(2.0_f32, theme::TEXT_3.lerp_to_gamma(Color32::WHITE, t)),
+    widgets::slab(ctx, body, 24.0);
+    if ctx.input(|i| {
+        i.pointer.any_click() && i.pointer.interact_pos().is_some_and(|p| !body.contains(p))
+    }) {
+        v.state.tracks_open = false;
+    }
+    let actions = &mut *v.actions;
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE)
+        .show(ctx, |ui| {
+            let inner = body.shrink(TRACK_PAD);
+            let w = (inner.width() - TRACK_PAD) / 2.0;
+            let column = |x: f32| {
+                egui::Rect::from_min_size(egui::pos2(x, inner.top()), Vec2::new(w, inner.height()))
+            };
+            let playing = pb.player.audio_stream();
+            track_list(ui, column(inner.left()), "Audio", &pb.title, |ui, fresh| {
+                if audio.is_empty() {
+                    ui.label(RichText::new("No audio").color(theme::TEXT_3));
+                }
+                for s in &audio {
+                    let mut title = crate::subtitles::track_name(s);
+                    if s.ambisonic {
+                        title += " · spatial";
+                    }
+                    let detail = format!("{} · {} ch", s.codec, s.channels);
+                    let on = playing == Some(s.index);
+                    let row = track_row(ui, &title, &detail, on);
+                    if on && fresh {
+                        row.scroll_to_me(Some(Align::Center));
+                    }
+                    if row.clicked() && !on {
+                        actions.push(Action::SelectAudio(s.index));
+                    }
+                }
+            });
+            let right = column(inner.right() - w);
+            track_list(ui, right, "Subtitles", &pb.title, |ui, fresh| {
+                let mut pick = |ui: &mut egui::Ui, title: &str, detail: &str, pick: Pick| {
+                    let on = showing(pb, pick);
+                    let row = track_row(ui, title, detail, on);
+                    if on && fresh {
+                        row.scroll_to_me(Some(Align::Center));
+                    }
+                    if row.clicked() && !on {
+                        actions.push(Action::SelectSubtitles(pick));
+                    }
+                };
+                pick(ui, "Off", "", Pick::Off);
+                for row in &subtitles {
+                    pick(ui, &row.title, &row.detail, row.pick);
+                }
+            });
+        });
+}
+
+/// One of the picker's lists in `rect`, under its label. The first time it
+/// shows for `video`, `add` is told to scroll to the row in use.
+fn track_list(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    label: &str,
+    video: &str,
+    add: impl FnOnce(&mut egui::Ui, bool),
+) {
+    let mut ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::top_down(Align::Min)),
+    );
+    ui.spacing_mut().item_spacing.y = LIST_GAP;
+    widgets::section_label(&mut ui, label);
+    widgets::card(&mut ui, |ui| {
+        let salt = (label, video);
+        let fresh = egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(salt)).is_none();
+        egui::ScrollArea::vertical()
+            .id_salt(salt)
+            .auto_shrink([false, true])
+            .show(ui, |ui| add(ui, fresh));
+    });
+}
+
+/// A row of the picker: the whole row picks its track, and a check marks
+/// the one in use.
+fn track_row(ui: &mut egui::Ui, title: &str, detail: &str, on: bool) -> egui::Response {
+    let w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, TRACK_ROW), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let t = ui
+            .ctx()
+            .animate_bool_with_time(resp.id, resp.hovered(), 0.12);
+        let p = ui.painter();
+        let face = rect.shrink(2.0);
+        if on {
+            p.rect_filled(
+                face,
+                egui::CornerRadius::same(10),
+                theme::ACCENT.gamma_multiply(0.16),
+            );
+        }
+        if t > 0.0 {
+            p.rect_filled(
+                face,
+                egui::CornerRadius::same(10),
+                Color32::from_white_alpha((t * 14.0) as u8),
+            );
+        }
+        let text_w = w - 16.0 - 52.0;
+        let line =
+            |text: &str, font, color| widgets::one_line(p, text.to_string(), font, color, text_w);
+        let title_g = line(title, theme::font(Weight::Medium, 17.0), theme::TEXT);
+        let detail_g = (!detail.is_empty())
+            .then(|| line(detail, theme::font(Weight::Regular, 14.0), theme::TEXT_2));
+        let (title_h, detail_h) = (
+            title_g.size().y,
+            detail_g.as_ref().map_or(0.0, |g| 2.0 + g.size().y),
         );
+        let x = rect.left() + 16.0;
+        let y = rect.center().y - (title_h + detail_h) / 2.0;
+        p.galley(egui::pos2(x, y), title_g, theme::TEXT);
+        if let Some(g) = detail_g {
+            p.galley(egui::pos2(x, y + title_h + 2.0), g, theme::TEXT_2);
+        }
+        if on {
+            p.text(
+                egui::pos2(rect.right() - 26.0, rect.center().y),
+                egui::Align2::CENTER_CENTER,
+                icons::CHECK,
+                theme::icon(22.0),
+                theme::ACCENT_HOVER,
+            );
+        }
     }
     resp
 }

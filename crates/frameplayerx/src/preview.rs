@@ -12,7 +12,7 @@
 //! | `look YAW PITCH [ROLL]` | head direction (and roll, to lie on your side) in degrees |
 //! | `recenter` | recenter on where the head faces |
 //! | `aim YAW PITCH` | controller ray direction in degrees |
-//! | `point PANEL X Y` | aim at a panel (`main`, `bar`, `adjust`, `keyboard`) at fractional X, Y |
+//! | `point PANEL X Y` | aim at a panel (`main`, `bar`, `adjust`, `keyboard`, `tracks`) at fractional X, Y |
 //! | `click` | pull and release the trigger |
 //! | `button a/b/x/y/menu/stick/shoulder` | press and release a right-hand button |
 //! | `stick X Y FRAMES` | hold the thumbstick |
@@ -25,6 +25,7 @@
 //! | `sbs NAME` | save both eyes side by side |
 //! | `screen NAME [TAB]` | show a browser screen (`home`, `library`, `sources`, `settings` and its tab) |
 //! | `adjust [TAB]` | open the adjustments panel (at tab TAB) |
+//! | `tracks` | open the audio and subtitles picker |
 //! | `chroma` | turn chroma key on for the open video |
 //! | `panel PANEL NAME` | save a panel's image flat, pixel for pixel, as OUT_DIR/NAME.png |
 
@@ -293,6 +294,11 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
+            Some("tracks") => {
+                self.app.ui.tracks_open = true;
+                self.app.repaint_all();
+                self.run_frames(3)?;
+            }
             // Pauses the open video, so a short test clip doesn't end (and
             // hide the player's panels) before the shots that follow.
             Some("pause") => {
@@ -375,9 +381,10 @@ impl Sim {
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }
-            // Turns the global chroma key on (Settings > Passthrough).
+            // Turns the global chroma key on, or off with `chroma-global off`
+            // (Settings > Passthrough).
             Some("chroma-global") => {
-                self.app.settings.default_view.chroma_key = true;
+                self.app.settings.default_view.chroma_key = parts.get(1) != Some(&"off");
                 self.app.repaint_all();
                 self.run_frames(3)?;
             }

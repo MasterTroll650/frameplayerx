@@ -78,6 +78,8 @@ pub enum Action {
     },
     /// Plays the one at this place in Up next.
     QueueJump(usize),
+    /// Plays the previous (-1) or next (1) video in Up next.
+    StepQueue(i32),
     QueueRemove(usize),
     QueueMove(usize, usize),
     /// Keeps only the video playing in Up next.
@@ -110,9 +112,10 @@ pub enum Action {
     AddKeyframe,
     ClearKeyframes,
     AddBookmark,
+    /// Plays this audio stream, and keeps it as this video's pick.
     SelectAudio(usize),
-    SelectSubtitleStream(Option<usize>),
-    SelectSubtitleFile(Option<usize>),
+    /// Shows these subtitles, and keeps them as this video's pick.
+    SelectSubtitles(crate::subtitles::Pick),
     /// Puts a flat screen, the control bar, the adjust panel and the browse
     /// panel back where they start.
     ResetPlacement,
@@ -602,8 +605,8 @@ pub struct UiState {
     pub update: UpdateStatus,
     pub adjust_open: bool,
     pub adjust_tab: usize,
-    /// Subtitles in other languages are listed in the Audio & subs tab.
-    pub foreign_subtitles_open: bool,
+    /// The audio and subtitles picker shows above the control bar.
+    pub tracks_open: bool,
     /// The last run crashed: asks whether to send a report.
     pub crash: Option<crash::CrashPrompt>,
     pub open_error: Option<String>,
@@ -660,7 +663,7 @@ impl Default for UiState {
             update: UpdateStatus::Unknown,
             adjust_open: false,
             adjust_tab: 0,
-            foreign_subtitles_open: false,
+            tracks_open: false,
             crash: None,
             open_error: None,
             opening: None,

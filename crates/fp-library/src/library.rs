@@ -13,8 +13,8 @@ use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 use crate::error::{Error, Result};
 use crate::record::{
-    HistoryEntry, MEDIA_COLUMNS, Marker, MarkerId, MediaId, MediaRecord, SessionId, TagCount,
-    effective_columns, evidence_str, file_name_of, media_from_row, now, stem_of,
+    HistoryEntry, MEDIA_COLUMNS, Marker, MarkerId, MediaId, MediaRecord, PickedTracks, SessionId,
+    TagCount, effective_columns, evidence_str, file_name_of, media_from_row, now, stem_of,
 };
 use crate::schema;
 use crate::worker::ThumbnailCrop;
@@ -1032,6 +1032,18 @@ impl Library {
         })
     }
 
+    /// Stores the audio and subtitles picked for a video.
+    pub fn set_tracks(&self, id: MediaId, tracks: &PickedTracks) -> Result<()> {
+        let value = json_opt(Some(tracks).filter(|t| **t != PickedTracks::default()))?;
+        self.with(|c| {
+            let n = c.execute(
+                "UPDATE media SET tracks = ?2 WHERE id = ?1",
+                params![id.0, value],
+            )?;
+            affected(n, id)
+        })
+    }
+
     /// Stores keyframed settings for the video's timeline.
     pub fn set_keyframes(&self, id: MediaId, keyframes: &Keyframes) -> Result<()> {
         let value = json(keyframes)?;
@@ -1532,6 +1544,11 @@ mod tests {
         lib.set_keyframes(id, &kf).unwrap();
         lib.add_marker(id, 12.0, "good bit").unwrap();
         lib.set_resume_position(id, 33.0).unwrap();
+        let tracks = PickedTracks {
+            audio: Some(2),
+            subtitles: Some(crate::PickedSubtitles::File("/v/a.ar.srt".into())),
+        };
+        lib.set_tracks(id, &tracks).unwrap();
 
         // Same file again: unchanged.
         assert_eq!(lib.upsert(&u).unwrap().status, UpsertStatus::Unchanged);
@@ -1554,7 +1571,41 @@ mod tests {
         assert_eq!(r.view_settings, Some(vs));
         assert_eq!(r.keyframes, kf);
         assert_eq!(r.resume_position, 33.0);
+        assert_eq!(r.tracks, tracks);
         assert_eq!(lib.markers(id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn picked_tracks_are_kept_and_cleared() {
+        let lib = lib();
+        let id = lib
+            .upsert(&MediaUpsert::new("/v/a.mkv", "local"))
+            .unwrap()
+            .id;
+        assert_eq!(
+            lib.get(id).unwrap().unwrap().tracks,
+            PickedTracks::default()
+        );
+        let off = PickedTracks {
+            audio: None,
+            subtitles: Some(crate::PickedSubtitles::Off),
+        };
+        lib.set_tracks(id, &off).unwrap();
+        assert_eq!(lib.get(id).unwrap().unwrap().tracks, off);
+        // Clearing the history keeps them, as it keeps adjustments.
+        lib.clear_history().unwrap();
+        assert_eq!(lib.get(id).unwrap().unwrap().tracks, off);
+        lib.set_tracks(id, &PickedTracks::default()).unwrap();
+        let stored: Option<String> = lib
+            .with(|c| {
+                Ok(
+                    c.query_row("SELECT tracks FROM media WHERE id = ?1", [id.0], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .unwrap();
+        assert_eq!(stored, None, "nothing picked is no value");
     }
 
     #[test]

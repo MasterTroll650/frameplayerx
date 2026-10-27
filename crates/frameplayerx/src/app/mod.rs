@@ -91,6 +91,8 @@ const MAIN: usize = 0;
 const BAR: usize = 1;
 const ADJUST: usize = 2;
 const KEYBOARD: usize = 3;
+/// The audio and subtitles picker, above the control bar.
+const TRACKS: usize = 4;
 /// The performance overlay's quad layer (the panels' are their indices).
 const PERF_LAYER: u64 = 8;
 /// Where the performance overlay sits from the eyes: low and to the left.
@@ -120,7 +122,7 @@ pub struct App {
     services: Services,
     pub ui: UiState,
     thumbs: ui::thumbs::Thumbs,
-    panels: [Panel; 4],
+    panels: [Panel; 5],
     subs: Panel,
     /// The performance overlay, its sampler while it shows, the last
     /// second of frame times, and the video's counters at its last paint.
@@ -229,9 +231,12 @@ impl App {
             growing_panel([1400, 268], 1.2, 1.25),
             floating_panel([900, 1020], 0.75, 1.25),
             growing_panel([1200, 456], 1.0, 1.25),
+            // As fine as the bar it sits on, and growing with it.
+            growing_panel([850, 560], 1.2 * 850.0 / 1400.0, 1.25),
         ];
         panels[BAR].refresh = Some(Duration::from_millis(250));
         panels[ADJUST].refresh = Some(Duration::from_millis(1000));
+        panels[TRACKS].refresh = Some(Duration::from_millis(1000));
         panels[MAIN].refresh = Some(Duration::from_millis(1000));
         let subs = panel([1600, 320], 1.6, 1.0);
         let mut perf = panel([640, 300], 0.4, 1.0);
@@ -330,8 +335,8 @@ impl App {
     /// One line about the open video and the UI, for the preview harness.
     pub fn status_line(&self) -> String {
         let ui = format!(
-            "ui_visible={} browser={} adjust={}",
-            self.ui_visible, self.show_browser, self.ui.adjust_open
+            "ui_visible={} browser={} adjust={} tracks={}",
+            self.ui_visible, self.show_browser, self.ui.adjust_open, self.ui.tracks_open
         );
         match &self.playback {
             Some(p) => format!(
@@ -357,6 +362,7 @@ impl App {
             "bar" => BAR,
             "adjust" => ADJUST,
             "keyboard" => KEYBOARD,
+            "tracks" => TRACKS,
             _ => return None,
         })
     }
