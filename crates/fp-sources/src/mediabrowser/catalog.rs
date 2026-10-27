@@ -776,7 +776,9 @@ impl MediaBrowserSource {
     /// One page of a listing.
     pub fn items(&self, query: &MbQuery) -> Result<MbPage> {
         let user = self.user()?;
-        let path = query.playlist_path(&user).unwrap_or_else(|| query.path(&user));
+        let path = query
+            .playlist_path(&user)
+            .unwrap_or_else(|| query.path(&user));
         let v = self.api_get_json(&path)?;
         Ok(parse_page(&v, &self.base_url))
     }
@@ -796,7 +798,9 @@ impl MediaBrowserSource {
             .into_iter()
             .filter(|i| {
                 i.kind == MbKind::Playlist
-                    && i.media_type.as_deref().is_none_or(|t| t.eq_ignore_ascii_case("video"))
+                    && i.media_type
+                        .as_deref()
+                        .is_none_or(|t| t.eq_ignore_ascii_case("video"))
             })
             .collect())
     }
@@ -1202,7 +1206,9 @@ mod tests {
         assert_eq!(playlist_query.playlist.as_deref(), Some("playlist 1"));
         assert_eq!(
             playlist_query.playlist_path("u1").as_deref(),
-            Some("/Playlists/playlist%201/Items?UserId=u1&StartIndex=0&Limit=60&Fields=Overview,Genres,Path,DateCreated,ChildCount,PremiereDate&EnableImageTypes=Primary,Backdrop,Thumb&ImageTypeLimit=1")
+            Some(
+                "/Playlists/playlist%201/Items?UserId=u1&StartIndex=0&Limit=60&Fields=Overview,Genres,Path,DateCreated,ChildCount,PremiereDate&EnableImageTypes=Primary,Backdrop,Thumb&ImageTypeLimit=1"
+            )
         );
     }
 

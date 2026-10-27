@@ -821,57 +821,57 @@ fn grid(
     // Jellyfin returns playlist items in a deliberate order. Its playlist
     // endpoint does not support the catalogue controls, so do not offer them.
     if query.playlist.is_none() {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        if page::search_field(ui, &mut query.search, "Search", 220.0) {
-            *typed = Some(Instant::now());
-        }
-        ui.add_space(10.0);
-        for (f, label) in [
-            (MbFilter::All, "All"),
-            (MbFilter::Unplayed, "Unwatched"),
-            (MbFilter::Resumable, "In progress"),
-            (MbFilter::Favorites, "Favorites"),
-        ] {
-            if widgets::chip(ui, label, query.filter == f).clicked() && query.filter != f {
-                query.filter = f;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if page::search_field(ui, &mut query.search, "Search", 220.0) {
+                *typed = Some(Instant::now());
+            }
+            ui.add_space(10.0);
+            for (f, label) in [
+                (MbFilter::All, "All"),
+                (MbFilter::Unplayed, "Unwatched"),
+                (MbFilter::Resumable, "In progress"),
+                (MbFilter::Favorites, "Favorites"),
+            ] {
+                if widgets::chip(ui, label, query.filter == f).clicked() && query.filter != f {
+                    query.filter = f;
+                    changed = true;
+                }
+            }
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if page::sort_bar(
+                ui,
+                &[
+                    (MbSort::Name, "Title"),
+                    (MbSort::Added, "Date added"),
+                    (MbSort::Released, "Release date"),
+                    (MbSort::Rating, "Rating"),
+                    (MbSort::Runtime, "Length"),
+                    (MbSort::Random, "Shuffle"),
+                ],
+                &mut query.sort,
+            ) {
+                query.descending = query.sort.default_descending();
                 changed = true;
             }
-        }
-    });
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        if page::sort_bar(
-            ui,
-            &[
-                (MbSort::Name, "Title"),
-                (MbSort::Added, "Date added"),
-                (MbSort::Released, "Release date"),
-                (MbSort::Rating, "Rating"),
-                (MbSort::Runtime, "Length"),
-                (MbSort::Random, "Shuffle"),
-            ],
-            &mut query.sort,
-        ) {
-            query.descending = query.sort.default_descending();
-            changed = true;
-        }
-        if query.sort != MbSort::Random {
-            let (icon, tip) = if query.descending {
-                (icons::CARET_DOWN, "Largest first")
-            } else {
-                (icons::CARET_UP, "Smallest first")
-            };
-            if widgets::icon_button(ui, icon, 38.0, false)
-                .tip(tip)
-                .clicked()
-            {
-                query.descending = !query.descending;
-                changed = true;
+            if query.sort != MbSort::Random {
+                let (icon, tip) = if query.descending {
+                    (icons::CARET_DOWN, "Largest first")
+                } else {
+                    (icons::CARET_UP, "Smallest first")
+                };
+                if widgets::icon_button(ui, icon, 38.0, false)
+                    .tip(tip)
+                    .clicked()
+                {
+                    query.descending = !query.descending;
+                    changed = true;
+                }
             }
-        }
-        page::count_label(ui, &page::plural(total, "item", "items"));
-    });
+            page::count_label(ui, &page::plural(total, "item", "items"));
+        });
     }
     ui.add_space(10.0);
     if let Some(t) = *typed {
