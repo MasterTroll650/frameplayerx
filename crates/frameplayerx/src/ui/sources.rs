@@ -936,11 +936,11 @@ fn server_form(
     save
 }
 
-fn text_field(ui: &mut egui::Ui, value: &mut String, hint: &str, password: bool) {
+fn text_field(ui: &mut egui::Ui, value: &mut String, hint: &str, masked: bool) {
     ui.add(
         egui::TextEdit::singleline(value)
             .margin(egui::Margin::symmetric(12, 9))
-            .password(password)
+            .password(masked)
             .hint_text(hint)
             .font(theme::font(Weight::Regular, 17.0))
             .desired_width(460.0),
