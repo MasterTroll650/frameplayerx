@@ -171,6 +171,9 @@ impl App {
             }
             Cmd::Next => self.step_queue(1),
             Cmd::Previous => self.step_queue(-1),
+            Cmd::Chapter(dir) => self.step_chapter(dir),
+            Cmd::Bookmark => self.apply(Action::AddBookmark),
+            Cmd::ToggleSubtitles => self.toggle_subtitles(),
             Cmd::ResetImage => {
                 if let Some(p) = &mut self.playback {
                     let d = self.settings.default_view;
@@ -235,7 +238,8 @@ impl App {
         }
     }
 
-    /// B / Y, as DeoVR's Back: close the innermost thing that is open.
+    /// Back (B by default), as DeoVR's: closes the innermost thing that is
+    /// open.
     pub(super) fn back(&mut self) {
         if self.panels[KEYBOARD].visible {
             if let Some(i) = self.keyboard_target() {
@@ -301,4 +305,71 @@ impl App {
         self.ui.toast(format!("{} of {}", next + 1, n));
         self.open_request(req);
     }
+
+    /// The next or previous chapter or bookmark; within a few seconds of
+    /// one's start, back goes to the one before, as players do.
+    fn step_chapter(&mut self, dir: i32) {
+        let Some(p) = &self.playback else { return };
+        if p.markers.is_empty() {
+            self.ui.toast("No chapters in this video");
+            return;
+        }
+        let now = p.player.position();
+        let to = if dir > 0 {
+            p.markers.iter().find(|(t, _)| *t > now + 0.5)
+        } else {
+            p.markers
+                .iter()
+                .rev()
+                .find(|(t, _)| *t < now - CHAPTER_GRACE)
+        };
+        match to.cloned() {
+            Some((t, name)) => {
+                self.apply(Action::Seek(t));
+                self.ui.toast(name);
+            }
+            None if dir < 0 => {
+                self.apply(Action::Seek(0.0));
+                self.ui.toast("Beginning");
+            }
+            None => self.ui.toast("Last chapter"),
+        }
+    }
+
+    /// Subtitles off, or back on (see [`crate::subtitles::toggled`]), as a
+    /// pick kept with the video.
+    fn toggle_subtitles(&mut self) {
+        let Some(p) = &mut self.playback else { return };
+        let showing = p.subtitles_showing();
+        let language = &self.settings.subtitle_language;
+        let info = p.player.info();
+        let name = fp_sources::urlutil::last_segment(&p.request.location);
+        let Some(pick) = crate::subtitles::toggled(
+            showing,
+            p.last_subtitles,
+            language,
+            info,
+            &p.subtitle_files,
+            &name,
+        ) else {
+            self.ui.toast("No subtitles in this video");
+            return;
+        };
+        let title = crate::subtitles::rows(language, info, &p.subtitle_files)
+            .into_iter()
+            .find(|r| r.pick == pick)
+            .map(|r| r.title);
+        if showing != crate::subtitles::Pick::Off {
+            p.last_subtitles = Some(showing);
+        }
+        self.apply(Action::SelectSubtitles(pick));
+        self.ui.toast(match title {
+            Some(t) => format!("Subtitles: {t}"),
+            None => "Subtitles off".to_string(),
+        });
+    }
 }
+
+/// Seconds into a chapter within which Previous chapter goes to the one
+/// before it rather than its start.
+const CHAPTER_GRACE: f64 = 3.0;

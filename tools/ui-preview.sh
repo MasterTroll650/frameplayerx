@@ -293,6 +293,8 @@ screen settings controller
 panel main settings-controller
 screen settings controller-open
 panel main settings-controller-open
+screen settings controller-grip
+panel main settings-controller-grip
 screen settings controller-stick
 panel main settings-controller-stick
 haptics on

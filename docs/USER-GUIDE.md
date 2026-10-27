@@ -448,7 +448,9 @@ picked is kept, so a video whose subtitles you never changed follows
 **Subtitles** above, even after you change it.
 
 **⚙ › Chapters** lists the video's chapters and your bookmarks (**Bookmark**
-on the control bar adds one where you are), each with a button to go there.
+on the control bar, or grip + A on the right controller, adds one where you
+are), each with a button to go there; grip + X and grip + Y step through
+them.
 
 Subtitles show in any script, with the fonts on the headset: Arabic and
 Hebrew read right to left, and Chinese, Japanese or Korean need a font
@@ -530,6 +532,9 @@ picture. Play/pause and seeking are under either thumb.
 | Menu / View | Browse | Recenter |
 | Bumper | Forward 1 minute | Back 1 minute |
 | Grip + thumbstick | Up / down raises or lowers you | Left / right turns the picture, up / down zooms in / out |
+| Grip + X / Y | Previous / next chapter or bookmark (back within 3 s of one's start goes to the one before) | As without the grip |
+| Grip + A | Bookmark where you are | As without the grip |
+| Grip + thumbstick press | Subtitles off, or back on: the ones you had, else those in your language | As without the grip |
 | Hold grip + trigger, move | Drag the picture (a flat screen or the dome follows your hand) | The same |
 | Trigger | Click; on empty space, show or hide the controls | The same |
 
@@ -566,8 +571,11 @@ lie back or roll onto your side. 180° and 360° videos don't follow, since
 you look around those.
 
 Every button and thumbstick direction above can be changed in Settings ›
-Controller (tap a row, pick an action; Reset to defaults puts this layout
-back). For example, to zoom with the right thumbstick, set the right controller's
+Controller: point at a button, pull the trigger and pick an action.
+**Grip + press** above the controllers shows what each does with that
+controller's grip held, and changes it there; one left at **Same as press**
+does what it does without the grip. **Reset to defaults** puts this layout
+back. For example, to zoom with the right thumbstick, set the right controller's
 thumbstick **↑↓ Up / down** (or **Grip + ↑↓**) to Zoom. The trigger,
 grip + trigger drags, both grips, menu paging and slider steps are fixed.
 

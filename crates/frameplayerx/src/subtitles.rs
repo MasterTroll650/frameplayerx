@@ -115,6 +115,33 @@ pub fn choose(
         .map_or(Pick::Off, |t| t.pick)
 }
 
+/// What Subtitles on / off switches to: off while some are showing, else
+/// those it last turned off (`last`), else those Always would choose, else
+/// the first listed. None when the video has none.
+pub fn toggled(
+    showing: Pick,
+    last: Option<Pick>,
+    language: &str,
+    info: &MediaInfo,
+    files: &[SubtitleFile],
+    video_name: &str,
+) -> Option<Pick> {
+    if showing != Pick::Off {
+        return Some(Pick::Off);
+    }
+    last.or_else(|| {
+        Some(choose(
+            SubtitleMode::Always,
+            language,
+            info,
+            files,
+            video_name,
+        ))
+        .filter(|p| *p != Pick::Off)
+    })
+    .or_else(|| rows(language, info, files).first().map(|r| r.pick))
+}
+
 /// The subtitles a video starts with: those picked for it while they are
 /// still there, else what the settings [`choose`] with the audio it starts
 /// with (`audio`, when one was picked).
@@ -420,6 +447,28 @@ mod tests {
     }
 
     use SubtitleMode::{Always, Automatic, Off};
+
+    #[test]
+    fn subtitles_turn_off_and_back_on() {
+        let info = video(Some("fra"), vec![sub(2, "fra"), sub(3, "eng")]);
+        let toggle = |showing, last| toggled(showing, last, "en", &info, &[], "Movie.mkv");
+        assert_eq!(toggle(Pick::Stream(2), None), Some(Pick::Off));
+        // Back on: those turned off, else those Always would choose.
+        assert_eq!(
+            toggle(Pick::Off, Some(Pick::Stream(2))),
+            Some(Pick::Stream(2))
+        );
+        assert_eq!(toggle(Pick::Off, None), Some(Pick::Stream(3)));
+        // None in your language: the first there are; none at all: nothing.
+        let german = video(Some("fra"), vec![sub(2, "deu")]);
+        let first = toggled(Pick::Off, None, "en", &german, &[], "Movie.mkv");
+        assert_eq!(first, Some(Pick::Stream(2)));
+        let none = video(Some("fra"), vec![]);
+        assert_eq!(
+            toggled(Pick::Off, None, "en", &none, &[], "Movie.mkv"),
+            None
+        );
+    }
 
     #[test]
     fn what_was_never_picked_follows_the_settings() {

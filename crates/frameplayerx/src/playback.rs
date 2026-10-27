@@ -69,6 +69,8 @@ pub struct Playback {
     pub markers: Vec<(f64, String)>,
     pub subtitle_files: Vec<SubtitleFile>,
     pub active_subtitle_file: Option<usize>,
+    /// The subtitles Subtitles on / off last turned off, to turn back on.
+    pub last_subtitles: Option<Pick>,
     /// The audio and subtitles picked for this video in the player (see
     /// [`Self::save_tracks`]).
     pub picked: fp_library::PickedTracks,
@@ -314,6 +316,7 @@ pub fn open(
             markers,
             subtitle_files: subs,
             active_subtitle_file,
+            last_subtitles: None,
             picked,
             script_count: scripts.len(),
             last_save: Instant::now(),
@@ -502,6 +505,15 @@ fn markers(
 }
 
 impl Playback {
+    /// The subtitles showing: a file, an embedded stream, or none.
+    pub fn subtitles_showing(&self) -> Pick {
+        match (self.active_subtitle_file, self.player.subtitle_stream()) {
+            (Some(i), _) => Pick::File(i),
+            (None, Some(s)) => Pick::Stream(s),
+            (None, None) => Pick::Off,
+        }
+    }
+
     pub fn status(&self) -> PlaybackStatus {
         let p = &self.player;
         PlaybackStatus {

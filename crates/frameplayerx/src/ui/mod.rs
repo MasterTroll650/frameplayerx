@@ -555,7 +555,26 @@ pub enum UpdateStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RemapSlot {
     Button(usize, crate::bindings::Button),
+    /// The button pressed with its controller's grip held.
+    Grip(usize, crate::bindings::Button),
     Axis(usize, crate::bindings::Axis),
+}
+
+impl RemapSlot {
+    /// The same input, pressed or pushed alone or with the grip held.
+    pub fn with_grip(self, grip: bool) -> RemapSlot {
+        use crate::bindings::Axis;
+        match (self, grip) {
+            (RemapSlot::Button(h, b) | RemapSlot::Grip(h, b), false) => RemapSlot::Button(h, b),
+            (RemapSlot::Button(h, b) | RemapSlot::Grip(h, b), true) => RemapSlot::Grip(h, b),
+            (RemapSlot::Axis(h, Axis::StickX | Axis::GripX), g) => {
+                RemapSlot::Axis(h, if g { Axis::GripX } else { Axis::StickX })
+            }
+            (RemapSlot::Axis(h, Axis::StickY | Axis::GripY), g) => {
+                RemapSlot::Axis(h, if g { Axis::GripY } else { Axis::StickY })
+            }
+        }
+    }
 }
 
 /// Videos being added to a playlist, and what the picker calls them.
@@ -570,6 +589,8 @@ pub struct UiState {
     pub settings_tab: SettingsTab,
     /// The controller input whose choices are open in Settings > Controller.
     pub remap_open: Option<RemapSlot>,
+    /// Settings > Controller shows what the buttons do with the grip held.
+    pub remap_grip: bool,
     /// The subtitle languages are listed in Settings › Sound and subtitles.
     pub languages_open: bool,
     pub history: LibraryGrid,
@@ -644,6 +665,7 @@ impl Default for UiState {
             screen: Screen::Home,
             settings_tab: SettingsTab::General,
             remap_open: None,
+            remap_grip: false,
             languages_open: false,
             history: LibraryGrid::history(),
             clear_armed: None,
