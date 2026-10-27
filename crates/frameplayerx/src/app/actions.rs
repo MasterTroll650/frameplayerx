@@ -36,22 +36,22 @@ impl App {
             } => self.add_to_playlist(playlist, &name, &reqs),
             Action::RenamePlaylist(id, name) => {
                 let r = self.services.library.rename_playlist(id, &name);
-                self.library_changed("the name", r);
+                self.library_changed("the name", |e| tr!("error-save-name", error = e), r);
             }
             Action::DeletePlaylist(id) => {
                 let r = self.services.library.delete_playlist(id);
                 if self.ui.playlist == Some(id) {
                     self.ui.playlist = None;
                 }
-                self.library_changed("the change", r);
+                self.library_changed("the change", |e| tr!("error-save-change", error = e), r);
             }
             Action::PlaylistRemove(id, at) => {
                 let r = self.services.library.remove_from_playlist(id, at);
-                self.library_changed("the change", r);
+                self.library_changed("the change", |e| tr!("error-save-change", error = e), r);
             }
             Action::PlaylistMove(id, from, to) => {
                 let r = self.services.library.move_playlist_item(id, from, to);
-                self.library_changed("the change", r);
+                self.library_changed("the change", |e| tr!("error-save-change", error = e), r);
             }
             Action::TogglePause => self.toggle_pause(),
             Action::Seek(t) => {
@@ -94,9 +94,11 @@ impl App {
             Action::SaveView => {
                 if let Some(p) = &mut self.playback {
                     match p.save_settings(&self.services.library) {
-                        Ok(true) => self.ui.toast("Adjustments saved"),
+                        Ok(true) => self.ui.toast(tr!("toast-adjustments-saved")),
                         Ok(false) => {}
-                        Err(e) => self.ui.toast(format!("Adjustments couldn't be saved: {e}")),
+                        Err(e) => self
+                            .ui
+                            .toast(tr!("error-save-adjustments", error = e.to_string())),
                     }
                 }
             }
@@ -133,21 +135,21 @@ impl App {
             Action::ResetPlacement => self.reset_placement(),
             Action::SetFavorite(id, f) => {
                 let r = self.services.library.set_favorite(id, f);
-                self.library_changed("the favorite", r);
+                self.library_changed("the favorite", |e| tr!("error-save-favorite", error = e), r);
             }
             Action::SetRating(id, r) => {
                 let r = self.services.library.set_rating(id, r);
-                self.library_changed("the rating", r);
+                self.library_changed("the rating", |e| tr!("error-save-rating", error = e), r);
             }
             Action::SetUserFormat(id, f) => {
                 let r = self.services.library.set_user_format(id, f);
-                self.library_changed("the format", r);
+                self.library_changed("the format", |e| tr!("error-save-format", error = e), r);
                 // Its pictures show the part of the frame the format picks.
                 self.services.wake_worker();
             }
             Action::RemoveFromHistory(id) => {
                 let r = self.services.library.remove_from_history(id);
-                self.library_changed("the change", r);
+                self.library_changed("the change", |e| tr!("error-save-change", error = e), r);
                 // Its frame where it was left off goes.
                 self.services.wake_worker();
             }
@@ -159,7 +161,7 @@ impl App {
                     .retry_failed_probes(Some(&source))
                     .unwrap_or(0);
                 self.services.wake_worker();
-                self.ui.toast(format!("Retrying {n} videos"));
+                self.ui.toast(tr!("toast-retrying", count = n));
             }
             Action::ClearHistory => self.clear_history(),
             Action::ClearImageCache => {
@@ -169,7 +171,7 @@ impl App {
                 // A full cache is thousands of files: not on this thread.
                 self.jobs.spawn("clear-images", move || {
                     let mb = images.clear().div_ceil(1 << 20);
-                    Job::Toast(format!("Image cache cleared: {mb} MB freed"))
+                    Job::Toast(tr!("toast-image-cache-cleared", mb = mb))
                 });
             }
             Action::AddSource(cfg) => self.add_source(cfg),
@@ -295,9 +297,9 @@ impl App {
         };
         self.queue.add(req, &playing, next);
         self.ui.toast(if next {
-            format!("{title} plays next")
+            tr!("toast-plays-next", title = title.as_str())
         } else {
-            format!("Added {title} to Up next")
+            tr!("toast-added-up-next", title = title.as_str())
         });
     }
 
@@ -320,15 +322,16 @@ impl App {
                     .map(|p| p.name)
                     .unwrap_or_default();
                 self.ui.toast(match media.len() {
-                    0 => format!("Made {name}"),
-                    1 => format!("Added to {name}"),
-                    n => format!("Added {n} videos to {name}"),
+                    0 => tr!("toast-playlist-made", name = name.as_str()),
+                    n => tr!("toast-playlist-added", count = n, name = name.as_str()),
                 });
                 self.ui.picking = None;
                 self.ui.playlist_name.clear();
                 self.ui.invalidate();
             }
-            Err(e) => self.ui.toast(format!("Couldn't add to the playlist: {e}")),
+            Err(e) => self
+                .ui
+                .toast(tr!("error-add-to-playlist", error = e.to_string())),
         }
     }
 
@@ -372,8 +375,12 @@ impl App {
     fn add_bookmark(&mut self) {
         let Some(p) = &mut self.playback else { return };
         match p.add_bookmark(&self.services.library) {
-            Ok(()) => self.ui.toast("Bookmark added"),
-            Err(e) => self.not_saved("the bookmark", &e),
+            Ok(()) => self.ui.toast(tr!("toast-bookmark-added")),
+            Err(e) => self.not_saved(
+                "the bookmark",
+                |e| tr!("error-save-bookmark", error = e),
+                &e,
+            ),
         }
     }
 
@@ -397,8 +404,10 @@ impl App {
 
     fn clear_history(&mut self) {
         match self.services.library.clear_history() {
-            Ok(()) => self.ui.toast("Watch history cleared"),
-            Err(e) => self.ui.toast(format!("Could not clear the history: {e}")),
+            Ok(()) => self.ui.toast(tr!("toast-history-cleared")),
+            Err(e) => self
+                .ui
+                .toast(tr!("error-clear-history", error = e.to_string())),
         }
         self.ui.invalidate();
         // The frames where videos were left off go.
@@ -407,17 +416,23 @@ impl App {
 
     /// After a change to the library: re-query what shows it, and say so
     /// if it could not be saved.
-    fn library_changed(&mut self, what: &str, r: fp_library::Result<()>) {
+    /// `failed` says so with the error, `what` in the log.
+    fn library_changed(
+        &mut self,
+        what: &str,
+        failed: fn(&str) -> String,
+        r: fp_library::Result<()>,
+    ) {
         if let Err(e) = r {
-            self.not_saved(what, &e);
+            self.not_saved(what, failed, &e);
         }
         self.ui.invalidate();
     }
 
     /// Tells the user a change to the library could not be saved.
-    fn not_saved(&mut self, what: &str, e: &fp_library::Error) {
+    fn not_saved(&mut self, what: &str, failed: fn(&str) -> String, e: &fp_library::Error) {
         log::warn!("saving {what}: {e}");
-        self.ui.toast(format!("Couldn't save {what}: {e}"));
+        self.ui.toast(failed(&e.to_string()));
     }
 }
 

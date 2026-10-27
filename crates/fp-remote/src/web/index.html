@@ -1,34 +1,35 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="referrer" content="no-referrer">
-<title>FramePlayerX Remote</title>
+<title>{{remote-title:FramePlayerX Remote}}</title>
 <link rel="stylesheet" href="/app.css">
+<script id="strings" type="application/json">{{strings}}</script>
 <script src="/app.js" defer></script>
 </head>
 <body>
 <header class="bar">
   <h1>FramePlayerX</h1>
-  <span id="conn" class="conn" role="status" aria-live="polite">Connecting…</span>
+  <span id="conn" class="conn" role="status" aria-live="polite">{{remote-connecting:Connecting…}}</span>
 </header>
 <main>
   <section class="card" aria-labelledby="np-h">
-    <h2 id="np-h" class="eyebrow">Now playing</h2>
-    <p id="np-title" class="title">Nothing playing</p>
+    <h2 id="np-h" class="eyebrow">{{remote-now-playing:Now playing}}</h2>
+    <p id="np-title" class="title">{{remote-nothing-playing:Nothing playing}}</p>
     <div class="seek">
-      <input id="seek" type="range" min="0" max="0" step="0.1" value="0" aria-label="Seek position" disabled>
+      <input id="seek" type="range" min="0" max="0" step="0.1" value="0" aria-label="{{remote-seek:Seek position}}" disabled>
       <div class="times" aria-hidden="true"><span id="pos">0:00</span><span id="dur">0:00</span></div>
     </div>
     <div class="transport">
-      <button id="back" type="button" aria-label="Back 10 seconds">−10 s</button>
-      <button id="play" type="button" class="primary" aria-label="Play">Play</button>
-      <button id="fwd" type="button" aria-label="Forward 10 seconds">+10 s</button>
+      <button id="back" type="button" aria-label="{{remote-back-10:Back 10 seconds}}">−10 s</button>
+      <button id="play" type="button" class="primary" aria-label="{{remote-play:Play}}">{{remote-play:Play}}</button>
+      <button id="fwd" type="button" aria-label="{{remote-forward-10:Forward 10 seconds}}">+10 s</button>
     </div>
     <div class="row">
-      <label for="speed">Speed</label>
+      <label for="speed">{{remote-speed:Speed}}</label>
       <select id="speed">
         <option value="0.5">0.5×</option>
         <option value="0.75">0.75×</option>
@@ -38,31 +39,31 @@
         <option value="2">2×</option>
       </select>
       <span class="spacer"></span>
-      <button id="recenter" type="button">Recenter</button>
-      <button id="stop" type="button">Stop</button>
+      <button id="recenter" type="button">{{remote-recenter:Recenter}}</button>
+      <button id="stop" type="button">{{remote-stop:Stop}}</button>
     </div>
   </section>
 
   <section class="card" aria-labelledby="type-h">
-    <h2 id="type-h" class="eyebrow">Type into headset</h2>
+    <h2 id="type-h" class="eyebrow">{{remote-type:Type into headset}}</h2>
     <form id="type-form" class="row" autocomplete="off">
-      <label for="type-text" class="sr-only">Text to send to the headset</label>
-      <input id="type-text" type="text" autocapitalize="off" spellcheck="false" maxlength="4096" placeholder="Search terms or URL">
-      <button type="submit" class="primary">Send</button>
+      <label for="type-text" class="sr-only">{{remote-type-label:Text to send to the headset}}</label>
+      <input id="type-text" type="text" autocapitalize="off" spellcheck="false" maxlength="4096" placeholder="{{remote-type-hint:Search terms or URL}}">
+      <button type="submit" class="primary">{{remote-send:Send}}</button>
     </form>
     <p id="type-status" class="hint" role="status" aria-live="polite"></p>
   </section>
 
   <section class="card" aria-labelledby="lib-h">
-    <h2 id="lib-h" class="eyebrow">Library</h2>
+    <h2 id="lib-h" class="eyebrow">{{remote-library:Library}}</h2>
     <form id="search-form" class="row" role="search" autocomplete="off">
-      <label for="q" class="sr-only">Search library</label>
-      <input id="q" type="search" placeholder="Search library" maxlength="256">
-      <button type="submit">Search</button>
+      <label for="q" class="sr-only">{{remote-search-label:Search library}}</label>
+      <input id="q" type="search" placeholder="{{remote-search-label:Search library}}" maxlength="256">
+      <button type="submit">{{remote-search:Search}}</button>
     </form>
     <p id="lib-status" class="hint" role="status" aria-live="polite"></p>
     <ul id="results" class="results"></ul>
-    <button id="more" type="button" class="wide" hidden>Load more</button>
+    <button id="more" type="button" class="wide" hidden>{{remote-load-more:Load more}}</button>
   </section>
 </main>
 </body>

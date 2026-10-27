@@ -62,43 +62,43 @@ impl ButtonAction {
 
     pub fn label(self) -> &'static str {
         match self {
-            ButtonAction::Nothing => "Nothing",
-            ButtonAction::PlayPause => "Play / pause",
-            ButtonAction::Back => "Back",
-            ButtonAction::Library => "Browse",
-            ButtonAction::PreviousVideo => "Previous video",
-            ButtonAction::NextVideo => "Next video",
-            ButtonAction::PreviousChapter => "Previous chapter",
-            ButtonAction::NextChapter => "Next chapter",
-            ButtonAction::SeekBack => "Seek back",
-            ButtonAction::SeekForward => "Seek forward",
-            ButtonAction::BackOneMinute => "Back 1 minute",
-            ButtonAction::ForwardOneMinute => "Forward 1 minute",
-            ButtonAction::Mute => "Mute",
-            ButtonAction::Subtitles => "Subtitles on / off",
-            ButtonAction::Bookmark => "Bookmark",
-            ButtonAction::ResetPicture => "Reset picture",
-            ButtonAction::ShowHideControls => "Show / hide controls",
-            ButtonAction::AdjustPanel => "Adjust panel",
-            ButtonAction::Passthrough => "Show your room",
-            ButtonAction::Recenter => "Recenter",
+            ButtonAction::Nothing => tr!("action-nothing"),
+            ButtonAction::PlayPause => tr!("action-play-pause"),
+            ButtonAction::Back => tr!("action-back"),
+            ButtonAction::Library => tr!("action-browse"),
+            ButtonAction::PreviousVideo => tr!("action-previous-video"),
+            ButtonAction::NextVideo => tr!("action-next-video"),
+            ButtonAction::PreviousChapter => tr!("action-previous-chapter"),
+            ButtonAction::NextChapter => tr!("action-next-chapter"),
+            ButtonAction::SeekBack => tr!("action-seek-back"),
+            ButtonAction::SeekForward => tr!("action-seek-forward"),
+            ButtonAction::BackOneMinute => tr!("action-back-minute"),
+            ButtonAction::ForwardOneMinute => tr!("action-forward-minute"),
+            ButtonAction::Mute => tr!("action-mute"),
+            ButtonAction::Subtitles => tr!("action-subtitles"),
+            ButtonAction::Bookmark => tr!("action-bookmark"),
+            ButtonAction::ResetPicture => tr!("action-reset-picture"),
+            ButtonAction::ShowHideControls => tr!("action-show-hide"),
+            ButtonAction::AdjustPanel => tr!("action-adjust"),
+            ButtonAction::Passthrough => tr!("action-room"),
+            ButtonAction::Recenter => tr!("action-recenter"),
         }
     }
 
     /// A shorter label, for the controller picture.
     pub fn short_label(self) -> &'static str {
         match self {
-            ButtonAction::PlayPause => "Play/pause",
-            ButtonAction::PreviousVideo => "Previous",
-            ButtonAction::NextVideo => "Next",
-            ButtonAction::PreviousChapter => "Prev. chapter",
-            ButtonAction::Subtitles => "Subtitles",
-            ButtonAction::BackOneMinute => "−1 min",
-            ButtonAction::ForwardOneMinute => "+1 min",
-            ButtonAction::ResetPicture => "Reset view",
-            ButtonAction::ShowHideControls => "Show/hide UI",
-            ButtonAction::AdjustPanel => "Adjust",
-            ButtonAction::Passthrough => "Room",
+            ButtonAction::PlayPause => tr!("action-short-play-pause"),
+            ButtonAction::PreviousVideo => tr!("action-short-previous"),
+            ButtonAction::NextVideo => tr!("action-short-next"),
+            ButtonAction::PreviousChapter => tr!("action-short-previous-chapter"),
+            ButtonAction::Subtitles => tr!("action-short-subtitles"),
+            ButtonAction::BackOneMinute => tr!("toast-minus-minute"),
+            ButtonAction::ForwardOneMinute => tr!("toast-plus-minute"),
+            ButtonAction::ResetPicture => tr!("action-short-reset"),
+            ButtonAction::ShowHideControls => tr!("action-short-show-hide"),
+            ButtonAction::AdjustPanel => tr!("action-short-adjust"),
+            ButtonAction::Passthrough => tr!("action-short-room"),
             other => other.label(),
         }
     }
@@ -132,22 +132,22 @@ impl AxisAction {
 
     pub fn label(self) -> &'static str {
         match self {
-            AxisAction::Nothing => "Nothing",
-            AxisAction::Seek => "Seek",
-            AxisAction::Volume => "Volume",
-            AxisAction::Tilt => "Tilt the picture",
-            AxisAction::Turn => "Turn the picture",
-            AxisAction::Zoom => "Zoom",
-            AxisAction::Height => "Raise or lower yourself",
+            AxisAction::Nothing => tr!("action-nothing"),
+            AxisAction::Seek => tr!("action-seek"),
+            AxisAction::Volume => tr!("settings-volume"),
+            AxisAction::Tilt => tr!("action-tilt"),
+            AxisAction::Turn => tr!("action-turn"),
+            AxisAction::Zoom => tr!("adjust-zoom"),
+            AxisAction::Height => tr!("action-height"),
         }
     }
 
     /// A shorter label, for the controller picture.
     pub fn short_label(self) -> &'static str {
         match self {
-            AxisAction::Tilt => "Tilt",
-            AxisAction::Turn => "Turn",
-            AxisAction::Height => "Height",
+            AxisAction::Tilt => tr!("action-short-tilt"),
+            AxisAction::Turn => tr!("action-short-turn"),
+            AxisAction::Height => tr!("settings-height"),
             other => other.label(),
         }
     }
@@ -184,13 +184,13 @@ impl Button {
             (Button::West, true) => "X",
             (Button::North, true) => "Y",
             (Button::Menu, true) => "Menu",
-            (Button::South, false) => "D-pad down",
-            (Button::East, false) => "D-pad right",
-            (Button::West, false) => "D-pad left",
-            (Button::North, false) => "D-pad up",
+            (Button::South, false) => tr!("button-dpad-down"),
+            (Button::East, false) => tr!("button-dpad-right"),
+            (Button::West, false) => tr!("button-dpad-left"),
+            (Button::North, false) => tr!("button-dpad-up"),
             (Button::Menu, false) => "View",
-            (Button::Shoulder, _) => "Bumper",
-            (Button::StickClick, _) => "Thumbstick press",
+            (Button::Shoulder, _) => tr!("button-bumper"),
+            (Button::StickClick, _) => tr!("button-stick-press"),
         }
     }
 

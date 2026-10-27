@@ -17,7 +17,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-const NOT_INSERTED: &str = "This video is on a microSD card or USB drive that is not inserted.";
+fn not_inserted() -> &'static str {
+    tr!("open-not-inserted")
+}
 
 /// What changing the source list did.
 pub struct SourcesChange {
@@ -86,13 +88,13 @@ impl Opener {
         location: &str,
     ) -> Result<Arc<dyn ByteSource>, String> {
         if location.starts_with(volume::SCHEME) {
-            let path = volume::resolve(location).ok_or(NOT_INSERTED)?;
+            let path = volume::resolve(location).ok_or(not_inserted())?;
             return self.open_in(None, &path);
         }
         if location.starts_with('/') {
             let path = Path::new(location);
             if !path.exists() && location.starts_with(&format!("{REMOVABLE_ROOT}/")) {
-                return Err(NOT_INSERTED.into());
+                return Err(not_inserted().into());
             }
             return FileSource::open(path)
                 .map(|f| Arc::new(f) as Arc<dyn ByteSource>)
@@ -102,15 +104,17 @@ impl Opener {
             return self.open_in(None, path);
         }
         if let Some(src) = source_id.and_then(|id| self.source(id)) {
-            return src.open(location).map_err(|e| e.to_string());
+            return src
+                .open(location)
+                .map_err(|e| crate::ui::errors::source(&e));
         }
         // Try sources whose scheme fits, then plain HTTP.
         let sources: Vec<Arc<dyn Source>> = read(&self.sources).values().cloned().collect();
-        let mut last = String::from("no source can open this location");
+        let mut last = tr!("open-no-source").to_string();
         for s in sources {
             match s.open(location) {
                 Ok(b) => return Ok(b),
-                Err(e) => last = e.to_string(),
+                Err(e) => last = crate::ui::errors::source(&e),
             }
         }
         if fp_sources::urlutil::is_http_url(location) {
@@ -118,7 +122,7 @@ impl Opener {
                 .http
                 .open(location)
                 .map(|f| Arc::new(f) as Arc<dyn ByteSource>)
-                .map_err(|e| e.to_string());
+                .map_err(|e| crate::ui::errors::source(&e));
         }
         Err(last)
     }
@@ -142,7 +146,7 @@ impl Opener {
         {
             let read = src
                 .open(location)
-                .map_err(|e| e.to_string())
+                .map_err(|e| crate::ui::errors::source(&e))
                 .and_then(|f| read_whole(&*f, limit));
             match read {
                 Ok(bytes) => return Ok(bytes),
@@ -156,13 +160,15 @@ impl Opener {
     /// Small downloads (thumbnails, scripts) from any http(s) URL.
     pub fn fetch(&self, url: &str, limit: u64) -> Result<Vec<u8>, String> {
         if url.starts_with(volume::SCHEME) {
-            let path = volume::resolve(url).ok_or(NOT_INSERTED)?;
+            let path = volume::resolve(url).ok_or(not_inserted())?;
             return self.fetch(&path, limit);
         }
         if url.starts_with('/') {
             return std::fs::read(url).map_err(|e| e.to_string());
         }
-        self.http.get_bytes(url, limit).map_err(|e| e.to_string())
+        self.http
+            .get_bytes(url, limit)
+            .map_err(|e| crate::ui::errors::source(&e))
     }
 }
 
@@ -179,7 +185,8 @@ fn read_whole(f: &dyn ByteSource, limit: u64) -> Result<Vec<u8>, String> {
         }
         out.extend_from_slice(&chunk[..n]);
         if out.len() as u64 > limit {
-            return Err(format!("larger than {} MB", limit >> 20));
+            let mb = limit >> 20;
+            return Err(tr!("error-too-large", mb = mb));
         }
     }
 }
@@ -196,7 +203,7 @@ pub fn builtin_sources() -> Vec<SourceConfig> {
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         out.push(SourceConfig::Local(fp_sources::LocalConfig {
             id: HOME_SOURCE.into(),
-            name: "This device".into(),
+            name: tr!("sources-this-device").into(),
             root: home,
         }));
     }
@@ -276,7 +283,7 @@ impl RemoteLibrary for WebLibrary {
                 title: r.title.clone(),
                 location: r.location.clone(),
                 duration: r.duration,
-                format_label: r.effective_format().format.label(),
+                format_label: crate::ui::format_label(&r.effective_format().format),
                 has_thumbnail: r.picture().is_some(),
             })
             .collect()
@@ -549,6 +556,13 @@ impl Services {
         self.haptic_devices.iter().find(|s| s.config == *config)
     }
 
+    /// The web remote's pages follow the interface's language.
+    pub fn set_remote_language(&self) {
+        if let Some(hub) = &self.remote {
+            hub.set_page_text(crate::i18n::current(), remote_page_text());
+        }
+    }
+
     /// Starts or stops the remote-control servers to match `config`.
     pub fn apply_remote(&mut self, config: &fp_remote::config::RemoteConfig) {
         if let Some(r) = self.remote.take() {
@@ -564,10 +578,11 @@ impl Services {
         }
         match RemoteHub::new(cfg.clone()) {
             Ok(hub) => {
+                hub.set_page_text(crate::i18n::current(), remote_page_text());
                 if cfg.deovr_enabled
                     && let Err(e) = hub.start_deovr_server()
                 {
-                    self.remote_error = Some(format!("DeoVR remote API: {e}"));
+                    self.remote_error = Some(tr!("remote-error-deovr", error = e.to_string()));
                 }
                 let web = WebLibrary {
                     library: self.library.clone(),
@@ -576,7 +591,7 @@ impl Services {
                 if cfg.web_enabled
                     && let Err(e) = hub.start_web(Arc::new(web))
                 {
-                    self.remote_error = Some(format!("web remote: {e}"));
+                    self.remote_error = Some(tr!("remote-error-web", error = e.to_string()));
                 }
                 self.remote = Some(hub);
             }
@@ -590,6 +605,72 @@ impl Services {
             .map(|r| r.events().try_iter().collect())
             .unwrap_or_default()
     }
+}
+
+/// The web remote's text, by id; arguments stay as `{name}` for its script
+/// to fill in.
+fn remote_page_text() -> Vec<(String, String)> {
+    let page = [
+        ("remote-title", tr!("remote-title")),
+        ("remote-connecting", tr!("remote-connecting")),
+        ("remote-now-playing", tr!("remote-now-playing")),
+        ("remote-nothing-playing", tr!("remote-nothing-playing")),
+        ("remote-seek", tr!("remote-seek")),
+        ("remote-back-10", tr!("remote-back-10")),
+        ("remote-play", tr!("player-play")),
+        ("remote-pause", tr!("player-pause")),
+        ("remote-forward-10", tr!("remote-forward-10")),
+        ("remote-speed", tr!("player-speed")),
+        ("remote-recenter", tr!("action-recenter")),
+        ("remote-stop", tr!("remote-stop")),
+        ("remote-type", tr!("remote-type")),
+        ("remote-type-label", tr!("remote-type-label")),
+        ("remote-type-hint", tr!("remote-type-hint")),
+        ("remote-send", tr!("remote-send")),
+        ("remote-library", tr!("remote-library")),
+        ("remote-search-label", tr!("remote-search-label")),
+        ("remote-search", tr!("jf-search")),
+        ("remote-load-more", tr!("remote-load-more")),
+        ("remote-unpaired-title", tr!("remote-unpaired-title")),
+        ("remote-unpaired", tr!("remote-unpaired")),
+        ("remote-unpaired-desc", tr!("remote-unpaired-desc")),
+        ("remote-unpaired-how", tr!("remote-unpaired-how")),
+        ("remote-not-paired", tr!("remote-not-paired")),
+        ("remote-connected", tr!("remote-connected")),
+        ("remote-reconnecting", tr!("remote-reconnecting")),
+        ("remote-sent", tr!("remote-sent")),
+        ("remote-searching", tr!("remote-searching")),
+        ("remote-no-results", tr!("remote-no-results")),
+        ("remote-unreachable", tr!("remote-unreachable")),
+    ]
+    .map(|(id, s)| (id.to_string(), s.to_string()));
+    let with_args = [
+        (
+            "remote-command-failed",
+            tr!("remote-command-failed", error = "{error}"),
+        ),
+        ("remote-not-sent", tr!("remote-not-sent", error = "{error}")),
+        (
+            "remote-search-failed",
+            tr!("remote-search-failed", error = "{error}"),
+        ),
+        (
+            "remote-play-title",
+            tr!("remote-play-title", title = "{title}"),
+        ),
+        ("remote-opening", tr!("remote-opening", title = "{title}")),
+        ("remote-results", tr!("remote-results", count = "{count}")),
+        (
+            "remote-position",
+            tr!(
+                "remote-position",
+                position = "{position}",
+                duration = "{duration}"
+            ),
+        ),
+    ]
+    .map(|(id, s)| (id.to_string(), s));
+    page.into_iter().chain(with_args).collect()
 }
 
 #[cfg(test)]

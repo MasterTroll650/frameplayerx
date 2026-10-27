@@ -224,6 +224,7 @@ fn floating_panel(px: [u32; 2], width_m: f32, ppp: f32) -> Panel {
 
 impl App {
     pub fn new(settings: Settings, library: Library) -> App {
+        crate::i18n::set_language(&settings.interface_language());
         let services = Services::new(&settings, library);
         let thumbs = ui::thumbs::Thumbs::new(services.opener.clone(), services.images.clone());
         let mut panels = [
@@ -418,6 +419,14 @@ impl App {
         if self.settings.ui_scale != self.saved.ui_scale {
             self.apply_ui_scale();
         }
+        if self.settings.language != self.saved.language {
+            crate::i18n::set_language(&self.settings.interface_language());
+            self.services.set_remote_language();
+            // Chinese or Japanese forms of the characters they share.
+            for p in self.panels.iter_mut() {
+                ui::theme::set_fonts(&p.ctx);
+            }
+        }
         if self.settings.image_cache_mb != self.saved.image_cache_mb {
             self.services.images.set_limit(self.settings.image_cache_mb);
         }
@@ -438,7 +447,8 @@ impl App {
             Err(e) => {
                 if self.unsaved_since.is_none() {
                     log::warn!("saving settings: {e}");
-                    self.ui.toast(format!("Settings couldn't be saved: {e}"));
+                    self.ui
+                        .toast(tr!("error-save-settings", error = e.to_string()));
                 }
                 self.unsaved_since = Some(Instant::now());
             }

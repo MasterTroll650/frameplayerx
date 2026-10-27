@@ -13,6 +13,17 @@
     libStatus: $('lib-status'),
   };
 
+  // The page's text in the headset's language, which filled the page's
+  // own text as it was served; t('id', 'English', {name: value}).
+  let strings = {};
+  try { strings = JSON.parse($('strings').textContent) || {}; } catch (_) { strings = {}; }
+  const lang = document.documentElement.lang;
+  function t(id, english, args) {
+    let s = typeof strings[id] === 'string' ? strings[id] : english;
+    for (const k of Object.keys(args || {})) s = s.split('{' + k + '}').join(String(args[k]));
+    return s;
+  }
+
   let status = null;      // last status from the server
   let clockOffset = 0;    // phone clock minus server clock, ms
   let dragging = false;   // user is moving the seek slider
@@ -40,7 +51,7 @@
     return fetch(path, o).then((r) => {
       if (r.status === 401) {
         unpaired = true;
-        setConn('Not paired: scan the QR code in the headset', true);
+        setConn(t('remote-not-paired', 'Not paired: scan the QR code in the headset'), true);
         throw new Error('not paired');
       }
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -57,7 +68,8 @@
   }
 
   function send(cmd) {
-    return postJson('/api/command', cmd).catch((e) => setConn('Command failed: ' + e.message, true));
+    return postJson('/api/command', cmd)
+      .catch((e) => setConn(t('remote-command-failed', 'Command failed: {error}', { error: e.message }), true));
   }
 
   function position() {
@@ -70,12 +82,15 @@
 
   function applyStatus(s) {
     if (!s || typeof s !== 'object') return;
+    // The headset changed its language: the page follows.
+    if (s.lang && lang && s.lang !== lang) { location.reload(); return; }
     clockOffset = Date.now() - Number(s.now_ms || Date.now());
     status = s;
     const open = typeof s.location === 'string' && s.location.length > 0;
-    el.title.textContent = open ? (s.title || s.location) : 'Nothing playing';
-    el.play.textContent = s.playing ? 'Pause' : 'Play';
-    el.play.setAttribute('aria-label', s.playing ? 'Pause' : 'Play');
+    el.title.textContent = open ? (s.title || s.location) : t('remote-nothing-playing', 'Nothing playing');
+    const label = s.playing ? t('remote-pause', 'Pause') : t('remote-play', 'Play');
+    el.play.textContent = label;
+    el.play.setAttribute('aria-label', label);
     for (const b of [el.play, el.back, el.fwd, el.stop]) b.disabled = !open;
     el.seek.disabled = !open || !(s.duration > 0);
     el.seek.max = String(s.duration > 0 ? s.duration : 0);
@@ -103,7 +118,8 @@
     const p = position();
     el.seek.value = String(p);
     el.pos.textContent = fmt(p);
-    el.seek.setAttribute('aria-valuetext', fmt(p) + ' of ' + fmt(status.duration));
+    el.seek.setAttribute('aria-valuetext',
+      t('remote-position', '{position} of {duration}', { position: fmt(p), duration: fmt(status.duration) }));
   }
 
   function refreshStatus() {
@@ -112,17 +128,17 @@
 
   function connect() {
     if (!window.EventSource) {
-      setInterval(() => refreshStatus().then(() => setConn('Connected'), () => {}), 2000);
+      setInterval(() => refreshStatus().then(() => setConn(t('remote-connected', 'Connected')), () => {}), 2000);
       return;
     }
     const es = new EventSource('/api/events');
-    es.onopen = () => setConn('Connected');
+    es.onopen = () => setConn(t('remote-connected', 'Connected'));
     es.onmessage = (e) => {
-      try { applyStatus(JSON.parse(e.data)); setConn('Connected'); } catch (_) { /* ignore */ }
+      try { applyStatus(JSON.parse(e.data)); setConn(t('remote-connected', 'Connected')); } catch (_) { /* ignore */ }
     };
     es.onerror = () => {
       if (unpaired) { es.close(); return; }
-      setConn('Reconnecting…', true);
+      setConn(t('remote-reconnecting', 'Reconnecting…'), true);
       // Distinguishes "headset unreachable" from "pairing revoked".
       refreshStatus().catch(() => { if (unpaired) es.close(); });
     };
@@ -151,11 +167,11 @@
     const text = el.typeText.value;
     postJson('/api/text', { text: text }).then(() => {
       el.typeStatus.classList.remove('bad');
-      el.typeStatus.textContent = 'Sent to headset';
+      el.typeStatus.textContent = t('remote-sent', 'Sent to headset');
       el.typeText.value = '';
     }, (err) => {
       el.typeStatus.classList.add('bad');
-      el.typeStatus.textContent = 'Not sent: ' + err.message;
+      el.typeStatus.textContent = t('remote-not-sent', 'Not sent: {error}', { error: err.message });
     });
   });
 
@@ -166,7 +182,7 @@
     btn.type = 'button';
     btn.className = 'item';
     const title = String(item.title || item.location || '');
-    btn.setAttribute('aria-label', 'Play ' + title);
+    btn.setAttribute('aria-label', t('remote-play-title', 'Play {title}', { title: title }));
 
     let thumb;
     if (item.has_thumbnail && Number.isSafeInteger(item.id)) {
@@ -196,7 +212,7 @@
     btn.append(thumb, meta);
 
     btn.addEventListener('click', () => {
-      el.libStatus.textContent = 'Opening ' + title + '…';
+      el.libStatus.textContent = t('remote-opening', 'Opening {title}…', { title: title });
       send({ cmd: 'open', location: String(item.location) });
     });
     li.appendChild(btn);
@@ -207,7 +223,7 @@
     libQuery = query;
     libOffset = offset;
     el.libStatus.classList.remove('bad');
-    if (offset === 0) el.libStatus.textContent = 'Searching…';
+    if (offset === 0) el.libStatus.textContent = t('remote-searching', 'Searching…');
     const url = '/api/library?q=' + encodeURIComponent(query) + '&limit=' + PAGE + '&offset=' + offset;
     return api(url).then((r) => r.json()).then((d) => {
       const items = Array.isArray(d.items) ? d.items : [];
@@ -216,10 +232,12 @@
       libOffset = offset + items.length;
       el.more.hidden = items.length < PAGE;
       const n = el.results.children.length;
-      el.libStatus.textContent = n === 0 ? 'No results' : n + (n === 1 ? ' result' : ' results');
+      el.libStatus.textContent = n === 0
+        ? t('remote-no-results', 'No results')
+        : t('remote-results', 'Results: {count}', { count: n });
     }, (err) => {
       el.libStatus.classList.add('bad');
-      el.libStatus.textContent = 'Search failed: ' + err.message;
+      el.libStatus.textContent = t('remote-search-failed', 'Search failed: {error}', { error: err.message });
     });
   }
 
@@ -230,7 +248,7 @@
   el.more.addEventListener('click', () => search(libQuery, libOffset));
 
   setInterval(tick, 250);
-  refreshStatus().then(() => { setConn('Connected'); connect(); search('', 0); }, () => {
-    if (!unpaired) { setConn('Headset unreachable', true); connect(); }
+  refreshStatus().then(() => { setConn(t('remote-connected', 'Connected')); connect(); search('', 0); }, () => {
+    if (!unpaired) { setConn(t('remote-unreachable', 'Headset unreachable'), true); connect(); }
   });
 })();

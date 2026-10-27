@@ -13,13 +13,17 @@
 //! | GET | `/api/thumb/<id>` | thumbnail bytes |
 //! | POST | `/api/text` | `{"text": "..."}` typed into the headset |
 //! | GET | `/api/events` | server-sent events, one status JSON per `data:` |
+//!
+//! The pages are in the app's language ([`crate::RemoteHub::set_page_text`]),
+//! filled in as they are served.
 
 use crate::RemoteError;
-use crate::hub::{RemoteEvent, RemoteLibrary, Shared};
+use crate::hub::{PageText, RemoteEvent, RemoteLibrary, Shared};
 use crate::net::is_allowed_peer;
 use crate::status::{ChangeTracker, command_is_valid};
 use crate::token::constant_time_eq;
 use fp_core::playback::now_ms;
+use fp_core::sync::read;
 use fp_core::{PlaybackStatus, PlayerCommand};
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read, Write};
@@ -368,7 +372,11 @@ fn handle(mut rq: Request, ctx: &Arc<Ctx>) {
     );
     if auth == Auth::None {
         let reply = if method == Method::Get && path == "/" {
-            Reply::new(401, "text/html; charset=utf-8", PAIR_HTML)
+            Reply::new(
+                401,
+                "text/html; charset=utf-8",
+                render(PAIR_HTML, &read(&ctx.shared.page)),
+            )
         } else {
             Reply::error(401, "not paired")
         };
@@ -384,10 +392,15 @@ fn handle(mut rq: Request, ctx: &Arc<Ctx>) {
         (Method::Get, "/" | "/index.html") if auth == Auth::Query => {
             Reply::new(303, "text/plain", "").header("Location", "/")
         }
-        (Method::Get, "/" | "/index.html") => {
-            Reply::new(200, "text/html; charset=utf-8", INDEX_HTML)
-        }
-        (Method::Get, "/api/status") => Reply::json(&WebStatus::now(&ctx.shared.status.snapshot())),
+        (Method::Get, "/" | "/index.html") => Reply::new(
+            200,
+            "text/html; charset=utf-8",
+            render(INDEX_HTML, &read(&ctx.shared.page)),
+        ),
+        (Method::Get, "/api/status") => Reply::json(&WebStatus::now(
+            &ctx.shared.status.snapshot(),
+            &read(&ctx.shared.page).lang,
+        )),
         (Method::Post, "/api/command") => match read_body(&mut rq) {
             Ok(body) => post_command(&body, ctx),
             Err(r) => r,
@@ -439,21 +452,66 @@ fn read_body(rq: &mut Request) -> Result<Vec<u8>, Reply> {
 
 /// Status as the web API reports it: [`PlaybackStatus`] fields plus the
 /// server's clock, so the page can extrapolate the position correctly even
-/// when the phone's clock differs from the headset's.
+/// when the phone's clock differs from the headset's, and the language the
+/// pages are in.
 #[derive(Serialize)]
 struct WebStatus<'a> {
     #[serde(flatten)]
     status: &'a PlaybackStatus,
     now_ms: u64,
+    lang: &'a str,
 }
 
-impl WebStatus<'_> {
-    fn now(status: &PlaybackStatus) -> WebStatus<'_> {
+impl<'a> WebStatus<'a> {
+    fn now(status: &'a PlaybackStatus, lang: &'a str) -> WebStatus<'a> {
         WebStatus {
             status,
             now_ms: now_ms(),
+            lang,
         }
     }
+}
+
+/// `page` in the app's language: each `{{id:English}}` becomes that
+/// string (the English when there is none), HTML-escaped; `{{lang}}` the
+/// language; `{{strings}}` every string as JSON, for the script.
+fn render(page: &str, text: &PageText) -> String {
+    let mut out = String::with_capacity(page.len() + 2048);
+    let mut rest = page;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let Some(len) = rest[start..].find("}}") else {
+            break;
+        };
+        match &rest[start + 2..start + len] {
+            "lang" => out.push_str(&escape_html(if text.lang.is_empty() {
+                "en"
+            } else {
+                &text.lang
+            })),
+            // Inside a script element: nothing can close it.
+            "strings" => out.push_str(
+                &serde_json::to_string(&text.strings)
+                    .unwrap_or_default()
+                    .replace('<', "\\u003c"),
+            ),
+            token => {
+                let (id, english) = token.split_once(':').unwrap_or((token, token));
+                let shown = text.strings.get(id).map_or(english, String::as_str);
+                out.push_str(&escape_html(shown));
+            }
+        }
+        rest = &rest[start + len + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn post_command(body: &[u8], ctx: &Ctx) -> Reply {
@@ -602,8 +660,9 @@ fn event_stream(w: &mut dyn Write, ctx: &Ctx, cookie: Option<&str>) -> std::io::
             break;
         }
         if let Some(snap) = snap {
-            let json =
-                serde_json::to_string(&WebStatus::now(&snap)).map_err(std::io::Error::other)?;
+            let lang = read(&ctx.shared.page).lang.clone();
+            let json = serde_json::to_string(&WebStatus::now(&snap, &lang))
+                .map_err(std::io::Error::other)?;
             w.write_all(format!("data: {json}\n\n").as_bytes())?;
             w.flush()?;
             last_write = Instant::now();
@@ -668,6 +727,27 @@ mod tests {
         assert_eq!(image_type(b"\xff\xd8\xff\xe0"), "image/jpeg");
         assert_eq!(image_type(b"\x89PNG\r\n\x1a\n...."), "image/png");
         assert_eq!(image_type(b"RIFF\0\0\0\0WEBPVP8 "), "image/webp");
+    }
+
+    #[test]
+    fn pages_are_served_in_the_apps_language() {
+        let mut text = PageText::default();
+        let english = render(INDEX_HTML, &text);
+        assert!(english.contains("<html lang=\"en\">"), "{english}");
+        assert!(english.contains(">Now playing<"));
+        assert!(!english.contains("{{"), "every slot filled");
+        text.lang = "de".into();
+        text.strings
+            .insert("remote-now-playing".into(), "Läuft gerade <jetzt>".into());
+        text.strings.insert("x".into(), "</script>".into());
+        let german = render(INDEX_HTML, &text);
+        assert!(german.contains("<html lang=\"de\">"));
+        assert!(german.contains(">Läuft gerade &lt;jetzt&gt;<"), "escaped");
+        assert!(
+            !german.contains("</script>\""),
+            "the strings can't close their script"
+        );
+        assert!(render(PAIR_HTML, &text).contains("<html lang=\"de\">"));
     }
 
     #[test]

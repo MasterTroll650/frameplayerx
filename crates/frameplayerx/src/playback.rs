@@ -236,7 +236,7 @@ pub fn open(
             subtitle: pick.stream(),
         }
     })
-    .map_err(|e| failed(format!("{name}: {e}")))?;
+    .map_err(|e| failed(format!("{name}: {}", crate::ui::errors::media(&e))))?;
     let info = player.info().clone();
     if settings.hardware_decoding {
         warn_if_software(&name, &info, &player.stats());
@@ -662,9 +662,7 @@ impl Playback {
     /// unsaved, to save again.
     pub fn save_settings(&mut self, library: &Library) -> fp_library::Result<bool> {
         let Some(id) = self.record_id else {
-            self.notice = Some(
-                "Adjustments apply until you close this video (it is not in the library).".into(),
-            );
+            self.notice = Some(tr!("notice-not-in-library").into());
             return Ok(false);
         };
         library
@@ -720,7 +718,7 @@ impl Playback {
 
     pub fn add_bookmark(&mut self, library: &Library) -> fp_library::Result<()> {
         let t = self.player.position();
-        let name = format!("Bookmark {}", crate::ui::fmt_time(t));
+        let name = tr!("bookmark-name", time = crate::ui::fmt_time(t));
         if let Some(id) = self.record_id {
             library.add_marker(id, t, &name)?;
         }
@@ -848,11 +846,9 @@ pub(crate) fn software_reason(
 ) -> String {
     match hardware_error {
         Some(e) => e.strip_prefix("unsupported: ").unwrap_or(e).to_string(),
-        None if !has_hardware_decoder(v) => {
-            format!("no hardware decoding for {}", stream_desc(v))
-        }
-        None if !hardware_on => "hardware decoding is off in Settings".to_string(),
-        None => "hardware decoder not tried".to_string(),
+        None if !has_hardware_decoder(v) => tr!("decoder-why-none", stream = stream_desc(v)),
+        None if !hardware_on => tr!("decoder-why-off").to_string(),
+        None => tr!("decoder-why-untried").to_string(),
     }
 }
 
@@ -866,12 +862,10 @@ pub(crate) fn slow_decode_notice(
 ) -> String {
     let desc = stream_desc(v);
     if !has_hardware_decoder(v) {
-        return format!(
-            "No hardware decoding for {desc}, so it stutters. 8-bit 4:2:0 H.265 plays smoothly"
-        );
+        return tr!("decoder-notice-none", stream = desc);
     }
     if !hardware_on {
-        return format!("{desc} in software stutters: turn on hardware decoding in Settings");
+        return tr!("decoder-notice-off", stream = desc);
     }
     // Out of decoder memory or sessions: other apps (Steam's streaming
     // among them) hold the hardware decoder.
@@ -880,12 +874,10 @@ pub(crate) fn slow_decode_notice(
         e.contains("memory") || e.contains("busy") || e.contains("no free")
     });
     if busy {
-        format!("Hardware decoder busy: {desc} in software stutters")
+        tr!("decoder-notice-busy", stream = desc)
     } else {
-        format!(
-            "The hardware decoder can't play this {desc} ({}x{}), so it stutters in software",
-            v.width, v.height
-        )
+        let size = format!("{}x{}", v.width, v.height);
+        tr!("decoder-notice-refused", stream = desc, size = size)
     }
 }
 

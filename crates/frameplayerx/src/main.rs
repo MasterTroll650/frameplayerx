@@ -7,6 +7,8 @@
 //! `frameplayerx --decode-bench FILE` decodes without a headset and prints
 //! the decoder and its frame rate.
 
+#[macro_use]
+mod i18n;
 mod app;
 mod bindings;
 mod controls;

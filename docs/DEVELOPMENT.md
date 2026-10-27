@@ -52,6 +52,47 @@ Comments say what the code can't:
   (clippy checks).
 - No commented-out code. A known gap is an issue, not a `TODO`.
 
+## Translations
+
+The interface's text is in [Fluent](https://projectfluent.org/) files, one
+per language: `crates/frameplayerx/i18n/<language>/frameplayerx.ftl`.
+English is the source; every other language translates its messages, and a
+message a language lacks shows in English. Translators work on
+[Hosted Weblate](https://hosted.weblate.org/projects/frameplayerx/), which
+sends their changes as pull requests (see [Help translate](../README.md#help-translate)).
+
+- Text the interface shows goes through `tr!("message-id")`, or
+  `tr!("message-id", name = value)` with arguments. Add the message to the
+  English file only, with a comment saying where it shows, "Short." for a
+  button, chip or tab. The build checks each `tr!` against the English
+  file: an unknown id or arguments that don't match don't compile.
+- `tr!` without arguments returns a `&'static str`, kept until the
+  language changes. `const` and `static` items can't call it, so lists of
+  labels are functions.
+- Errors from `fp-sources` and `fp-media` are put into words in
+  `ui/errors.rs`. Text from servers, decoders and drivers shows as it comes.
+- The phone remote's pages (`crates/fp-remote/src/web/`) are filled in as
+  they are served, with the messages `remote_page_text` in `services.rs`
+  hands over in the app's language: `{{remote-send:Send}}` in the HTML,
+  `t('remote-sent', 'Sent to headset')` in `app.js`, each with the English
+  for one it doesn't.
+- A new language: its folder (Weblate adds it) and an entry in `LANGUAGES`
+  in `src/i18n.rs`, named in itself. Steam's name for it goes in
+  `steam_code` if Steam has it. egui can't yet show right-to-left text or
+  scripts that need shaping (Arabic, Hebrew, Thai, the Indic scripts).
+
+```bash
+cargo test -p frameplayerx every_translation -- --nocapture   # each file parses, uses only English's ids and arguments; prints how much is translated
+UI_LANGUAGE=pseudo tools/ui-preview.sh /tmp/pseudo   # every screen in a made-up language
+UI_LANGUAGE=de tools/ui-preview.sh /tmp/de           # or es, fr, ja, zh-CN
+```
+
+The made-up language is English with its letters accented and its vowels
+doubled: text left untranslated stands out, and text that only just fits
+in English shows where German won't. Japanese and Chinese use the
+headset's Noto Sans CJK; for the preview, install it with
+`sudo apt install fonts-noto-cjk`.
+
 ## Repository layout
 
 | Crate | Purpose |

@@ -13,6 +13,7 @@ or your network.
 - [Passthrough videos](#passthrough-videos)
 - [Haptics](#haptics)
 - [Remote control](#remote-control)
+- [Language](#language)
 - [Troubleshooting](#troubleshooting)
 
 ## Install
@@ -435,7 +436,7 @@ Settings › Sound and subtitles › **Subtitles** sets what a video starts with
 - **Always**: subtitles in your language whenever the video has them.
 - **Off**: none.
 
-**Your language** starts as the system's (English when it has none). While
+**Your language** starts as the one Steam is set to. While
 a video plays, the pill beside its format on the control bar names the
 subtitles showing, and the audio track when there is more than one. Press
 it for the audio tracks and subtitles side by side, subtitles in your
@@ -638,7 +639,19 @@ seek bar shows the script's intensity.
 **Settings › Remote control › Phone / browser remote** shows a QR code; scan
 it to control playback, find videos and type from your phone. The
 **DeoVR remote API** (port 23554) works with apps that speak DeoVR's
-protocol. Both only answer devices on your local network.
+protocol. Both only answer devices on your local network. The phone's page
+is in the headset's language, and changes with it.
+
+## Language
+
+FramePlayerX comes in English, German, Spanish, French, Japanese and
+Simplified Chinese. **Settings › General › Language** starts on
+**Automatic**, which follows the language Steam is set to (English when
+Steam's isn't one of these); choose one to keep it whatever Steam's is.
+Server names, titles and other text from your servers show as they come.
+
+The translations started as machine drafts. If one reads wrong, the
+[README](../README.md#help-translate) says how to correct it or report it.
 
 ## Troubleshooting
 
@@ -653,6 +666,9 @@ protocol. Both only answer devices on your local network.
   your servers' addresses and any password replaced by placeholders such as
   `<video 1>`. **Show the report** shows exactly what would be sent;
   nothing is sent unless you choose **Send report**.
+- To report a problem yourself, **Settings › About** has QR codes that open
+  FramePlayerX's GitHub page, its issues (choose Bug report and attach the
+  log below) and its GitHub Sponsors page on your phone.
 - Log: `~/.local/share/frameplayerx/frameplayerx.log`; the run before is kept
   as `frameplayerx.log.old` (the one to send after a freeze or crash, once
   FramePlayerX has been started again)

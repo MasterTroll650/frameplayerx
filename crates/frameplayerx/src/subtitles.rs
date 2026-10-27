@@ -195,10 +195,10 @@ fn restored(saved: &PickedSubtitles, info: &MediaInfo, files: &[SubtitleFile]) -
 /// A track's name: its language, else its title, else its number.
 pub fn track_name(s: &StreamInfo) -> String {
     Tag::parse(s.language.as_deref().unwrap_or(""))
-        .name()
-        .map(str::to_string)
+        .code
+        .and_then(crate::ui::language_name)
         .or_else(|| s.title.clone())
-        .unwrap_or_else(|| format!("Track {}", s.index))
+        .unwrap_or_else(|| tr!("tracks-track", number = s.index))
 }
 
 /// What tells an embedded subtitle stream apart besides its name.
@@ -206,14 +206,13 @@ pub fn stream_detail(s: &StreamInfo) -> String {
     let tag = stream_tag(s);
     let mut parts = Vec::new();
     let title = s.title.as_deref().filter(|t| !t.is_empty());
-    if let Some(t) =
-        title.filter(|t| tag.name().is_some() && !t.eq_ignore_ascii_case(&track_name(s)))
+    if let Some(t) = title.filter(|t| tag.code.is_some() && !t.eq_ignore_ascii_case(&track_name(s)))
     {
         parts.push(t.to_string());
     }
     let said = title.unwrap_or("").to_ascii_lowercase();
     if tag.forced && !said.contains("forced") {
-        parts.push("Forced".into());
+        parts.push(tr!("tracks-forced").into());
     }
     if tag.sdh && !said.contains("sdh") {
         parts.push("SDH".into());
@@ -231,20 +230,26 @@ pub fn file_label(f: &SubtitleFile, n: usize) -> (String, String) {
     let said = own.to_ascii_lowercase();
     let mut parts = Vec::new();
     if tag.forced && !said.contains("forced") {
-        parts.push("Forced".to_string());
+        parts.push(tr!("tracks-forced").to_string());
     }
     if tag.sdh && !said.contains("sdh") {
         parts.push("SDH".to_string());
     }
-    let title = match tag.name() {
+    let title = match tag.code.and_then(crate::ui::language_name) {
         Some(language) => {
-            if !own.is_empty() && !own.eq_ignore_ascii_case(language) {
+            // A file named for its language in English or in the
+            // interface's says nothing more.
+            let english = tag.name().unwrap_or_default();
+            if !own.is_empty()
+                && !own.eq_ignore_ascii_case(&language)
+                && !own.eq_ignore_ascii_case(english)
+            {
                 parts.push(own.to_string());
             }
-            language.to_string()
+            language
         }
         None if !own.is_empty() => own.to_string(),
-        None => format!("Subtitles {n}"),
+        None => tr!("tracks-subtitles-file", number = n),
     };
     // A file name says its format; a title or no name at all doesn't.
     if !fp_core::source::is_subtitle_name(own)
@@ -263,7 +268,7 @@ fn text_format(codec: &str) -> Option<&'static str> {
         "subrip" | "srt" => "SRT",
         "ass" | "ssa" => "ASS",
         "webvtt" | "vtt" => "WebVTT",
-        "mov_text" => "Text",
+        "mov_text" => tr!("tracks-text"),
         _ => return None,
     })
 }

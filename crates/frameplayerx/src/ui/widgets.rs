@@ -647,6 +647,18 @@ impl Rows<'_> {
         desc: Option<&str>,
         control: impl FnOnce(&mut Ui) -> R,
     ) -> R {
+        self.row_at_least(title, desc, ROW_MIN_HEIGHT, control)
+    }
+
+    /// A [`row`](Self::row) at least `height` tall, for a control taller
+    /// than its text, such as a QR code.
+    pub fn row_at_least<R>(
+        &mut self,
+        title: &str,
+        desc: Option<&str>,
+        height: f32,
+        control: impl FnOnce(&mut Ui) -> R,
+    ) -> R {
         self.next_row(|ui| {
             // Text on the left and the control on the right, both
             // centred on the row's height.
@@ -669,7 +681,7 @@ impl Rows<'_> {
             let text_h =
                 title_g.size().y + desc_g.as_ref().map(|g| 3.0 + g.size().y).unwrap_or(0.0);
             let (rect, _) =
-                ui.allocate_exact_size(Vec2::new(w, text_h.max(ROW_MIN_HEIGHT)), Sense::hover());
+                ui.allocate_exact_size(Vec2::new(w, text_h.max(height)), Sense::hover());
             let mut y = rect.center().y - text_h / 2.0;
             let p = ui.painter();
             let title_h = title_g.size().y;
@@ -862,7 +874,7 @@ pub fn slider_control(
             theme::icon(20.0),
             mix(theme::TEXT_2, Color32::WHITE, t),
         );
-        if resp.tip("Reset").clicked() {
+        if resp.tip(tr!("adjust-reset")).clicked() {
             *value = default;
             changed = true;
         }
@@ -1254,7 +1266,10 @@ pub fn format_short(f: &fp_core::format::VideoFormat) -> String {
     let p = match f.projection {
         Projection::Flat => return if stereo { "3D".into() } else { "2D".into() },
         Projection::Equirect { h_fov, .. } => format!("{}°", h_fov.round()),
-        Projection::Fisheye { fov } => format!("Fisheye {}°", fov.round()),
+        Projection::Fisheye { fov } => {
+            let fov = format!("{}", fov.round());
+            tr!("format-short-fisheye", fov = fov)
+        }
         Projection::Eac { h_fov } => format!("EAC {}°", h_fov.round()),
     };
     if stereo { format!("{p} 3D") } else { p }

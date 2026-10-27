@@ -64,7 +64,7 @@ pub fn header(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 12.0;
         back = widgets::icon_button(ui, icons::ARROW_LEFT, 48.0, false)
-            .tip("Back")
+            .tip(tr!("common-back"))
             .clicked();
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -116,7 +116,7 @@ pub fn search_field(ui: &mut egui::Ui, text: &mut String, hint: &str, width: f32
                 changed |= r.changed();
                 if !text.is_empty()
                     && widgets::icon_button(ui, icons::X, 30.0, false)
-                        .tip("Clear")
+                        .tip(tr!("common-clear"))
                         .clicked()
                 {
                     text.clear();
@@ -188,7 +188,7 @@ pub fn shuffle_again(ui: &mut egui::Ui) -> bool {
     widgets::button_sized(
         ui,
         Some(icons::SHUFFLE),
-        "Shuffle again",
+        tr!("sort-shuffle-again"),
         widgets::Kind::Secondary,
         36.0,
     )
@@ -205,9 +205,9 @@ const PANEL_RADIUS: u8 = 28;
 /// The Filters button, lit and counting the filters that are on.
 pub fn filters_button(ui: &mut egui::Ui, on: usize) -> egui::Response {
     let label = if on == 0 {
-        "Filters".to_string()
+        tr!("filters").to_string()
     } else {
-        format!("Filters  {on}")
+        format!("{}  {on}", tr!("filters"))
     };
     widgets::chip_icon(ui, Some(icons::SLIDERS_HORIZONTAL), &label, on > 0)
 }
@@ -235,7 +235,15 @@ pub fn active_filters(ui: &mut egui::Ui, labels: &[String]) -> Option<FilterEdit
                 edit = Some(FilterEdit::Remove(i));
             }
         }
-        if widgets::button_sized(ui, None, "Clear all", widgets::Kind::Ghost, 40.0).clicked() {
+        if widgets::button_sized(
+            ui,
+            None,
+            tr!("filters-clear-all"),
+            widgets::Kind::Ghost,
+            40.0,
+        )
+        .clicked()
+        {
             edit = Some(FilterEdit::Clear);
         }
     });
@@ -323,19 +331,25 @@ pub fn filter_drawer(
             };
             part(title).horizontal(|ui| {
                 ui.label(
-                    RichText::new("Filters")
+                    RichText::new(tr!("filters"))
                         .font(theme::font(Weight::Bold, 24.0))
                         .color(theme::TEXT),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if widgets::icon_button(ui, icons::X, 40.0, false)
-                        .tip("Close")
+                        .tip(tr!("player-close"))
                         .clicked()
                     {
                         *open = false;
                     }
-                    if widgets::button_sized(ui, None, "Clear all", widgets::Kind::Ghost, 40.0)
-                        .clicked()
+                    if widgets::button_sized(
+                        ui,
+                        None,
+                        tr!("filters-clear-all"),
+                        widgets::Kind::Ghost,
+                        40.0,
+                    )
+                    .clicked()
                     {
                         clear = true;
                     }
@@ -358,8 +372,14 @@ pub fn filter_drawer(
                         .color(theme::TEXT_2),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if widgets::button_sized(ui, None, "Done", widgets::Kind::Primary, 44.0)
-                        .clicked()
+                    if widgets::button_sized(
+                        ui,
+                        None,
+                        tr!("common-done"),
+                        widgets::Kind::Primary,
+                        44.0,
+                    )
+                    .clicked()
                     {
                         *open = false;
                     }
@@ -469,11 +489,12 @@ pub fn filter_list<'a>(
             widgets::button_sized(ui, None, label, widgets::Kind::Ghost, 40.0).clicked()
         };
         if view.hidden > 0 {
-            let all = format!("Show all {}", view.shown.len() + view.hidden);
+            let n = view.shown.len() + view.hidden;
+            let all = tr!("filters-show-all", count = n);
             if more(ui, &all) {
                 state.all = true;
             }
-        } else if view.can_fold && more(ui, "Show fewer") {
+        } else if view.can_fold && more(ui, tr!("filters-show-fewer")) {
             state.all = false;
         }
     });
@@ -521,10 +542,6 @@ pub fn count_label(ui: &mut egui::Ui, text: &str) {
 }
 
 /// "1 video", "12 videos".
-pub fn plural(n: usize, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
-}
-
 /// A title over a row or grid, with a count beside it.
 pub fn section_title(ui: &mut egui::Ui, title: &str, count: Option<usize>) {
     ui.horizontal(|ui| {
@@ -583,7 +600,7 @@ pub fn status(ui: &mut egui::Ui, loading: bool, error: Option<&str>) {
     if loading {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label(RichText::new("Loading…").color(theme::TEXT_2));
+            ui.label(RichText::new(tr!("common-loading")).color(theme::TEXT_2));
         });
     }
     if let Some(e) = error {
@@ -839,7 +856,7 @@ pub fn card(ui: &mut egui::Ui, thumbs: &mut Thumbs, c: &Card) -> CardResponse {
             theme::icon(24.0),
             theme::TEXT_2.lerp_to_gamma(Color32::WHITE, m.max(t * 0.6)),
         );
-        more_clicked = more_resp.tip("Details").clicked();
+        more_clicked = more_resp.tip(tr!("jf-details")).clicked();
     }
     let mut action_clicked = false;
     if let Some((icon, tip)) = action {
@@ -1074,8 +1091,6 @@ mod tests {
     fn words() {
         assert_eq!(rating(4.5), format!("{}  4.5", icons::STAR));
         assert_eq!(rating(8.0), format!("{}  8", icons::STAR));
-        assert_eq!(plural(1, "video", "videos"), "1 video");
-        assert_eq!(plural(3, "video", "videos"), "3 videos");
     }
 }
 

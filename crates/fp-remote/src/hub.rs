@@ -8,6 +8,7 @@ use crossbeam_channel::{Receiver, Sender, TrySendError};
 use fp_core::sync::{lock, read, write};
 use fp_core::{PlaybackStatus, PlayerCommand};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
@@ -52,10 +53,19 @@ pub trait RemoteLibrary: Send + Sync {
 /// events are dropped (and logged) instead of growing without bound.
 const EVENT_QUEUE: usize = 1024;
 
+/// The web remote's wording, in the app's language: its language tag and
+/// its strings by id.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PageText {
+    pub(crate) lang: String,
+    pub(crate) strings: BTreeMap<String, String>,
+}
+
 /// State shared by the hub and every server thread.
 pub(crate) struct Shared {
     pub(crate) status: StatusCell,
     pub(crate) token: RwLock<String>,
+    pub(crate) page: RwLock<PageText>,
     events: Sender<RemoteEvent>,
 }
 
@@ -99,6 +109,7 @@ impl RemoteHub {
             shared: Arc::new(Shared {
                 status: StatusCell::default(),
                 token: RwLock::new(token),
+                page: RwLock::new(PageText::default()),
                 events: tx,
             }),
             events: rx,
@@ -110,6 +121,16 @@ impl RemoteHub {
     /// The configuration the hub was created with.
     pub fn config(&self) -> &RemoteConfig {
         &self.config
+    }
+
+    /// The web remote's text in the app's language (`lang`, a language
+    /// tag): each `{{id:English}}` of its pages, and the strings its script
+    /// shows. A page open in another language reloads itself.
+    pub fn set_page_text(&self, lang: &str, strings: impl IntoIterator<Item = (String, String)>) {
+        *write(&self.shared.page) = PageText {
+            lang: lang.to_string(),
+            strings: strings.into_iter().collect(),
+        };
     }
 
     /// Starts the DeoVR-compatible TCP API on `bind_address:deovr_port` and
