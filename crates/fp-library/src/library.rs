@@ -1189,6 +1189,24 @@ impl Library {
         })
     }
 
+    /// Deletes every row whose non-empty source ID is no longer configured.
+    ///
+    /// An empty source ID is deliberately retained: local libraries use it
+    /// temporarily while a folder has moved and its next scan claims the
+    /// videos again. Unlike a removed source, it cannot identify a server
+    /// that could be opened without its current configuration.
+    pub fn forget_unavailable_sources(&self, source_ids: &[String]) -> Result<usize> {
+        self.in_tx(|c| {
+            let placeholders = vec!["?"; source_ids.len()].join(",");
+            let sql = format!(
+                "DELETE FROM media WHERE source_id != '' AND source_id NOT IN ({placeholders})"
+            );
+            let n = c.execute(&sql, params_from_iter(source_ids))?;
+            prune_tags(c)?;
+            Ok(n)
+        })
+    }
+
     /// What a video's source says about it now: its title, description,
     /// thumbnail and tags, each when given. The rest of the video is left
     /// alone.
@@ -1826,6 +1844,29 @@ mod tests {
         assert_eq!(lib.detach_source("nas").unwrap(), 4);
         assert_eq!(lib.get(watched).unwrap().unwrap().source_id, "");
         assert_eq!(lib.get(other).unwrap().unwrap().source_id, "feed");
+    }
+
+    #[test]
+    fn forgetting_unavailable_sources_keeps_configured_and_detached_videos() {
+        let lib = lib();
+        let add = |loc: &str, source: &str| lib.upsert(&MediaUpsert::new(loc, source)).unwrap().id;
+        let local = add("/v/local.mp4", "device-home");
+        let jellyfin = add("mb:http://jellyfin#item=current", "jellyfin-current");
+        let old_jellyfin = add("mb:http://old-jellyfin#item=old", "jellyfin-old");
+        let detached = add("/v/moved-library.mp4", "");
+
+        assert_eq!(
+            lib.forget_unavailable_sources(&[
+                "device-home".to_string(),
+                "jellyfin-current".to_string(),
+            ])
+            .unwrap(),
+            1
+        );
+        for id in [local, jellyfin, detached] {
+            assert!(lib.get(id).unwrap().is_some(), "{id:?} was removed");
+        }
+        assert!(lib.get(old_jellyfin).unwrap().is_none());
     }
 
     #[test]

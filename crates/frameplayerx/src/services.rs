@@ -315,15 +315,28 @@ impl Services {
             &fp_core::dirs::config_dir().join("device-id"),
         ));
         let opener = Arc::new(Opener::new());
-        let source_configs = match fp_sources::load_configs(&Settings::sources_path()) {
-            Ok(c) => c,
-            Err(e) => {
-                if Settings::sources_path().exists() {
-                    log::warn!("sources: {e}");
+        let (source_configs, sources_loaded) =
+            match fp_sources::load_configs(&Settings::sources_path()) {
+                Ok(c) => (c, true),
+                Err(e) => {
+                    if Settings::sources_path().exists() {
+                        log::warn!("sources: {e}");
+                    }
+                    (Vec::new(), false)
                 }
-                Vec::new()
+            };
+        if sources_loaded {
+            let source_ids = builtin_sources()
+                .iter()
+                .chain(&source_configs)
+                .map(|c| c.id().to_string())
+                .collect::<Vec<_>>();
+            match library.forget_unavailable_sources(&source_ids) {
+                Ok(n) if n > 0 => log::info!("forgot {n} videos from removed sources"),
+                Ok(_) => {}
+                Err(e) => log::warn!("forgetting videos from removed sources: {e}"),
             }
-        };
+        }
         for e in opener.set_sources(&source_configs) {
             log::warn!("source unavailable: {e}");
         }
