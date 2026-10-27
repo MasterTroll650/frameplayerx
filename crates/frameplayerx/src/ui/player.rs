@@ -294,6 +294,7 @@ fn transport(
 }
 
 /// Close, hide, room, follow, bookmark and adjust.
+#[allow(clippy::too_many_arguments)] // Player controls intentionally receive independent state.
 fn view_keys(
     ui: &mut egui::Ui,
     pb: &crate::playback::Playback,
