@@ -1,6 +1,6 @@
 //! The interface's language. Its messages are Fluent files built in
 //! (`i18n/<language>/frameplayerx.ftl`), English the one every other
-//! language translates: a message a language lacks shows in English. [`tr!`]
+//! language translates: a message a language lacks shows in English. `tr!`
 //! looks one up, its id and arguments checked against the English file
 //! when the app is built.
 

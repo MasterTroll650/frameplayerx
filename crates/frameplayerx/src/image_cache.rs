@@ -157,9 +157,9 @@ impl ImageCache {
         freed
     }
 
-    /// The cached file of `url`, downloaded first when needed.
-    pub fn file(&self, url: &str) -> Option<PathBuf> {
-        self.get(url).ok()?;
+    /// The cached file of `url` if it is already on the headset; never
+    /// downloads, so the frame loop can ask.
+    pub fn cached_file(&self, url: &str) -> Option<PathBuf> {
         let path = self.path(&key(url).0, "img");
         path.exists().then_some(path)
     }

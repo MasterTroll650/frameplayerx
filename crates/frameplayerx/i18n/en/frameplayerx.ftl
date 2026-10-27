@@ -1226,23 +1226,17 @@ remote-title = FramePlayerX Remote
 remote-connecting = Connecting…
 remote-now-playing = Now playing
 remote-nothing-playing = Nothing playing
+# The phone remote while no video is open.
+remote-nothing-hint = Start a video in the headset to control it here.
 # For screen readers: the slider for where the video is.
 remote-seek = Seek position
 remote-back-10 = Back 10 seconds
 remote-forward-10 = Forward 10 seconds
-# Short: a button, closes the video.
-remote-stop = Stop
 remote-type = Type into headset
 remote-type-label = Text to send to the headset
-remote-type-hint = Search terms or URL
 # Short: a button.
 remote-send = Send
-remote-library = Library
-remote-search-label = Search library
-# Short: a button.
-remote-load-more = Load more
 remote-unpaired-title = FramePlayerX Remote: not paired
-remote-unpaired-desc = This browser has not been paired with the headset yet, or the pairing was reset.
 remote-pair-heading = Pair with the headset
 remote-pair-how = In FramePlayerX, open Settings › Remote control and enter the code it shows.
 # The pairing code field's label and hint.
@@ -1253,19 +1247,14 @@ remote-pair-wrong = That isn't the code the headset shows. Try again.
 remote-pair-no-code = The headset isn't showing a code. In FramePlayerX, open Settings › Remote control.
 # New pairing code is the headset's button: use its translation.
 remote-pair-stopped = Too many wrong codes. In the headset, press New pairing code under Settings › Remote control.
+# Under the pairing form. Unpair all phones is the headset's button: use its translation.
+remote-pair-stays = This phone stays paired until Unpair all phones in the headset.
 remote-connected = Connected
 remote-reconnecting = Reconnecting…
 remote-sent = Sent to headset
-remote-searching = Searching…
-remote-no-results = No results
 remote-unreachable = Headset unreachable
 remote-command-failed = Command failed: { $error }
 remote-not-sent = Not sent: { $error }
-remote-search-failed = Search failed: { $error }
-# For screen readers: a video in the list.
-remote-play-title = Play { $title }
-remote-opening = Opening { $title }…
-remote-results = Results: { $count }
 # For screen readers: where the video is, like 1:20 of 45:00.
 remote-position = { $position } of { $duration }
 

@@ -10,7 +10,7 @@ use fp_core::sync::{read, write};
 use fp_core::volume;
 use fp_haptics::HapticsEngine;
 use fp_library::Library;
-use fp_remote::{RemoteEvent, RemoteHub, RemoteItem, RemoteLibrary};
+use fp_remote::{RemoteEvent, RemoteHub};
 use fp_sources::{Source, SourceConfig};
 use ring::rand::SecureRandom;
 use std::collections::HashMap;
@@ -258,50 +258,6 @@ fn worker_options(settings: &Settings) -> fp_library::WorkerOptions {
         thumbnails: settings.make_thumbnails,
         resume_thumbnails: settings.resume_frames,
         ..Default::default()
-    }
-}
-
-/// Library access for the web remote.
-struct WebLibrary {
-    library: Library,
-    images: Arc<ImageCache>,
-}
-
-impl RemoteLibrary for WebLibrary {
-    fn search(&self, query: &str, limit: usize, offset: usize) -> Vec<RemoteItem> {
-        let q = fp_library::Query {
-            limit: Some(limit),
-            offset,
-            ..fp_library::Query::text(query)
-        };
-        self.library
-            .search(&q)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|r| RemoteItem {
-                id: r.id.0,
-                title: r.title.clone(),
-                location: r.location.clone(),
-                duration: r.duration,
-                format_label: crate::ui::format_label(&r.effective_format().format),
-                has_thumbnail: r.picture().is_some(),
-            })
-            .collect()
-    }
-
-    fn thumbnail_path(&self, id: i64) -> Option<PathBuf> {
-        let r = self.library.get(fp_library::MediaId(id)).ok().flatten()?;
-        // Not for videos of a source locked with a PIN.
-        if self.library.hidden().hides(&r.source_id) {
-            return None;
-        }
-        let picture = r.picture()?;
-        // The page only loads pictures from the headset.
-        if fp_sources::urlutil::is_http_url(&picture) {
-            self.images.file(&picture)
-        } else {
-            Some(PathBuf::from(picture))
-        }
     }
 }
 
@@ -584,12 +540,8 @@ impl Services {
                 {
                     self.remote_error = Some(tr!("remote-error-deovr", error = e.to_string()));
                 }
-                let web = WebLibrary {
-                    library: self.library.clone(),
-                    images: self.images.clone(),
-                };
                 if cfg.web_enabled
-                    && let Err(e) = hub.start_web(Arc::new(web))
+                    && let Err(e) = hub.start_web()
                 {
                     self.remote_error = Some(tr!("remote-error-web", error = e.to_string()));
                 }
@@ -613,26 +565,35 @@ fn remote_page_text() -> Vec<(String, String)> {
     let page = [
         ("remote-title", tr!("remote-title")),
         ("remote-connecting", tr!("remote-connecting")),
+        ("remote-connected", tr!("remote-connected")),
+        ("remote-reconnecting", tr!("remote-reconnecting")),
+        ("remote-unreachable", tr!("remote-unreachable")),
         ("remote-now-playing", tr!("remote-now-playing")),
         ("remote-nothing-playing", tr!("remote-nothing-playing")),
+        ("remote-nothing-hint", tr!("remote-nothing-hint")),
+        ("remote-close", tr!("player-close")),
         ("remote-seek", tr!("remote-seek")),
+        ("remote-previous", tr!("action-previous-video")),
         ("remote-back-10", tr!("remote-back-10")),
         ("remote-play", tr!("player-play")),
         ("remote-pause", tr!("player-pause")),
         ("remote-forward-10", tr!("remote-forward-10")),
+        ("remote-next", tr!("action-next-video")),
+        ("remote-mute", tr!("player-mute")),
+        ("remote-unmute", tr!("player-unmute")),
+        ("remote-volume", tr!("settings-volume")),
+        ("remote-audio", tr!("tracks-audio")),
+        ("remote-no-audio", tr!("tracks-no-audio")),
+        ("remote-subtitles", tr!("settings-subtitles")),
+        ("remote-subtitles-off", tr!("tracks-off")),
+        ("remote-tracks", tr!("player-tracks")),
         ("remote-speed", tr!("player-speed")),
         ("remote-recenter", tr!("action-recenter")),
-        ("remote-stop", tr!("remote-stop")),
         ("remote-type", tr!("remote-type")),
         ("remote-type-label", tr!("remote-type-label")),
-        ("remote-type-hint", tr!("remote-type-hint")),
         ("remote-send", tr!("remote-send")),
-        ("remote-library", tr!("remote-library")),
-        ("remote-search-label", tr!("remote-search-label")),
-        ("remote-search", tr!("jf-search")),
-        ("remote-load-more", tr!("remote-load-more")),
+        ("remote-sent", tr!("remote-sent")),
         ("remote-unpaired-title", tr!("remote-unpaired-title")),
-        ("remote-unpaired-desc", tr!("remote-unpaired-desc")),
         ("remote-pair-heading", tr!("remote-pair-heading")),
         ("remote-pair-how", tr!("remote-pair-how")),
         ("remote-pair-code", tr!("remote-pair-code")),
@@ -640,12 +601,7 @@ fn remote_page_text() -> Vec<(String, String)> {
         ("remote-pair-wrong", tr!("remote-pair-wrong")),
         ("remote-pair-no-code", tr!("remote-pair-no-code")),
         ("remote-pair-stopped", tr!("remote-pair-stopped")),
-        ("remote-connected", tr!("remote-connected")),
-        ("remote-reconnecting", tr!("remote-reconnecting")),
-        ("remote-sent", tr!("remote-sent")),
-        ("remote-searching", tr!("remote-searching")),
-        ("remote-no-results", tr!("remote-no-results")),
-        ("remote-unreachable", tr!("remote-unreachable")),
+        ("remote-pair-stays", tr!("remote-pair-stays")),
     ]
     .map(|(id, s)| (id.to_string(), s.to_string()));
     let with_args = [
@@ -654,16 +610,6 @@ fn remote_page_text() -> Vec<(String, String)> {
             tr!("remote-command-failed", error = "{error}"),
         ),
         ("remote-not-sent", tr!("remote-not-sent", error = "{error}")),
-        (
-            "remote-search-failed",
-            tr!("remote-search-failed", error = "{error}"),
-        ),
-        (
-            "remote-play-title",
-            tr!("remote-play-title", title = "{title}"),
-        ),
-        ("remote-opening", tr!("remote-opening", title = "{title}")),
-        ("remote-results", tr!("remote-results", count = "{count}")),
         (
             "remote-position",
             tr!(

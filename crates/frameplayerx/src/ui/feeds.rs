@@ -116,7 +116,7 @@ pub struct FeedFilters {
     /// 3D only.
     pub stereo: bool,
     pub length: Option<Length>,
-    /// Tenths of a star (see [`RATINGS`]).
+    /// Tenths of a star (see [`ratings`]).
     pub rating: Option<u8>,
 }
 

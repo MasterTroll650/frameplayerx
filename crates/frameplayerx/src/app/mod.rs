@@ -4,6 +4,7 @@
 mod actions;
 mod frame;
 mod input;
+mod remote;
 mod sources;
 mod tasks;
 
@@ -164,6 +165,10 @@ pub struct App {
     /// Up next.
     queue: crate::queue::Queue,
     last_status: Option<PlaybackStatus>,
+    /// When the web remote's details were last built.
+    remote_details_at: Instant,
+    /// The open video's picture for the web remote, by its location.
+    remote_picture: Option<(String, Option<std::path::PathBuf>)>,
     update: Option<fp_updater::Update>,
     /// Counts update checks, so a check for a channel the user has since
     /// left is dropped.
@@ -286,6 +291,8 @@ impl App {
             offsets: Default::default(),
             queue: Default::default(),
             last_status: None,
+            remote_details_at: Instant::now(),
+            remote_picture: None,
             update: None,
             update_check: 0,
             start_check: None,
@@ -483,6 +490,25 @@ impl App {
                         C::SetSpeed { speed } => Action::SetSpeed(speed),
                         C::Stop => Action::ClosePlayback,
                         C::Recenter => Action::Recenter,
+                        C::SetVolume { volume } => {
+                            self.ui.unmute_volume = None;
+                            Action::SetVolume(volume as f32)
+                        }
+                        C::ToggleMute => {
+                            self.toggle_mute();
+                            continue;
+                        }
+                        C::Previous => Action::StepQueue(-1),
+                        C::Next => Action::StepQueue(1),
+                        C::SelectAudio { stream } => Action::SelectAudio(stream),
+                        C::SelectSubtitles { track } => {
+                            use crate::subtitles::Pick;
+                            Action::SelectSubtitles(match track {
+                                None => Pick::Off,
+                                Some(fp_core::SubtitleTrack::Stream(i)) => Pick::Stream(i),
+                                Some(fp_core::SubtitleTrack::File(i)) => Pick::File(i),
+                            })
+                        }
                     };
                     self.apply(a);
                 }

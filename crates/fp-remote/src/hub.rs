@@ -1,6 +1,7 @@
 //! [`RemoteHub`]: the app-facing entry point that owns both servers.
 
 use crate::deovr::DeovrServer;
+use crate::details::{DetailsCell, RemoteDetails};
 use crate::pairing::{Entered, Pairing};
 use crate::status::StatusCell;
 use crate::web::WebServer;
@@ -8,10 +9,8 @@ use crate::{RemoteConfig, RemoteError, token};
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use fp_core::sync::{lock, read, write};
 use fp_core::{PlaybackStatus, PlayerCommand};
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 /// Something a remote client asked the player to do.
@@ -22,32 +21,6 @@ pub enum RemoteEvent {
     /// Text typed on the web remote, for whatever text field is focused in
     /// the headset (library search, URL entry).
     Text(String),
-}
-
-/// One library entry as the web remote shows it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RemoteItem {
-    /// Library id; used for `GET /api/thumb/<id>`.
-    pub id: i64,
-    pub title: String,
-    /// Location passed back in `PlayerCommand::Open` when tapped.
-    pub location: String,
-    /// Seconds, when known.
-    pub duration: Option<f64>,
-    /// Short format description, e.g. "180° Side by side".
-    pub format_label: String,
-    /// Whether [`RemoteLibrary::thumbnail_path`] has an image for `id`.
-    pub has_thumbnail: bool,
-}
-
-/// Library access the app provides to the web remote. Called from server
-/// worker threads, so implementations must be thread-safe and should not
-/// block for long.
-pub trait RemoteLibrary: Send + Sync {
-    /// Items matching `query` (empty = everything, app-defined order).
-    fn search(&self, query: &str, limit: usize, offset: usize) -> Vec<RemoteItem>;
-    /// Path of a JPEG thumbnail for item `id`, if there is one.
-    fn thumbnail_path(&self, id: i64) -> Option<PathBuf>;
 }
 
 /// Capacity of the event queue; when the app stops draining it, further
@@ -65,6 +38,7 @@ pub(crate) struct PageText {
 /// State shared by the hub and every server thread.
 pub(crate) struct Shared {
     pub(crate) status: StatusCell,
+    pub(crate) details: DetailsCell,
     pub(crate) token: RwLock<String>,
     pub(crate) page: RwLock<PageText>,
     pairing: Mutex<Pairing>,
@@ -115,6 +89,7 @@ impl RemoteHub {
             config,
             shared: Arc::new(Shared {
                 status: StatusCell::default(),
+                details: DetailsCell::default(),
                 token: RwLock::new(token),
                 page: RwLock::new(PageText::default()),
                 pairing: Mutex::new(Pairing::default()),
@@ -159,9 +134,9 @@ impl RemoteHub {
         Ok(addr)
     }
 
-    /// Starts the web remote on `bind_address:web_port`, serving `lib`, and
-    /// returns the bound address.
-    pub fn start_web(&self, lib: Arc<dyn RemoteLibrary>) -> Result<SocketAddr, RemoteError> {
+    /// Starts the web remote on `bind_address:web_port` and returns the
+    /// bound address.
+    pub fn start_web(&self) -> Result<SocketAddr, RemoteError> {
         let mut slot = lock(&self.web);
         if slot.is_some() {
             return Err(RemoteError::AlreadyRunning("web remote"));
@@ -170,7 +145,6 @@ impl RemoteHub {
         let server = WebServer::start(
             bind,
             self.shared.clone(),
-            lib,
             self.config.max_event_streams.max(1),
         )?;
         let addr = server.addr();
@@ -203,6 +177,13 @@ impl RemoteHub {
     /// the network. The servers pick changes up on their own threads.
     pub fn publish(&self, status: &PlaybackStatus) {
         self.shared.status.publish(status);
+    }
+
+    /// Records what the web remote shows of the open video beyond its
+    /// status ([`RemoteDetails::default`] when none is open). Compares
+    /// first, so calling it often costs only that.
+    pub fn publish_details(&self, details: &RemoteDetails) {
+        self.shared.details.publish(details);
     }
 
     /// The command/text queue. Each receiver clone competes for events, so

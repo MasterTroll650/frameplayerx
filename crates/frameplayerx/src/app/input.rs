@@ -116,20 +116,7 @@ impl App {
                     self.ui.toast(tr!("toast-volume", percent = percent));
                 }
             }
-            Cmd::ToggleMute => {
-                if let Some(p) = &self.playback {
-                    let vol = p.player.volume();
-                    if vol <= 0.001 {
-                        let v = self.ui.unmute_volume.take().unwrap_or(1.0);
-                        self.apply(Action::SetVolume(v));
-                        self.ui.toast(tr!("toast-sound-on"));
-                    } else {
-                        self.ui.unmute_volume = Some(vol);
-                        self.apply(Action::SetVolume(0.0));
-                        self.ui.toast(tr!("toast-muted"));
-                    }
-                }
-            }
+            Cmd::ToggleMute => self.toggle_mute(),
             Cmd::TogglePassthrough => {
                 if !input.passthrough_available {
                     self.ui.toast(tr!("toast-no-room"));
@@ -246,6 +233,23 @@ impl App {
 
     /// Back (B by default), as DeoVR's: closes the innermost thing that is
     /// open.
+    /// Mutes, or turns the sound back on at the volume before.
+    pub(super) fn toggle_mute(&mut self) {
+        let Some(p) = &self.playback else {
+            return;
+        };
+        let vol = p.player.volume();
+        if vol <= 0.001 {
+            let v = self.ui.unmute_volume.take().unwrap_or(1.0);
+            self.apply(Action::SetVolume(v));
+            self.ui.toast(tr!("toast-sound-on"));
+        } else {
+            self.ui.unmute_volume = Some(vol);
+            self.apply(Action::SetVolume(0.0));
+            self.ui.toast(tr!("toast-muted"));
+        }
+    }
+
     pub(super) fn back(&mut self) {
         if self.panels[KEYBOARD].visible {
             if let Some(i) = self.keyboard_target() {

@@ -8,10 +8,9 @@
 //! |---|---|---|
 //! | GET | `/` | the app, or the pairing page for a browser not paired |
 //! | POST | `/pair` | `code=` from the pairing page: the right one sets the cookie and redirects to `/` |
-//! | GET | `/api/status` | [`PlaybackStatus`] JSON plus `now_ms` (server clock) |
+//! | GET | `/api/status` | [`PlaybackStatus`] JSON plus `now_ms` (server clock), `details` ([`crate::RemoteDetails`]) and `picture` (a number that changes with it) |
+//! | GET | `/api/picture` | the open video's picture |
 //! | POST | `/api/command` | [`fp_core::PlayerCommand`] JSON |
-//! | GET | `/api/library?q=&limit=&offset=` | `{"items": [RemoteItem...]}` |
-//! | GET | `/api/thumb/<id>` | thumbnail bytes |
 //! | POST | `/api/text` | `{"text": "..."}` typed into the headset |
 //! | GET | `/api/events` | server-sent events, one status JSON per `data:` |
 //!
@@ -19,7 +18,8 @@
 //! filled in as they are served.
 
 use crate::RemoteError;
-use crate::hub::{PageText, RemoteEvent, RemoteLibrary, Shared};
+use crate::details::RemoteDetails;
+use crate::hub::{PageText, RemoteEvent, Shared};
 use crate::net::is_allowed_peer;
 use crate::pairing::Entered;
 use crate::status::{ChangeTracker, command_is_valid};
@@ -51,11 +51,7 @@ const WORKERS: usize = 4;
 const RECV_POLL: Duration = Duration::from_millis(200);
 const MAX_BODY: usize = 64 * 1024;
 const MAX_TEXT_CHARS: usize = 4096;
-const MAX_QUERY_CHARS: usize = 256;
-const MAX_THUMB_BYTES: u64 = 16 * 1024 * 1024;
-const DEFAULT_LIMIT: usize = 50;
-const MAX_LIMIT: usize = 200;
-const MAX_OFFSET: usize = 1_000_000;
+const MAX_PICTURE_BYTES: u64 = 16 * 1024 * 1024;
 /// Event-stream polling tick, refresh interval while playing, heartbeat.
 const STREAM_TICK: Duration = Duration::from_millis(100);
 const STREAM_REFRESH: Duration = Duration::from_secs(2);
@@ -74,7 +70,6 @@ const SECURITY_HEADERS: &[(&str, &str)] = &[
 
 struct Ctx {
     shared: Arc<Shared>,
-    lib: Arc<dyn RemoteLibrary>,
     stop: Arc<AtomicBool>,
     streams: Arc<AtomicUsize>,
     max_streams: usize,
@@ -93,7 +88,6 @@ impl WebServer {
     pub(crate) fn start(
         bind: SocketAddr,
         shared: Arc<Shared>,
-        lib: Arc<dyn RemoteLibrary>,
         max_streams: usize,
     ) -> Result<WebServer, RemoteError> {
         let listener =
@@ -106,7 +100,6 @@ impl WebServer {
         let streams = Arc::new(AtomicUsize::new(0));
         let ctx = Arc::new(Ctx {
             shared,
-            lib,
             stop: stop.clone(),
             streams: streams.clone(),
             max_streams,
@@ -339,7 +332,7 @@ fn handle(mut rq: Request, ctx: &Arc<Ctx>) {
     }
     let method = rq.method().clone();
     let url = rq.url().to_owned();
-    let (path, query) = parse_url(&url);
+    let (path, _) = parse_url(&url);
 
     // Static code and styles carry no data; the unpaired page needs them.
     match (&method, path) {
@@ -386,10 +379,16 @@ fn handle(mut rq: Request, ctx: &Arc<Ctx>) {
             "text/html; charset=utf-8",
             render(INDEX_HTML, &read(&ctx.shared.page)),
         ),
-        (Method::Get, "/api/status") => Reply::json(&WebStatus::now(
-            &ctx.shared.status.snapshot(),
-            &read(&ctx.shared.page).lang,
-        )),
+        (Method::Get, "/api/status") => {
+            let (details, picture) = ctx.shared.details.snapshot();
+            Reply::json(&WebStatus::now(
+                &ctx.shared.status.snapshot(),
+                &details,
+                picture,
+                &read(&ctx.shared.page).lang,
+            ))
+        }
+        (Method::Get, "/api/picture") => picture(ctx),
         (Method::Post, "/api/command") => match read_body(&mut rq) {
             Ok(body) => post_command(&body, ctx),
             Err(r) => r,
@@ -398,11 +397,7 @@ fn handle(mut rq: Request, ctx: &Arc<Ctx>) {
             Ok(body) => post_text(&body, ctx),
             Err(r) => r,
         },
-        (Method::Get, "/api/library") => library(&query, ctx),
-        (Method::Get, p) if p.starts_with("/api/thumb/") => {
-            thumbnail(&p["/api/thumb/".len()..], ctx)
-        }
-        (_, "/" | "/index.html" | "/api/status" | "/api/library" | "/api/events") => {
+        (_, "/" | "/index.html" | "/api/status" | "/api/picture" | "/api/events") => {
             Reply::error(405, "method not allowed").header("Allow", "GET")
         }
         (_, "/api/command" | "/api/text") => {
@@ -480,21 +475,30 @@ fn read_body(rq: &mut Request) -> Result<Vec<u8>, Reply> {
 
 /// Status as the web API reports it: [`PlaybackStatus`] fields plus the
 /// server's clock, so the page can extrapolate the position correctly even
-/// when the phone's clock differs from the headset's, and the language the
-/// pages are in.
+/// when the phone's clock differs from the headset's, the video's details
+/// and its picture's number, and the language the pages are in.
 #[derive(Serialize)]
 struct WebStatus<'a> {
     #[serde(flatten)]
     status: &'a PlaybackStatus,
     now_ms: u64,
+    details: &'a RemoteDetails,
+    picture: Option<u64>,
     lang: &'a str,
 }
 
 impl<'a> WebStatus<'a> {
-    fn now(status: &'a PlaybackStatus, lang: &'a str) -> WebStatus<'a> {
+    fn now(
+        status: &'a PlaybackStatus,
+        details: &'a RemoteDetails,
+        picture: Option<u64>,
+        lang: &'a str,
+    ) -> WebStatus<'a> {
         WebStatus {
             status,
             now_ms: now_ms(),
+            details,
+            picture,
             lang,
         }
     }
@@ -573,47 +577,27 @@ fn post_text(body: &[u8], ctx: &Ctx) -> Reply {
     Reply::json(&serde_json::json!({ "ok": true }))
 }
 
-fn library(query: &[(String, String)], ctx: &Ctx) -> Reply {
-    let q: String = param(query, "q")
-        .unwrap_or("")
-        .chars()
-        .take(MAX_QUERY_CHARS)
-        .collect();
-    let num = |name, default: usize, max: usize| {
-        param(query, name)
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(default)
-            .min(max)
-    };
-    let limit = num("limit", DEFAULT_LIMIT, MAX_LIMIT).max(1);
-    let offset = num("offset", 0, MAX_OFFSET);
-    let mut items = ctx.lib.search(q.trim(), limit, offset);
-    items.truncate(limit);
-    Reply::json(&serde_json::json!({ "items": items, "offset": offset, "limit": limit }))
-}
-
-fn thumbnail(id: &str, ctx: &Ctx) -> Reply {
-    let Ok(id) = id.parse::<i64>() else {
-        return Reply::error(404, "not found");
-    };
-    let Some(path) = ctx.lib.thumbnail_path(id) else {
-        return Reply::error(404, "no thumbnail");
+/// The open video's picture, for as long as the page asks with the same
+/// number; a new picture comes with a new one.
+fn picture(ctx: &Ctx) -> Reply {
+    let Some(path) = ctx.shared.details.picture() else {
+        return Reply::error(404, "no picture");
     };
     let data = std::fs::File::open(&path).and_then(|f| {
         let mut buf = Vec::new();
-        f.take(MAX_THUMB_BYTES + 1).read_to_end(&mut buf)?;
+        f.take(MAX_PICTURE_BYTES + 1).read_to_end(&mut buf)?;
         Ok(buf)
     });
     match data {
-        Ok(buf) if buf.len() as u64 > MAX_THUMB_BYTES => Reply::error(500, "thumbnail too large"),
+        Ok(buf) if buf.len() as u64 > MAX_PICTURE_BYTES => Reply::error(500, "picture too large"),
         Ok(buf) => {
             let mut r = Reply::new(200, image_type(&buf), buf);
             r.cache = "private, max-age=3600";
             r
         }
         Err(e) => {
-            log::warn!("web remote: thumbnail {}: {e}", path.display());
-            Reply::error(404, "no thumbnail")
+            log::warn!("web remote: picture {}: {e}", path.display());
+            Reply::error(404, "no picture")
         }
     }
 }
@@ -674,19 +658,28 @@ fn event_stream(w: &mut dyn Write, ctx: &Ctx) -> std::io::Result<()> {
     w.flush()?;
 
     let mut tracker = ChangeTracker::new(STREAM_REFRESH);
+    let mut details_sent = None;
     let mut last_write = Instant::now();
     let token = ctx.shared.token();
     while !ctx.stop.load(Ordering::Acquire) {
         let now = now_ms();
         let snap = tracker.poll(&ctx.shared.status, now);
+        let details_version = ctx.shared.details.version();
+        let snap = match snap {
+            Some(s) => Some(s),
+            None if details_sent != Some(details_version) => Some(ctx.shared.status.snapshot()),
+            None => None,
+        };
         // A new token unpairs every phone, this one too: checked after
         // taking the status, so none published after it goes out.
         if ctx.shared.token() != token {
             break;
         }
         if let Some(snap) = snap {
+            let (details, picture) = ctx.shared.details.snapshot();
+            details_sent = Some(details_version);
             let lang = read(&ctx.shared.page).lang.clone();
-            let json = serde_json::to_string(&WebStatus::now(&snap, &lang))
+            let json = serde_json::to_string(&WebStatus::now(&snap, &details, picture, &lang))
                 .map_err(std::io::Error::other)?;
             w.write_all(format!("data: {json}\n\n").as_bytes())?;
             w.flush()?;
@@ -707,8 +700,8 @@ mod tests {
 
     #[test]
     fn decodes_queries() {
-        let (p, q) = parse_url("/api/library?q=a+b%2Fc%C3%A9&limit=5&x&bad=%zz%4");
-        assert_eq!(p, "/api/library");
+        let (p, q) = parse_url("/api/x?q=a+b%2Fc%C3%A9&limit=5&x&bad=%zz%4");
+        assert_eq!(p, "/api/x");
         assert_eq!(param(&q, "q"), Some("a b/cé"));
         assert_eq!(param(&q, "limit"), Some("5"));
         assert_eq!(param(&q, "x"), Some(""));
@@ -746,15 +739,17 @@ mod tests {
         let mut text = PageText::default();
         let english = render(INDEX_HTML, &text);
         assert!(english.contains("<html lang=\"en\">"), "{english}");
-        assert!(english.contains(">Now playing<"));
+        assert!(english.contains(">Nothing playing<"));
         assert!(!english.contains("{{"), "every slot filled");
         text.lang = "de".into();
-        text.strings
-            .insert("remote-now-playing".into(), "Läuft gerade <jetzt>".into());
+        text.strings.insert(
+            "remote-nothing-playing".into(),
+            "Nichts läuft <jetzt>".into(),
+        );
         text.strings.insert("x".into(), "</script>".into());
         let german = render(INDEX_HTML, &text);
         assert!(german.contains("<html lang=\"de\">"));
-        assert!(german.contains(">Läuft gerade &lt;jetzt&gt;<"), "escaped");
+        assert!(german.contains(">Nichts läuft &lt;jetzt&gt;<"), "escaped");
         assert!(
             !german.contains("</script>\""),
             "the strings can't close their script"

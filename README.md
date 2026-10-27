@@ -29,7 +29,7 @@ A VR video player for the Valve Steam Frame. It plays flat, 180°, 360° and fis
 - **Passthrough videos**: see your room around the people in passthrough videos, and behind green or blue screens
 - **Subtitles and spatial audio**: subtitles from a file or inside the video, picked in your language and shown in any script, and 360° audio that follows your head
 - **Haptic devices**: optional, off until turned on; syncs supported haptic devices with videos that have scripts
-- **Phone remote**: open the address the headset shows on your phone and enter its code, then control playback and browse from the phone. Apps made for DeoVR's remote work too
+- **Phone remote**: open the address the headset shows on your phone and enter its code, then control the player and type into the headset from the phone. Apps made for DeoVR's remote work too
 - **Custom controls**: choose what each controller button does
 - **Languages**: English, German, Spanish, French, Japanese and Simplified Chinese, following the language Steam is set to; the phone remote follows the headset
 - **Updates**: checks for a new version when it starts, and installs it from Settings when you choose to, on a Stable or a Beta channel
