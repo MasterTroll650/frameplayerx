@@ -44,6 +44,8 @@ pub(super) enum Job {
         full: bool,
         result: Box<Result<fp_sources::SceneInfo, String>>,
     },
+    /// A Stash scene was successfully deleted.
+    StashDeleted,
     Toast(String),
     /// Nothing to show (a server took a change).
     Done,
